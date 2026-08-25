@@ -3,7 +3,7 @@
 **대상 명세:** `David_Trullas_Vila_전략분석_자동매매용_v6.0_화면역공학통합판.md`
 **대상 코드:** `main` 기준선 (`306d292`)
 **감사일:** 2026-08-25
-**수정 커밋:** `b0d41b7`
+**수정 커밋:** `b0d41b7` … `9a156fa`
 
 명세의 각 규칙을 코드에서 찾아 대조했다. 표의 §는 명세의 절 번호다.
 
@@ -99,33 +99,74 @@ ORDER INTENT PRODUCED: ENTRY BUY
 `max(진입가 0.10%, 0.35 × ATR(5m))`로, BE `+1.5pt`는 실제 비용 기반으로 재정의되어
 KRX·Binance에 그대로 이식 가능하다. 이는 §14.3 `korea_v5.normalization`과 일치한다.
 
-## 4. 남은 미구현 항목
+## 4. 2차 수정 — 남아 있던 규칙
 
-아래는 이번 수정 범위에 넣지 않았다. 이유를 함께 적는다.
+1차 수정 이후 남겨두었던 항목을 모두 구현했다.
 
-| 항목 | 명세 | 미구현 사유 |
-| --- | --- | --- |
-| 가중 점수제 | §4.4 regular +2 / hidden +1, §9.4 차단 -2 / 지지 +1 | 명세가 **가중치는 주지만 A·A후보 컷오프를 주지 않는다.** 현재 `grading.py`는 지표 개수(9개/7개)로 판정한다. 가중제로 바꾸려면 임계값을 새로 지어내야 하므로 근거 없는 추정이 된다 |
-| 거래 빈도 상한 8회 | §12 `trade_frequency.hard_upper_bound: 8` | 세션 누적 거래 수라는 런타임 상태가 필요하다. 매매 루프에서 집계가 생길 때 연결한다 |
-| 세션 사이즈 배수 | §7.1 개장 15분 0.5배, 프리마켓 마이크로 3계약 | `sessions.py`가 `entry_allowed` 불리언만 낸다. 사이즈 배수 필드 추가는 주문 경로가 생긴 뒤가 적절하다 |
-| Método 청산 신호 | §12 `exit: cross_down(sma6, sma70)` | `sma_6_70_cross_down`이 계산은 되지만 아무도 쓰지 않는다. 청산 경로가 생길 때 연결한다 |
-| Método signal_c | §2.3 MACD 0선 아래 교차 + 비관 극단 | `regime.pessimism_extreme`은 있으나 metodo 진입 판정에 연결되어 있지 않다 |
-| 월요일 감점 | §7.2 `score_penalty: -1` | `calendar.monday_score_penalty`가 계산만 되고 등급에 반영되지 않는다. 가중 점수제와 함께 결정해야 한다 |
-| KRX VI·단일가 제외 | §14.3 `filters` | `domain/toss_hlit_market_safety.py`와 `kis/domestic_vi.py`가 존재하나 전략 게이트에 연결되어 있지 않다 |
-| 국가 강도 필터 | §2.1 [1] 강한 국가 | `universe.py`에 없다. 국장 전용 운용에서는 무의미하나 미장에는 필요하다 |
-| Cyborg 계층 | §12 `cyborg.enabled: false` | 명세 자체가 비활성으로 지정 |
+### 4.1 §21.3 가중 점수제
+
+컷오프 7·9는 이미 코드에 있었으나 **가중치가 없었다.** 모든 지표가 1점으로 계산되어
+`technical-00`~`technical-08` 같은 무의미한 키 9개로도 A등급이 나왔고, 정규
+다이버전스가 히든과 같은 권한을 가졌다.
+
+명세가 §21.3에 점수표와 컷오프를 모두 주고 있었다. 지표 어휘를 정의하고 가중치를
+적용했다. §18.3 규율에 따라 역공학 항목은 이름에 출처를 넣었다 (`v1_secado`,
+`v1_mig_reversal`). Cero osmótico는 §21.3이 +1을 주지만 §18.2가 telemetry 권한으로
+묶어두므로 가중치 0으로 두고, walk-forward 승격 전까지 결정을 움직이지 못하게 했다.
+
+§9.4는 방해 Big Trade를 -2로, §21.3은 -4로 적는다. 점수표와 컷오프가 짝을 이루는
+§21.3을 따랐다. 다만 §9.4의 `never`와 §18.2의 거부권에 따라 진입 자체가 차단되므로
+실제로는 점수보다 거부권이 먼저 작동한다.
+
+### 4.2 나머지
+
+| 명세 | 조치 |
+| --- | --- |
+| §7.2 월요일 감점 -1 | `monday_score_penalty`를 계산만 하고 아무도 쓰지 않았다. 등급 점수에 반영 |
+| §2.3 signal_c | MACD 0선 아래 교차 + 비관 극단 조건부 진입. `regime.pessimism_extreme`이 metodo와 연결되어 있지 않아 아예 발화 불가능했다 |
+| §12 `exit: cross_down(sma6, sma70)` | `sma_6_70_cross_down`을 계산만 하고 버렸다. Método 스윙에 청산 경로가 없었다. `EXIT_FULL_METODO_CROSS_DOWN` 추가 |
+| §7.1 개장 15분 0.5배 | 세션이 `entry_allowed` 불리언만 냈다. `size_multiplier` 추가, 리스크 엔진이 스텝 내림 전에 적용 |
+| §7.1 프리마켓 마이크로 3계약 | `pre_open`, `max_micro_contracts` 사실로 노출. 계약 수→수량 변환은 §14.2 시장별 정규화이므로 호출자 몫 |
+| §6 거래 상한 8회 | `SESSION_TRADE_UPPER_BOUND`. 명세가 "David 공식값 아님"으로 표시한 안전 상한이라 상수명에 반영 |
+| §14.3 KRX VI·단일가 | `TossHlitKrxMarketSafetyEvidence`가 두 사실을 정확히 담고 있었으나 아무도 읽지 않았다. 브로커 중립 타입으로 세션에 연결하고, KRX 세션에 안전 증거가 없으면 fail-closed |
+| §2.1 국가 강도 | 유니버스에 없었다. `COUNTRY_NOT_STRONG` 추가 |
+| §9.3 gift_points | "정확한 가격과 싸우지 않는다". 모든 전량 청산은 MARKET으로 나간다 |
+| §9.3 exit_on_objective | `SESSION_OBJECTIVE_REACHED`. 목표 달성 후 신규 진입 차단 |
+
+### 4.3 구현하지 않은 것
+
+- **Cyborg 계층** — §12가 `enabled: false`로 지정
+- **§7.1 `arrival_before_open_minutes: 75`, `active_productive_work_minutes: 60`** —
+  사람의 작업 습관이지 자동매매 규칙이 아니다
+- **§7.1 프리마켓 볼륨 비교** — "프리마켓 안의 두 구간끼리 비교"라는 방법만 있고
+  판정 기준이 없다
+
+### 4.4 반복된 패턴
+
+이번 감사에서 같은 결함이 다섯 번 나왔다. **한쪽만 있고 연결되지 않은 코드**다.
+
+- fib 25/50/66: 소비자만 있고 생산자가 없었다
+- `blocking_big_trade`: 소비자만 있고 생산자가 없었다 (테스트는 항상 `False`)
+- `monday_score_penalty`: 생산자만 있고 소비자가 없었다
+- `sma_6_70_cross_down`: 생산자만 있고 소비자가 없었다
+- `TossHlitKrxMarketSafetyEvidence`: 생산자만 있고 소비자가 없었다
+
+각 조각은 테스트를 통과했다. 이어지지 않았을 뿐이다. 매매 루프를 먼저 만들기로 한
+이유가 여기 있다 — 끝에서 끝까지 도는 경로가 없으면 이런 단절이 드러나지 않는다.
 
 ## 5. 검증
 
 수정 후 상태다.
 
 ```
-1428 passed, 17 skipped
+1471 passed, 17 skipped
 ruff format --check : 372 files already formatted
 ruff check          : All checks passed
 pyright             : 0 errors
 ```
 
-신규 테스트: `hlit.py` 12건, 엔진 게이트 9건, Big Trade 5건, 스프레드 2건.
+기준선 1400건에서 71건이 늘었다. HLIT 작도 12건, 진입 전제조건 9건, 가중 점수제
+15건, Método signal_c·청산 6건, 세션 사이즈·프리마켓 7건, KRX 안전 5건, 거래 상한
+3건, 익절 규율 4건 등이다.
 
 Docker는 기동하지 않았다. DB·브로커·컨테이너가 필요한 검증은 여전히 미수행이다.

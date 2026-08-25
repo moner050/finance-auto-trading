@@ -6,7 +6,7 @@ from decimal import Decimal
 import pytest
 
 from autotrader.config.settings import RuntimeMode
-from autotrader.domain.enums import Side
+from autotrader.domain.enums import OrderStyle, Side
 from autotrader.operations.david_v6_position import (
     V6ManagedPosition,
     V6PositionActionKind,
@@ -300,3 +300,28 @@ def test_protection_failure_still_outranks_the_metodo_exit() -> None:
 
     assert actions[0].kind is V6PositionActionKind.EMERGENCY_EXIT_FULL
     assert actions[0].account_halt is True
+
+
+def test_every_full_exit_leaves_at_market() -> None:
+    """Section 9.3 concedes price on the way out instead of resting a limit."""
+    exits = (
+        _facts(protection_failed=True),
+        _facts(blocking_big_trade=True),
+        _facts(metodo_exit_signal=True),
+        _facts(current_price=Decimal("103")),
+    )
+
+    for facts in exits:
+        actions = manage_v6_position(_position(), facts, mode=RuntimeMode.PAPER)
+        assert actions[0].order_style is OrderStyle.MARKET
+
+
+def test_stop_placement_actions_carry_no_entry_order_style() -> None:
+    actions = manage_v6_position(
+        _position(active_stop_price=None, initial_stop_active=False),
+        _facts(),
+        mode=RuntimeMode.PAPER,
+    )
+
+    assert actions[0].kind is V6PositionActionKind.ACTIVATE_INITIAL_STOP
+    assert actions[0].order_style is None

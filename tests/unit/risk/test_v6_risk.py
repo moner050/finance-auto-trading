@@ -207,3 +207,16 @@ def test_the_eighth_trade_of_a_session_is_blocked() -> None:
 def test_session_trade_count_must_be_a_non_negative_integer() -> None:
     with pytest.raises(ValueError, match="session_trade_count"):
         _request(session_trade_count=-1)
+
+
+def test_reaching_the_session_objective_stops_new_entries() -> None:
+    authority = evaluate_v6_risk(_request(session_objective_reached=True))
+
+    assert "SESSION_OBJECTIVE_REACHED" in authority.blocker_codes
+    assert authority.quantity == Decimal(0)
+
+
+def test_an_unmet_objective_does_not_block() -> None:
+    authority = evaluate_v6_risk(_request(session_objective_reached=False))
+
+    assert "SESSION_OBJECTIVE_REACHED" not in authority.blocker_codes

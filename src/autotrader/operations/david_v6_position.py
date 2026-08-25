@@ -5,7 +5,7 @@ from decimal import ROUND_CEILING, Decimal
 from enum import StrEnum
 
 from autotrader.config.settings import RuntimeMode as ExecutionMode
-from autotrader.domain.enums import Side
+from autotrader.domain.enums import OrderStyle, Side
 from autotrader.shared.decimal import require_decimal
 
 
@@ -131,6 +131,7 @@ class V6PositionFacts:
 class V6PositionAction:
     kind: V6PositionActionKind
     reason: str
+    order_style: OrderStyle | None
     quantity: Decimal | None
     stop_price: Decimal | None
     average_entry_price: Decimal | None
@@ -182,6 +183,7 @@ def manage_v6_position(
             V6PositionAction(
                 kind=V6PositionActionKind.ACTIVATE_INITIAL_STOP,
                 reason="INITIAL_PROTECTION_REQUIRED",
+                order_style=None,
                 quantity=None,
                 stop_price=position.initial_stop_price,
                 average_entry_price=position.average_entry_price,
@@ -279,6 +281,7 @@ def _add_action(
     return V6PositionAction(
         kind=V6PositionActionKind.ADD_AND_MOVE_STOP,
         reason="ONE_FAVORABLE_ADD_WITH_WEIGHTED_BREAK_EVEN",
+        order_style=OrderStyle.MARKET,
         quantity=quantity,
         stop_price=active_stop,
         average_entry_price=average_entry,
@@ -322,6 +325,7 @@ def _break_even_action(
     return V6PositionAction(
         kind=V6PositionActionKind.MOVE_STOP_TO_BREAK_EVEN,
         reason="GENERAL_BREAK_EVEN_AT_0_30R",
+        order_style=None,
         quantity=None,
         stop_price=active_stop,
         average_entry_price=position.average_entry_price,
@@ -388,6 +392,7 @@ def _telemetry(
     return V6PositionAction(
         kind=kind,
         reason=kind.value,
+        order_style=None,
         quantity=None,
         stop_price=None,
         average_entry_price=None,
@@ -403,9 +408,12 @@ def _full_exit(
     kind: V6PositionActionKind,
     account_halt: bool,
 ) -> V6PositionAction:
+    # Section 9.3 concedes price on the way out rather than fighting for an
+    # exact fill, so an exit never rests as a limit.
     return V6PositionAction(
         kind=kind,
         reason=kind.value,
+        order_style=OrderStyle.MARKET,
         quantity=position.remaining_quantity,
         stop_price=None,
         average_entry_price=None,

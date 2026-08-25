@@ -45,6 +45,7 @@ class V6RiskRequest:
     cost_per_unit: Decimal
     leverage: int | None
     session_trade_count: int = 0
+    session_objective_reached: bool = False
     size_multiplier: Decimal = Decimal(1)
     max_quantity: Decimal | None = None
 
@@ -93,6 +94,8 @@ class V6RiskRequest:
             type(self.leverage) is not int or self.leverage <= 0
         ):
             raise ValueError("leverage must be a positive integer when present")
+        if type(self.session_objective_reached) is not bool:
+            raise TypeError("session_objective_reached must be bool")
         multiplier = require_decimal(self.size_multiplier)
         if not Decimal(0) < multiplier <= Decimal(1):
             raise ValueError("size_multiplier must be within zero and one")
@@ -217,6 +220,9 @@ def evaluate_v6_risk(request: V6RiskRequest) -> V6RiskAuthority:
         blockers.append("CONSECUTIVE_LOSS_LIMIT")
     if request.session_trade_count >= _SESSION_TRADE_SAFETY_UPPER_BOUND:
         blockers.append("SESSION_TRADE_UPPER_BOUND")
+    # Section 9.3: once the objective is met, close the screen and leave.
+    if request.session_objective_reached:
+        blockers.append("SESSION_OBJECTIVE_REACHED")
     if (
         request.current_open_structural_risk + risk_budget
         > risk_base * _OPEN_RISK_FRACTION
