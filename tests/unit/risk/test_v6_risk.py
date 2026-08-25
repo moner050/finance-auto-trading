@@ -164,3 +164,26 @@ def test_spread_of_exactly_three_ticks_is_allowed() -> None:
     )
 
     assert "SPREAD_ABOVE_THREE_TICKS" not in authority.blocker_codes
+
+
+def test_size_multiplier_scales_the_quantity() -> None:
+    full = evaluate_v6_risk(_request())
+    halved = evaluate_v6_risk(_request(size_multiplier=Decimal("0.5")))
+
+    # The halved size is floored to the quantity step, never rounded up.
+    assert halved.quantity == Decimal("1.551")
+    assert full.quantity == Decimal("3.103")
+    assert halved.quantity <= full.quantity / 2
+    assert halved.risk_fraction == full.risk_fraction
+
+
+def test_max_quantity_caps_the_size() -> None:
+    authority = evaluate_v6_risk(_request(max_quantity=Decimal("0.5")))
+
+    assert authority.quantity == Decimal("0.5")
+
+
+def test_size_multiplier_must_be_within_zero_and_one() -> None:
+    for invalid in (Decimal(0), Decimal("1.5"), Decimal("-1")):
+        with pytest.raises(ValueError, match="size_multiplier"):
+            _request(size_multiplier=invalid)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from enum import StrEnum
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -10,6 +11,12 @@ from autotrader.strategies.david_v6.models import EvidenceState
 
 _ENTRY_CUTOFF = timedelta(minutes=30)
 _FLAT_CUTOFF = timedelta(minutes=10)
+# Section 7.1 keeps the open tradeable and controls it by size, not by a
+# waiting period: the v4 five minute anti-spike delay was withdrawn.
+_OPEN_WINDOW = timedelta(minutes=15)
+_OPEN_WINDOW_MULTIPLIER = Decimal("0.5")
+_FULL_MULTIPLIER = Decimal(1)
+_PRE_OPEN_MAX_MICRO_CONTRACTS = 3
 
 
 class SessionKind(StrEnum):
@@ -17,6 +24,9 @@ class SessionKind(StrEnum):
     KRX_HLIT = "KRX_HLIT"
     US_HLIT = "US_HLIT"
     CASH_METODO = "CASH_METODO"
+
+
+_INTRADAY_OPEN_KINDS = frozenset({SessionKind.KRX_HLIT, SessionKind.US_HLIT})
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +38,7 @@ class ExchangeCalendar:
     session_open_at: datetime | None
     session_close_at: datetime | None
     close_auction_at: datetime | None
+    pre_open_at: datetime | None
     captured_at: datetime
     valid_until: datetime
 
@@ -49,7 +60,12 @@ class ExchangeCalendar:
             if type(value) is not datetime:
                 raise TypeError(f"{name} must be an exact datetime")
             object.__setattr__(self, name, require_utc(value))
-        for name in ("session_open_at", "session_close_at", "close_auction_at"):
+        for name in (
+            "session_open_at",
+            "session_close_at",
+            "close_auction_at",
+            "pre_open_at",
+        ):
             value = getattr(self, name)
             if value is None:
                 continue
@@ -65,6 +81,7 @@ class ExchangeCalendar:
                     self.session_open_at,
                     self.session_close_at,
                     self.close_auction_at,
+                    self.pre_open_at,
                 )
             ):
                 raise ValueError("holiday calendar cannot contain session boundaries")
@@ -80,6 +97,8 @@ class ExchangeCalendar:
             or not self.session_open_at < self.close_auction_at <= self.session_close_at
         ):
             raise ValueError("KRX HLIT requires an in-session close auction boundary")
+        if self.pre_open_at is not None and self.pre_open_at >= self.session_open_at:
+            raise ValueError("pre-open must start before the session open")
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +109,9 @@ class SessionFacts:
     reduce_only: bool
     must_be_flat: bool
     overnight_allowed: bool
+    pre_open: bool
+    size_multiplier: Decimal
+    max_micro_contracts: int | None
     entry_cutoff_at: datetime | None
     flat_at: datetime | None
     blockers: tuple[str, ...]
@@ -122,6 +144,9 @@ def evaluate_session(
             reduce_only=False,
             must_be_flat=False,
             overnight_allowed=True,
+            pre_open=False,
+            size_multiplier=_FULL_MULTIPLIER,
+            max_micro_contracts=None,
             entry_cutoff_at=None,
             flat_at=None,
             blockers=(),
@@ -140,12 +165,17 @@ def evaluate_session(
         else close_reference - _FLAT_CUTOFF
     )
     session_open = calendar.session_open_at <= decision < calendar.session_close_at
-    entry_allowed = session_open and decision < entry_cutoff
-    must_be_flat = decision >= flat_at
+    pre_open = (
+        calendar.pre_open_at is not None
+        and calendar.kind in _INTRADAY_OPEN_KINDS
+        and calendar.pre_open_at <= decision < calendar.session_open_at
+    )
+    entry_allowed = (session_open and decision < entry_cutoff) or pre_open
+    must_be_flat = session_open and decision >= flat_at
     blockers: list[str] = []
-    if not session_open:
+    if not session_open and not pre_open:
         blockers.append("SESSION_CLOSED")
-    if decision >= entry_cutoff:
+    if session_open and decision >= entry_cutoff:
         blockers.append("ENTRY_CUTOFF_REACHED")
     if must_be_flat:
         blockers.append("FLAT_CUTOFF_REACHED")
@@ -156,10 +186,28 @@ def evaluate_session(
         reduce_only=not entry_allowed,
         must_be_flat=must_be_flat,
         overnight_allowed=False,
+        pre_open=pre_open,
+        size_multiplier=_size_multiplier(calendar, decision, pre_open=pre_open),
+        max_micro_contracts=_PRE_OPEN_MAX_MICRO_CONTRACTS if pre_open else None,
         entry_cutoff_at=entry_cutoff,
         flat_at=flat_at,
         blockers=tuple(sorted(blockers)),
     )
+
+
+def _size_multiplier(
+    calendar: ExchangeCalendar,
+    decision: datetime,
+    *,
+    pre_open: bool,
+) -> Decimal:
+    """Halve size for the first fifteen minutes of an intraday open."""
+    if pre_open or calendar.kind not in _INTRADAY_OPEN_KINDS:
+        return _FULL_MULTIPLIER
+    assert calendar.session_open_at is not None
+    if calendar.session_open_at <= decision < calendar.session_open_at + _OPEN_WINDOW:
+        return _OPEN_WINDOW_MULTIPLIER
+    return _FULL_MULTIPLIER
 
 
 def _blocked(
@@ -174,6 +222,9 @@ def _blocked(
         reduce_only=True,
         must_be_flat=False,
         overnight_allowed=overnight_allowed,
+        pre_open=False,
+        size_multiplier=_FULL_MULTIPLIER,
+        max_micro_contracts=None,
         entry_cutoff_at=None,
         flat_at=None,
         blockers=(blocker,),

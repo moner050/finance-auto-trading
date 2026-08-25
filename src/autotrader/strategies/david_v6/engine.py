@@ -143,6 +143,7 @@ def evaluate_v6(
     risk_request = replace(
         risk_context.risk_request,
         grade=preliminary_grade,
+        size_multiplier=_session_size_multiplier(facts),
     )
     authority = evaluate_v6_risk(risk_request)
     blockers.extend(authority.blocker_codes)
@@ -341,6 +342,17 @@ def _hlit_blockers(
         reference_price=entry_price,
     ):
         blockers.append("BLOCKING_BIG_TRADE_AHEAD")
+
+
+def _session_size_multiplier(facts: dict[str, EvidenceItem[object]]) -> Decimal:
+    """The session is the authority on open-window sizing (section 7.1)."""
+    item = facts["session"]
+    if item.state is not EvidenceState.AVAILABLE:
+        return Decimal(1)
+    value = item.value
+    if type(value) is not SessionFacts:
+        return Decimal(1)
+    return value.size_multiplier
 
 
 def _monday_penalty(facts: dict[str, EvidenceItem[object]]) -> int:

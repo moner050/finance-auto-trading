@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+
+import pytest
 
 from autotrader.strategies.david_v6.models import EvidenceState
 from autotrader.strategies.david_v6.sessions import (
@@ -22,6 +25,7 @@ def _us_calendar(**changes: object) -> ExchangeCalendar:
         "session_open_at": OPEN,
         "session_close_at": EARLY_CLOSE,
         "close_auction_at": None,
+        "pre_open_at": None,
         "captured_at": OPEN - timedelta(days=1),
         "valid_until": EARLY_CLOSE,
     }
@@ -75,6 +79,7 @@ def test_krx_uses_close_auction_boundary_and_binance_uses_utc_day() -> None:
         session_open_at=krx_open,
         session_close_at=datetime(2026, 8, 24, 6, 30, tzinfo=UTC),
         close_auction_at=auction,
+        pre_open_at=None,
         captured_at=krx_open - timedelta(days=1),
         valid_until=datetime(2026, 8, 24, 7, 0, tzinfo=UTC),
     )
@@ -86,6 +91,7 @@ def test_krx_uses_close_auction_boundary_and_binance_uses_utc_day() -> None:
         session_open_at=datetime(2026, 8, 24, tzinfo=UTC),
         session_close_at=datetime(2026, 8, 25, tzinfo=UTC),
         close_auction_at=None,
+        pre_open_at=None,
         captured_at=datetime(2026, 8, 23, tzinfo=UTC),
         valid_until=datetime(2026, 8, 25, tzinfo=UTC),
     )
@@ -97,3 +103,78 @@ def test_krx_uses_close_auction_boundary_and_binance_uses_utc_day() -> None:
     assert krx_facts.entry_cutoff_at == auction - timedelta(minutes=30)
     assert binance_facts.must_be_flat is True
     assert binance_facts.overnight_allowed is False
+
+
+def test_first_fifteen_minutes_of_the_open_halve_the_size() -> None:
+    """Section 7.1 controls the open by size, not by an anti-spike delay."""
+    calendar = _us_calendar()
+
+    at_open = evaluate_session(calendar, OPEN)
+    late_in_window = evaluate_session(
+        calendar, OPEN + timedelta(minutes=14, seconds=59)
+    )
+    after_window = evaluate_session(calendar, OPEN + timedelta(minutes=15))
+
+    assert at_open.entry_allowed is True
+    assert at_open.size_multiplier == Decimal("0.5")
+    assert late_in_window.size_multiplier == Decimal("0.5")
+    assert after_window.size_multiplier == Decimal(1)
+
+
+def test_the_open_is_tradeable_from_the_first_second() -> None:
+    facts = evaluate_session(_us_calendar(), OPEN + timedelta(seconds=22))
+
+    assert facts.entry_allowed is True
+    assert facts.blockers == ()
+
+
+def test_pre_open_allows_a_capped_micro_entry() -> None:
+    calendar = _us_calendar(pre_open_at=OPEN - timedelta(hours=5))
+
+    facts = evaluate_session(calendar, OPEN - timedelta(minutes=2))
+
+    assert facts.pre_open is True
+    assert facts.entry_allowed is True
+    assert facts.max_micro_contracts == 3
+    assert facts.session_open is False
+    assert facts.blockers == ()
+
+
+def test_without_a_pre_open_boundary_there_is_no_pre_open_entry() -> None:
+    facts = evaluate_session(_us_calendar(), OPEN - timedelta(minutes=2))
+
+    assert facts.pre_open is False
+    assert facts.entry_allowed is False
+    assert facts.max_micro_contracts is None
+    assert "SESSION_CLOSED" in facts.blockers
+
+
+def test_pre_open_must_start_before_the_open() -> None:
+    with pytest.raises(ValueError, match="pre-open must start before"):
+        _us_calendar(pre_open_at=OPEN)
+
+
+def test_in_session_entry_carries_no_micro_contract_cap() -> None:
+    facts = evaluate_session(_us_calendar(), OPEN + timedelta(minutes=30))
+
+    assert facts.max_micro_contracts is None
+    assert facts.pre_open is False
+
+
+def test_binance_is_continuous_and_never_halves_size() -> None:
+    calendar = ExchangeCalendar(
+        session_date=date(2026, 11, 27),
+        kind=SessionKind.BINANCE_USDM,
+        source_timezone="UTC",
+        is_trading_day=True,
+        session_open_at=datetime(2026, 11, 27, tzinfo=UTC),
+        session_close_at=datetime(2026, 11, 28, tzinfo=UTC),
+        close_auction_at=None,
+        pre_open_at=None,
+        captured_at=datetime(2026, 11, 26, tzinfo=UTC),
+        valid_until=datetime(2026, 11, 28, tzinfo=UTC),
+    )
+
+    facts = evaluate_session(calendar, datetime(2026, 11, 27, 0, 5, tzinfo=UTC))
+
+    assert facts.size_multiplier == Decimal(1)

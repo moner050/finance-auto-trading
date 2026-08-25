@@ -41,6 +41,8 @@ class V6RiskRequest:
     quantity_step: Decimal
     cost_per_unit: Decimal
     leverage: int | None
+    size_multiplier: Decimal = Decimal(1)
+    max_quantity: Decimal | None = None
 
     def __post_init__(self) -> None:
         for name, expected in (
@@ -88,6 +90,15 @@ class V6RiskRequest:
             type(self.leverage) is not int or self.leverage <= 0
         ):
             raise ValueError("leverage must be a positive integer when present")
+        multiplier = require_decimal(self.size_multiplier)
+        if not Decimal(0) < multiplier <= Decimal(1):
+            raise ValueError("size_multiplier must be within zero and one")
+        object.__setattr__(self, "size_multiplier", multiplier)
+        if self.max_quantity is not None:
+            cap = require_decimal(self.max_quantity)
+            if cap <= 0:
+                raise ValueError("max_quantity must be positive when present")
+            object.__setattr__(self, "max_quantity", cap)
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,6 +220,10 @@ def evaluate_v6_risk(request: V6RiskRequest) -> V6RiskAuthority:
 
     per_unit_loss = stop_distance + request.cost_per_unit
     raw_quantity = risk_budget / per_unit_loss if per_unit_loss > 0 else Decimal(0)
+    # Section 7.1 controls the open by size rather than by a waiting period.
+    raw_quantity *= request.size_multiplier
+    if request.max_quantity is not None:
+        raw_quantity = min(raw_quantity, request.max_quantity)
     quantity = (raw_quantity / request.quantity_step).to_integral_value(
         rounding=ROUND_FLOOR
     ) * request.quantity_step
