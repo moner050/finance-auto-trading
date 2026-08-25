@@ -24,6 +24,11 @@ from autotrader.strategies.david_v6.exhaustion import (
 from autotrader.strategies.david_v6.grading import (
     DIRECTION_LONG,
     DIRECTION_SHORT,
+    FIBONACCI_EXTENSION_CLUSTER,
+    HIGHER_TIMEFRAME_BIAS,
+    PROFILE_VALUE_CONFLUENCE,
+    REGULAR_HLIT_DIVERGENCE,
+    V1_SECADO,
 )
 from autotrader.strategies.david_v6.manifest import (
     V6_DESIGN_SHA256,
@@ -59,6 +64,14 @@ from autotrader.strategies.david_v6.universe import UniverseFacts
 from autotrader.strategies.david_v6.zones import HlitZone, ZoneFacts
 
 NOW = datetime(2026, 8, 24, 15, 0, tzinfo=UTC)
+# Section 21.3 weights: 2 + 2 + 2 + 2 + 1 reaches the A cutoff of nine.
+_SCORED_KEYS = (
+    HIGHER_TIMEFRAME_BIAS,
+    REGULAR_HLIT_DIVERGENCE,
+    FIBONACCI_EXTENSION_CLUSTER,
+    V1_SECADO,
+    PROFILE_VALUE_CONFLUENCE,
+)
 FACT_KEYS = (
     "universe",
     "regime",
@@ -318,14 +331,11 @@ def _context(
     *,
     family: StrategyFamily,
     side: Side,
-    indicator_count: int = 9,
+    indicator_count: int = 6,
     mandatory: frozenset[str] | None = None,
 ) -> V6RiskContext:
     direction = DIRECTION_LONG if side is Side.BUY else DIRECTION_SHORT
-    keys = (
-        direction,
-        *(f"technical-{index:02d}" for index in range(indicator_count - 1)),
-    )
+    keys = (direction, *_SCORED_KEYS[: indicator_count - 1])
     digest = bytes.fromhex(_provenance("regime").digest_sha256)
     indicators = tuple(
         MatchedIndicator(
@@ -684,3 +694,46 @@ def test_a_supporting_big_trade_behind_does_not_block() -> None:
     )
 
     assert "BLOCKING_BIG_TRADE_AHEAD" not in _blockers(bundle, Side.BUY)
+
+
+def test_monday_demotes_the_grade_instead_of_excluding_the_day() -> None:
+    """Section 7.2 makes Monday a penalty, not an exclusion."""
+    facts = _fact_value("calendar")
+    assert isinstance(facts, CalendarFacts)
+    bundle = _bundle_with(
+        V6Market.BINANCE_USDM,
+        "calendar",
+        replace(facts, monday_score_penalty=1),
+    )
+
+    decision = evaluate_v6(
+        bundle,
+        manifest=_manifest(),
+        risk_context=_context(bundle, family=StrategyFamily.HLIT, side=Side.BUY),
+    )
+
+    assert decision.blockers == ()
+    assert decision.grade is SetupGrade.A_CANDIDATE
+
+
+def test_a_grade_needs_the_full_weighted_score() -> None:
+    bundle = _bundle(market=V6Market.BINANCE_USDM)
+
+    full = evaluate_v6(
+        bundle,
+        manifest=_manifest(),
+        risk_context=_context(bundle, family=StrategyFamily.HLIT, side=Side.BUY),
+    )
+    partial = evaluate_v6(
+        bundle,
+        manifest=_manifest(),
+        risk_context=_context(
+            bundle,
+            family=StrategyFamily.HLIT,
+            side=Side.BUY,
+            indicator_count=4,
+        ),
+    )
+
+    assert full.grade is SetupGrade.A
+    assert partial.grade is SetupGrade.NORMAL

@@ -129,6 +129,7 @@ def evaluate_v6(
     grade = grade_setup(
         indicators,
         mandatory_codes=risk_context.mandatory_indicator_codes,
+        score_adjustment=-_monday_penalty(facts),
     )
     if grade is SetupGrade.REJECT:
         blockers.append("CONTRADICTORY_DIRECTION_EVIDENCE")
@@ -323,6 +324,17 @@ def _hlit_blockers(
         reference_price=entry_price,
     ):
         blockers.append("BLOCKING_BIG_TRADE_AHEAD")
+
+
+def _monday_penalty(facts: dict[str, EvidenceItem[object]]) -> int:
+    """Monday is a scoring penalty, never an exclusion (section 7.2)."""
+    item = facts["calendar"]
+    if item.state is not EvidenceState.AVAILABLE:
+        return 0
+    value = item.value
+    if type(value) is not CalendarFacts:
+        return 0
+    return value.monday_score_penalty
 
 
 def _provenance(bundle: V6EvidenceBundle) -> tuple[set[bytes], datetime]:
