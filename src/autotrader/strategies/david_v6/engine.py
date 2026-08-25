@@ -27,13 +27,21 @@ from autotrader.strategies.david_v6.models import (
     V6Decision,
     V6Market,
 )
-from autotrader.strategies.david_v6.order_flow import OrderFlowFacts
-from autotrader.strategies.david_v6.pivots import DivergenceFacts
+from autotrader.strategies.david_v6.order_flow import (
+    OrderFlowFacts,
+    blocking_big_trade_ahead,
+)
+from autotrader.strategies.david_v6.pivots import DivergenceFacts, DivergenceKind
 from autotrader.strategies.david_v6.profile import ProfileFacts
 from autotrader.strategies.david_v6.regime import RegimeFacts
 from autotrader.strategies.david_v6.sessions import SessionFacts
 from autotrader.strategies.david_v6.universe import UniverseFacts
 from autotrader.strategies.david_v6.zones import ZoneFacts
+
+_REGULAR_KIND = {
+    Side.BUY: DivergenceKind.REGULAR_BULLISH,
+    Side.SELL: DivergenceKind.REGULAR_BEARISH,
+}
 
 _COMMON_REQUIRED = frozenset({"regime", "calendar", "session", "costs"})
 _METODO_REQUIRED = frozenset({"universe", "metodo"})
@@ -94,7 +102,13 @@ def evaluate_v6(
         item = facts[key]
         if item.state is not EvidenceState.AVAILABLE:
             blockers.append(item.blocker_code or f"{key.upper()}_{item.state.value}")
-    _semantic_blockers(facts, required, blockers)
+    _semantic_blockers(
+        facts,
+        required,
+        risk_context.risk_request.side,
+        risk_context.risk_request.entry_price,
+        blockers,
+    )
 
     provenance_hashes, completed_at = _provenance(bundle)
     valid_indicators: list[MatchedIndicator] = []
@@ -224,6 +238,8 @@ def _facts(bundle: V6EvidenceBundle) -> dict[str, EvidenceItem[object]]:
 def _semantic_blockers(
     facts: dict[str, EvidenceItem[object]],
     required: frozenset[str],
+    side: Side,
+    entry_price: Decimal,
     blockers: list[str],
 ) -> None:
     valid_values: dict[str, object] = {}
@@ -258,6 +274,55 @@ def _semantic_blockers(
         observed = getattr(value, attribute)
         if observed is not required_value:
             blockers.append(blocker)
+
+    _hlit_blockers(valid_values, side, entry_price, blockers)
+
+
+def _hlit_blockers(
+    valid_values: dict[str, object],
+    side: Side,
+    entry_price: Decimal,
+    blockers: list[str],
+) -> None:
+    """Enforce the drawing preconditions of the HLIT specification.
+
+    A regular divergence in the traded direction must exist before any level is
+    drawn, a pre-marked zone must exist, and reaching that zone is never enough
+    on its own: a confirmed exhaustion sequence in the same direction is
+    required.
+    """
+    divergence = valid_values.get("divergence")
+    if divergence is not None:
+        matching = tuple(
+            signal
+            for signal in cast(DivergenceFacts, divergence).regular
+            if signal.kind is _REGULAR_KIND[side]
+        )
+        if not matching:
+            blockers.append("REGULAR_DIVERGENCE_ABSENT")
+
+    zones = valid_values.get("zones")
+    if zones is not None and not cast(ZoneFacts, zones).zones:
+        blockers.append("NO_MARKED_ZONE")
+
+    exhaustion = valid_values.get("exhaustion")
+    if exhaustion is not None:
+        facts = cast(ExhaustionFacts, exhaustion)
+        sequence = facts.bullish if side is Side.BUY else facts.bearish
+        if sequence is None:
+            blockers.append("EXHAUSTION_ABSENT")
+        elif sequence.direction is not side:
+            blockers.append("EXHAUSTION_DIRECTION_MISMATCH")
+        elif not sequence.confirmed:
+            blockers.append("EXHAUSTION_UNCONFIRMED")
+
+    order_flow = valid_values.get("order_flow")
+    if order_flow is not None and blocking_big_trade_ahead(
+        cast(OrderFlowFacts, order_flow),
+        side=side,
+        reference_price=entry_price,
+    ):
+        blockers.append("BLOCKING_BIG_TRADE_AHEAD")
 
 
 def _provenance(bundle: V6EvidenceBundle) -> tuple[set[bytes], datetime]:

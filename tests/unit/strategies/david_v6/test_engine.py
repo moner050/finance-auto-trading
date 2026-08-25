@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -16,7 +17,10 @@ from autotrader.strategies.david_v6.evidence import (
     EvidenceProvenance,
     V6EvidenceBundle,
 )
-from autotrader.strategies.david_v6.exhaustion import ExhaustionFacts
+from autotrader.strategies.david_v6.exhaustion import (
+    ExhaustionFacts,
+    ExhaustionSequence,
+)
 from autotrader.strategies.david_v6.grading import (
     DIRECTION_LONG,
     DIRECTION_SHORT,
@@ -35,13 +39,24 @@ from autotrader.strategies.david_v6.models import (
     StrategyFamily,
     V6Market,
 )
-from autotrader.strategies.david_v6.order_flow import OrderFlowFacts
-from autotrader.strategies.david_v6.pivots import DivergenceFacts
+from autotrader.strategies.david_v6.order_flow import (
+    AggressorSide,
+    BigTradeClass,
+    BigTradeCluster,
+    OrderFlowFacts,
+)
+from autotrader.strategies.david_v6.pivots import (
+    DivergenceFacts,
+    DivergenceKind,
+    DivergenceSignal,
+    Pivot,
+    PivotKind,
+)
 from autotrader.strategies.david_v6.profile import ProfileFacts
 from autotrader.strategies.david_v6.regime import RegimeFacts, RegimeLabel
 from autotrader.strategies.david_v6.sessions import SessionFacts
 from autotrader.strategies.david_v6.universe import UniverseFacts
-from autotrader.strategies.david_v6.zones import ZoneFacts
+from autotrader.strategies.david_v6.zones import HlitZone, ZoneFacts
 
 NOW = datetime(2026, 8, 24, 15, 0, tzinfo=UTC)
 FACT_KEYS = (
@@ -57,6 +72,58 @@ FACT_KEYS = (
     "session",
     "costs",
 )
+
+
+def _pivot(index: int, kind: PivotKind, price: str) -> Pivot:
+    return Pivot(
+        index=index,
+        confirmation_index=index,
+        kind=kind,
+        price=Decimal(price),
+        timestamp=NOW - timedelta(minutes=30 - index),
+        confirmed=True,
+    )
+
+
+def _divergence_signal(kind: DivergenceKind) -> DivergenceSignal:
+    """Price extends while MACD does not, which is the drawing precondition."""
+    if kind is DivergenceKind.REGULAR_BULLISH:
+        first = _pivot(1, PivotKind.LOW, "98")
+        second = _pivot(4, PivotKind.LOW, "96")
+        return DivergenceSignal(
+            kind=kind,
+            first=first,
+            second=second,
+            first_oscillator=Decimal("-3"),
+            second_oscillator=Decimal("-1"),
+        )
+    first = _pivot(1, PivotKind.HIGH, "102")
+    second = _pivot(4, PivotKind.HIGH, "104")
+    return DivergenceSignal(
+        kind=kind,
+        first=first,
+        second=second,
+        first_oscillator=Decimal("3"),
+        second_oscillator=Decimal("1"),
+    )
+
+
+def _exhaustion_sequence(direction: Side) -> ExhaustionSequence:
+    """Three extending pivots on falling volume, inside the marked zone."""
+    kind = PivotKind.LOW if direction is Side.BUY else PivotKind.HIGH
+    prices = ("99", "98", "97") if direction is Side.BUY else ("101", "102", "103")
+    history = tuple(
+        _pivot(index + 2, kind, price) for index, price in enumerate(prices)
+    )
+    return ExhaustionSequence(
+        direction=direction,
+        confirmed=True,
+        research_only=False,
+        history=history,
+        evaluation_pivots=history,
+        structural_reference_price=history[-1].price,
+        confirmed_at=NOW - timedelta(minutes=1),
+    )
 
 
 def _provenance(key: str) -> EvidenceProvenance:
@@ -126,12 +193,35 @@ def _fact_value(key: str) -> object:
             source_timezone="UTC",
             selected_dates=(date(2026, 8, 24),),
             bin_count=1,
-            zones=(),
+            zones=(
+                HlitZone(
+                    lower_boundary=Decimal("95"),
+                    upper_boundary=Decimal("105"),
+                    touch_count=3,
+                    strength=3,
+                    touched_at=(
+                        NOW - timedelta(minutes=15),
+                        NOW - timedelta(minutes=10),
+                        NOW - timedelta(minutes=5),
+                    ),
+                ),
+            ),
         )
     if key == "divergence":
-        return DivergenceFacts(observed_at=NOW, regular=(), hidden=())
+        return DivergenceFacts(
+            observed_at=NOW,
+            regular=(
+                _divergence_signal(DivergenceKind.REGULAR_BULLISH),
+                _divergence_signal(DivergenceKind.REGULAR_BEARISH),
+            ),
+            hidden=(),
+        )
     if key == "exhaustion":
-        return ExhaustionFacts(observed_at=NOW, bullish=None, bearish=None)
+        return ExhaustionFacts(
+            observed_at=NOW,
+            bullish=_exhaustion_sequence(Side.BUY),
+            bearish=_exhaustion_sequence(Side.SELL),
+        )
     if key == "order_flow":
         return OrderFlowFacts(
             state=EvidenceState.AVAILABLE,
@@ -420,3 +510,177 @@ def test_available_evidence_with_wrong_fact_type_fails_closed() -> None:
 
     assert decision.grade is SetupGrade.REJECT
     assert "REGIME_VALUE_INVALID" in decision.blockers
+
+
+def _bundle_with(market: V6Market, key: str, value: object) -> V6EvidenceBundle:
+    facts = {name: _item(name) for name in FACT_KEYS}
+    facts[key] = EvidenceItem(
+        state=EvidenceState.AVAILABLE,
+        value=value,
+        provenance=_provenance(key),
+        blocker_code=None,
+    )
+    return V6EvidenceBundle(
+        market=market,
+        instrument_id=new_uuid7(),
+        decision_at=NOW,
+        bars={},
+        **facts,
+    )
+
+
+def _blockers(bundle: V6EvidenceBundle, side: Side) -> tuple[str, ...]:
+    decision = evaluate_v6(
+        bundle,
+        manifest=_manifest(),
+        risk_context=_context(bundle, family=StrategyFamily.HLIT, side=side),
+    )
+    return decision.blockers
+
+
+def test_hlit_without_a_regular_divergence_never_trades() -> None:
+    bundle = _bundle_with(
+        V6Market.BINANCE_USDM,
+        "divergence",
+        DivergenceFacts(observed_at=NOW, regular=(), hidden=()),
+    )
+
+    assert "REGULAR_DIVERGENCE_ABSENT" in _blockers(bundle, Side.BUY)
+
+
+def test_hidden_divergence_alone_never_trades() -> None:
+    hidden = DivergenceSignal(
+        kind=DivergenceKind.HIDDEN_BULLISH,
+        first=_pivot(1, PivotKind.LOW, "96"),
+        second=_pivot(4, PivotKind.LOW, "98"),
+        first_oscillator=Decimal("-1"),
+        second_oscillator=Decimal("-3"),
+    )
+    bundle = _bundle_with(
+        V6Market.BINANCE_USDM,
+        "divergence",
+        DivergenceFacts(observed_at=NOW, regular=(), hidden=(hidden,)),
+    )
+
+    assert "REGULAR_DIVERGENCE_ABSENT" in _blockers(bundle, Side.BUY)
+
+
+def test_divergence_for_the_other_direction_never_trades() -> None:
+    bundle = _bundle_with(
+        V6Market.BINANCE_USDM,
+        "divergence",
+        DivergenceFacts(
+            observed_at=NOW,
+            regular=(_divergence_signal(DivergenceKind.REGULAR_BEARISH),),
+            hidden=(),
+        ),
+    )
+
+    assert "REGULAR_DIVERGENCE_ABSENT" in _blockers(bundle, Side.BUY)
+    assert "REGULAR_DIVERGENCE_ABSENT" not in _blockers(bundle, Side.SELL)
+
+
+def test_reaching_no_marked_zone_never_trades() -> None:
+    bundle = _bundle_with(
+        V6Market.BINANCE_USDM,
+        "zones",
+        ZoneFacts(
+            observed_at=NOW,
+            source_timezone="UTC",
+            selected_dates=(date(2026, 8, 24),),
+            bin_count=1,
+            zones=(),
+        ),
+    )
+
+    assert "NO_MARKED_ZONE" in _blockers(bundle, Side.BUY)
+
+
+def test_absent_exhaustion_never_trades() -> None:
+    bundle = _bundle_with(
+        V6Market.BINANCE_USDM,
+        "exhaustion",
+        ExhaustionFacts(observed_at=NOW, bullish=None, bearish=None),
+    )
+
+    assert "EXHAUSTION_ABSENT" in _blockers(bundle, Side.BUY)
+
+
+def test_unconfirmed_exhaustion_never_trades() -> None:
+    sequence = _exhaustion_sequence(Side.BUY)
+    research_only = ExhaustionSequence(
+        direction=sequence.direction,
+        confirmed=False,
+        research_only=True,
+        history=sequence.history[:2],
+        evaluation_pivots=sequence.evaluation_pivots[:2],
+        structural_reference_price=sequence.structural_reference_price,
+        confirmed_at=sequence.confirmed_at,
+    )
+    bundle = _bundle_with(
+        V6Market.BINANCE_USDM,
+        "exhaustion",
+        ExhaustionFacts(observed_at=NOW, bullish=research_only, bearish=None),
+    )
+
+    assert "EXHAUSTION_UNCONFIRMED" in _blockers(bundle, Side.BUY)
+
+
+def test_metodo_family_is_not_subject_to_the_hlit_drawing_gates() -> None:
+    bundle = _bundle_with(
+        V6Market.US_CASH,
+        "divergence",
+        DivergenceFacts(observed_at=NOW, regular=(), hidden=()),
+    )
+
+    decision = evaluate_v6(
+        bundle,
+        manifest=_manifest(),
+        risk_context=_context(bundle, family=StrategyFamily.METODO, side=Side.BUY),
+    )
+
+    assert "REGULAR_DIVERGENCE_ABSENT" not in decision.blockers
+
+
+def test_entering_against_a_big_trade_ahead_is_blocked() -> None:
+    ahead = BigTradeCluster(
+        side=AggressorSide.SELL,
+        started_at=NOW - timedelta(seconds=2),
+        ended_at=NOW - timedelta(seconds=1),
+        low_price=Decimal("101"),
+        high_price=Decimal("103"),
+        trade_count=4,
+        summed_notional=Decimal("5000"),
+        classification=BigTradeClass.EXTREME,
+    )
+    facts = _fact_value("order_flow")
+    assert isinstance(facts, OrderFlowFacts)
+    bundle = _bundle_with(
+        V6Market.BINANCE_USDM,
+        "order_flow",
+        replace(facts, big_trades=(ahead,)),
+    )
+
+    assert "BLOCKING_BIG_TRADE_AHEAD" in _blockers(bundle, Side.BUY)
+
+
+def test_a_supporting_big_trade_behind_does_not_block() -> None:
+    behind = BigTradeCluster(
+        side=AggressorSide.BUY,
+        started_at=NOW - timedelta(seconds=2),
+        ended_at=NOW - timedelta(seconds=1),
+        low_price=Decimal("90"),
+        high_price=Decimal("95"),
+        trade_count=4,
+        summed_notional=Decimal("5000"),
+        classification=BigTradeClass.EXTREME,
+    )
+    facts = _fact_value("order_flow")
+    assert isinstance(facts, OrderFlowFacts)
+    bundle = _bundle_with(
+        V6Market.BINANCE_USDM,
+        "order_flow",
+        replace(facts, big_trades=(behind,)),
+    )
+
+    assert "BLOCKING_BIG_TRADE_AHEAD" not in _blockers(bundle, Side.BUY)

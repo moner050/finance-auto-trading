@@ -8,6 +8,7 @@ from enum import StrEnum
 from itertools import pairwise
 from typing import cast
 
+from autotrader.domain.enums import Side
 from autotrader.shared.decimal import require_decimal
 from autotrader.strategies.david_v6.models import EvidenceState
 
@@ -469,6 +470,38 @@ def _require_utc(value: object, name: str) -> datetime:
     return value.astimezone(UTC)
 
 
+def blocking_big_trade_ahead(
+    facts: OrderFlowFacts,
+    *,
+    side: Side,
+    reference_price: Decimal,
+) -> bool:
+    """Report an opposing Big Trade standing in the direction of travel.
+
+    The specification forbids entering against a Big Trade and treats one that
+    appears ahead of an open position as an exit signal. Ahead means above the
+    reference price for a long and below it for a short, and opposing means the
+    aggressor pushed against the traded direction.
+    """
+    if type(cast(object, facts)) is not OrderFlowFacts:
+        raise TypeError("facts must be exact OrderFlowFacts")
+    if type(side) is not Side:
+        raise TypeError("side must be an exact Side")
+    price = require_decimal(reference_price)
+    if price <= 0:
+        raise ValueError("reference_price must be positive")
+    opposing = AggressorSide.SELL if side is Side.BUY else AggressorSide.BUY
+    return any(
+        cluster.side is opposing
+        and (
+            cluster.high_price >= price
+            if side is Side.BUY
+            else cluster.low_price <= price
+        )
+        for cluster in facts.big_trades
+    )
+
+
 __all__ = (
     "AggressorSide",
     "BigTradeClass",
@@ -477,4 +510,5 @@ __all__ = (
     "OrderFlowThresholds",
     "TradePrint",
     "aggregate_order_flow",
+    "blocking_big_trade_ahead",
 )

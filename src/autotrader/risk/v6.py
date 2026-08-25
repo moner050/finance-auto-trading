@@ -18,6 +18,7 @@ from autotrader.strategies.david_v6.models import (
 _DAILY_LOSS_FRACTION = Decimal("0.0075")
 _WEEKLY_LOSS_FRACTION = Decimal("0.0200")
 _OPEN_RISK_FRACTION = Decimal("0.0075")
+_MAX_SPREAD_TICKS = Decimal(3)
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,6 +184,9 @@ def evaluate_v6_risk(request: V6RiskRequest) -> V6RiskAuthority:
         stop_price = request.structural_reference + buffer
     if stop_price <= 0:
         blockers.append("NON_POSITIVE_STOP")
+
+    if request.spread > _MAX_SPREAD_TICKS * request.tick_size:
+        blockers.append("SPREAD_ABOVE_THREE_TICKS")
 
     stop_distance = abs(request.entry_price - stop_price)
     distance_atr = stop_distance / request.atr_5m

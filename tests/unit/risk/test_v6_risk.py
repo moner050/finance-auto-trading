@@ -147,3 +147,20 @@ def test_worse_current_equity_is_the_risk_base() -> None:
     assert higher.risk_base == Decimal("2000")
     assert lower.risk_base == Decimal("1500")
     assert lower.quantity <= higher.quantity
+
+
+def test_spread_wider_than_three_ticks_is_blocked() -> None:
+    authority = evaluate_v6_risk(
+        _request(tick_size=Decimal("0.1"), spread=Decimal("0.31"))
+    )
+
+    assert "SPREAD_ABOVE_THREE_TICKS" in authority.blocker_codes
+    assert authority.quantity == Decimal(0)
+
+
+def test_spread_of_exactly_three_ticks_is_allowed() -> None:
+    authority = evaluate_v6_risk(
+        _request(tick_size=Decimal("0.1"), spread=Decimal("0.30"))
+    )
+
+    assert "SPREAD_ABOVE_THREE_TICKS" not in authority.blocker_codes
