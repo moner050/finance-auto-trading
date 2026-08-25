@@ -79,36 +79,42 @@ fencing token 같은 기관용 컴플라이언스 구조를 먼저 지었기 때
 
 ---
 
-## Phase 1 — 증거 조립기
+## Phase 1 — 증거 조립기 ✅ 완료 (`c8d38a2`)
 
-이 프로젝트에서 한 번도 존재한 적 없는 연결 고리다. 가장 먼저 만든다.
+이 프로젝트에 한 번도 존재한 적 없던 연결 고리를 만들었다.
 
-**작업**
+**한 일**
 
-- `src/autotrader/strategies/david_v6/assembly.py` 신설.
-- 시장별 조립 함수 3개: `assemble_krx_cash`, `assemble_us_cash`, `assemble_binance_usdm`.
-  각각 완성봉(+ Binance는 체결 스트림), 거래소 캘린더, 수수료 스케줄을 받아
-  기존 evaluator를 호출하고 `EvidenceItem`으로 감싼 `V6EvidenceBundle`을 반환한다.
-- 시장별 필수 사실은 이미 `engine.py`에 정의돼 있다 — 현금시장은 `universe/zones/
-  divergence/exhaustion`, Binance는 추가로 `order_flow/profile`, 공통은 `regime/
-  calendar/session/costs`.
-- **fail-closed가 핵심이다.** 입력이 없거나 봉이 미완성이면 값을 지어내지 말고
-  `EvidenceState`를 AVAILABLE이 아닌 상태로 두고 blocker code를 붙인다. `evaluate_v6`가
-  알아서 REJECT한다.
-- provenance는 실제 출처로 채운다 (`source`=브로커/거래소, `observed_at`=봉 종료시각,
-  `digest_sha256`=입력 봉의 정규 다이제스트).
+- `src/autotrader/strategies/david_v6/assembly.py` 신설. 완성봉·거래소 캘린더·이벤트·
+  비용 입력을 받아 모든 evaluator를 돌리고, 각 사실에 그것을 만든 입력의 provenance를
+  기록한 `V6EvidenceBundle`을 반환한다.
+- **fail-closed.** 입력이 없으면 값을 지어내지 않고 해당 사실을 UNAVAILABLE로 두고
+  고유한 blocker code를 붙인다. 불완전한 수집이 거래 가능한 셋업을 만들 수 없다.
+- 미완성 봉은 조립 전체를 실패시키지 않고 걸러낸다. 수집이 조금 일찍 돈 것은 흔한
+  일이지 오류가 아니다. 타임프레임 정의는 `evidence.TIMEFRAMES` 한 곳만 쓴다.
+- `derive_indicators()` 추가. 엔진은 지표로 등급을 매기고 번들이 뒷받침하지 않는
+  evidence hash를 거부하는데, **이 지표를 만드는 코드가 없어 조립된 번들이 애초에
+  등급을 받을 수 없었다.** 이제 방향 주장은 호출자의 선언이 아니라 정규 다이버전스
+  자체에서 나온다.
+- MACD 12/26/9를 `metodo.macd_series`로 공개. §12가 일봉 스윙과 HLIT에 같은 오실레이터를
+  지정하므로 복제하면 둘이 갈라진다.
 
 **검증**
 
-- 시장별 골든 픽스처로 조립 → `evaluate_v6` → 기대 등급/blocker 확인.
-- 필수 사실을 하나씩 빼면서 해당 blocker code가 정확히 나오는지 확인.
-- 전략 불변식 테스트: 다이버전스 없이 피보나치 존이 생성되지 않는다, 미완성 봉이
-  섞이면 AVAILABLE이 되지 않는다.
+명세가 서술하는 셋업이 실제로 나오는 봉을 만들어 테스트했다. 랠리가 앵커 A가 될
+스윙 고점을 찍고, 이어지는 감속 하락이 거래량 감소 속에 미세한 저점 갱신을 반복하며
+모멘텀은 상승한다 — 정규 강세 다이버전스와 소진 시퀀스가 동시에 성립하는 형태다.
 
-**완료 기준:** 실제 Binance 공개 REST에서 받은 BTCUSDT 완성봉으로 조립한 번들이
-`evaluate_v6`를 통과해 결정(대개 REJECT + blocker)을 만들어낸다.
+실제 봉에서 처음으로 25/50/66이 그려졌다.
 
----
+```
+anchor_a = 120.725   anchor_b = 119.700
+25% = 119.95625   50% = 120.21250   66% = 120.37650  (target)
+exhaustion confirmed, zones 3개
+```
+
+조립 → 지표 파생 → `evaluate_v6`까지 이어져 결정이 나오는 것을 테스트로 고정했다.
+신규 테스트 19건.
 
 ## Phase 2 — 매매 루프 데몬 (Paper 전용)
 
