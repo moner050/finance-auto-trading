@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from autotrader.domain.completed_ohlcv import CompletedOhlcvBar
 from autotrader.strategies.david_v6.models import EvidenceState, V6Market
 
-_TIMEFRAMES = {
+TIMEFRAMES = {
     "5s": timedelta(seconds=5),
     "30s": timedelta(seconds=30),
     "1m": timedelta(minutes=1),
@@ -106,7 +106,7 @@ class V6EvidenceBundle:
         if not isinstance(raw_bars, Mapping):
             raise TypeError("bars must be a mapping")
         bar_items = dict(self.bars)
-        if any(type(key) is not str or key not in _TIMEFRAMES for key in bar_items):
+        if any(type(key) is not str or key not in TIMEFRAMES for key in bar_items):
             raise ValueError("bars contain an unsupported timeframe key")
         if self.market in {V6Market.KRX_CASH, V6Market.US_CASH} and any(
             key in _CASH_FORBIDDEN_TIMEFRAMES for key in bar_items
@@ -116,7 +116,7 @@ class V6EvidenceBundle:
             )
         for key, item in bar_items.items():
             _require_bar_item(
-                item=item, timeframe=_TIMEFRAMES[key], decision_at=decision_at
+                item=item, timeframe=TIMEFRAMES[key], decision_at=decision_at
             )
         for item in self._fact_items():
             if type(item) is not EvidenceItem:

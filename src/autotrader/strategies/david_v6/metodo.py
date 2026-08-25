@@ -20,6 +20,9 @@ _MACD_FAST = 12
 _MACD_SLOW = 26
 _MACD_SIGNAL = 9
 _REQUIRED_DAILY_BARS = _SMA_SLOW + 1
+# The first bar whose MACD signal exists: the slow EMA seeds at 26 and the
+# signal EMA needs a further nine values.
+MACD_WARMUP_BARS = _MACD_SLOW + _MACD_SIGNAL - 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +78,7 @@ def evaluate_metodo(
     previous_sma_70 = _sma(closes, _SMA_MID, 1)
     current_sma_200 = _sma(closes, _SMA_SLOW, 0)
     previous_sma_200 = _sma(closes, _SMA_SLOW, 1)
-    macd_values, signal_values = _macd(closes)
+    macd_values, signal_values = macd_series(closes)
     current_macd = cast(Decimal, macd_values[-1])
     previous_macd = cast(Decimal, macd_values[-2])
     current_signal = cast(Decimal, signal_values[-1])
@@ -154,9 +157,10 @@ def _sma(closes: tuple[Decimal, ...], period: int, offset: int) -> Decimal:
     return sum(closes[end - period : end], start=Decimal(0)) / Decimal(period)
 
 
-def _macd(
+def macd_series(
     closes: tuple[Decimal, ...],
 ) -> tuple[tuple[Decimal | None, ...], tuple[Decimal | None, ...]]:
+    """MACD 12/26/9, shared by the daily swing and by HLIT (section 12)."""
     fast = _ema(closes, _MACD_FAST)
     slow = _ema(closes, _MACD_SLOW)
     macd: list[Decimal | None] = [None] * len(closes)
@@ -223,4 +227,4 @@ def _utc(value: object) -> datetime:
     return value.astimezone(UTC)
 
 
-__all__ = ("MetodoFacts", "evaluate_metodo")
+__all__ = ("MACD_WARMUP_BARS", "MetodoFacts", "evaluate_metodo", "macd_series")
