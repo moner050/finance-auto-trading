@@ -1,0 +1,192 @@
+{
+  "source": {
+    "url": "https://openapi.tossinvest.com/openapi-docs/latest/openapi.json",
+    "capturedAt": "2026-08-18",
+    "openapi": "3.1.0",
+    "version": "1.2.14",
+    "sha256": "d29f9079a557c0b6affcec330aa131f93b09fd49932354668e3dc4524cd42180"
+  },
+  "submit": {
+    "method": "POST",
+    "path": "/api/v1/orders",
+    "contentType": "application/json",
+    "authorizationHeader": "Authorization",
+    "authorizationScheme": "Bearer",
+    "accountHeader": {
+      "name": "X-Tossinvest-Account",
+      "required": true,
+      "source": "GET /api/v1/accounts result[].accountSeq",
+      "schemaType": "integer",
+      "schemaFormat": "int64"
+    },
+    "krxQuantityRequest": {
+      "required": [
+        "symbol",
+        "side",
+        "orderType",
+        "quantity"
+      ],
+      "properties": [
+        "clientOrderId",
+        "symbol",
+        "side",
+        "orderType",
+        "timeInForce",
+        "quantity",
+        "price",
+        "confirmHighValueOrder"
+      ],
+      "clientOrderId": {
+        "required": false,
+        "maxLength": 36,
+        "pattern": "^[a-zA-Z0-9\\-_]+$",
+        "idempotencyWindowSeconds": 600
+      },
+      "confirmHighValueOrder": {
+        "default": false,
+        "repositoryFixedValue": false,
+        "threshold": "100000000",
+        "currency": "KRW",
+        "thresholdComparison": "GREATER_THAN_OR_EQUAL",
+        "failureStatus": 400,
+        "failureCode": "confirm-high-value-required"
+      }
+    },
+    "success": {
+      "status": 200,
+      "envelopeRequired": [
+        "result"
+      ],
+      "resultRequired": [
+        "orderId"
+      ],
+      "resultProperties": [
+        "orderId",
+        "clientOrderId"
+      ],
+      "clientOrderIdNullableWhenRequestOmitted": true
+    },
+    "conflicts": [
+      {
+        "status": 409,
+        "code": "request-in-progress"
+      },
+      {
+        "status": 422,
+        "code": "idempotency-key-conflict"
+      }
+    ]
+  },
+  "implementationBoundary": {
+    "krxHighValuePreflight": "PRICE_KNOWN_LIMIT_ONLY",
+    "krxMarketNotionalPreflightSupported": false,
+    "laboratoryWriterScope": "KRX_LIMIT_DAY_ONLY",
+    "autoConfirmHighValueOrder": false
+  },
+  "recovery": {
+    "list": {
+      "method": "GET",
+      "path": "/api/v1/orders",
+      "requiredQuery": [
+        "status"
+      ],
+      "optionalQuery": [
+        "symbol",
+        "from",
+        "to",
+        "cursor",
+        "limit"
+      ],
+      "statusValues": [
+        "OPEN",
+        "CLOSED"
+      ],
+      "open": {
+        "returnsAll": true,
+        "ignoresQuery": [
+          "cursor",
+          "limit"
+        ],
+        "nextCursor": null,
+        "hasNext": false
+      },
+      "closed": {
+        "defaultLimit": 20,
+        "maximumLimit": 100,
+        "cursorField": "nextCursor",
+        "terminationField": "hasNext",
+        "terminalHasNext": false
+      },
+      "resultRequired": [
+        "orders",
+        "nextCursor",
+        "hasNext"
+      ]
+    },
+    "detail": {
+      "method": "GET",
+      "path": "/api/v1/orders/{orderId}",
+      "pathIdentityField": "orderId"
+    },
+    "orderRecord": {
+      "required": [
+        "orderId",
+        "symbol",
+        "side",
+        "orderType",
+        "timeInForce",
+        "status",
+        "quantity",
+        "currency",
+        "orderedAt",
+        "execution"
+      ],
+      "properties": [
+        "orderId",
+        "symbol",
+        "side",
+        "orderType",
+        "timeInForce",
+        "status",
+        "price",
+        "quantity",
+        "orderAmount",
+        "currency",
+        "orderedAt",
+        "canceledAt",
+        "execution"
+      ],
+      "clientOrderIdField": null,
+      "providerAccountCorrelationField": null
+    },
+    "providerAccountScope": {
+      "requestHeader": "X-Tossinvest-Account",
+      "responseRecordField": null
+    },
+    "evidenceStatus": "SUPPORTED_EXACT_REPLAY_WITHIN_600_SECONDS",
+    "exactSubmitReplay": {
+      "supported": true,
+      "commandType": "SUBMIT",
+      "method": "POST",
+      "path": "/api/v1/orders",
+      "requiresClientOrderId": true,
+      "requiresIdenticalRequestBody": true,
+      "successBehavior": "RETURN_PREVIOUS_ORDER_RESULT_UNCHANGED",
+      "idempotencyWindowSeconds": 600,
+      "windowEndExclusive": true,
+      "sameKeyAfterWindowCreatesNewOrder": true,
+      "pending": {
+        "status": 409,
+        "code": "request-in-progress"
+      },
+      "bodyConflict": {
+        "status": 422,
+        "code": "idempotency-key-conflict"
+      }
+    },
+    "listDetailClientOrderLookup": {
+      "supported": false,
+      "reason": "Official order list/detail Order records expose neither clientOrderId nor a provider account-correlation field."
+    }
+  }
+}

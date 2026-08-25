@@ -1,0 +1,63 @@
+{
+  "source": {
+    "repository": "https://github.com/koreainvestment/open-trading-api",
+    "revision": "b093e42ba32d1df5f5ddad7a71cb715cbc800832",
+    "capturedAt": "2026-08-18",
+    "files": [
+      {
+        "path": "examples_llm/domestic_stock/inquire_balance/inquire_balance.py",
+        "sha256": "32f2759f925dfaf9ac710bc7caf3447f31da83d0a3decdee9b02791a3f0cdfe5"
+      },
+      {
+        "path": "examples_llm/domestic_stock/inquire_balance/chk_inquire_balance.py",
+        "sha256": "5897fd3ce320a8d9683208689727714c037241b2010cc89f4c7e6c63b6255c89"
+      }
+    ]
+  },
+  "balanceRead": {
+    "method": "GET",
+    "path": "/uapi/domestic-stock/v1/trading/inquire-balance",
+    "realTrId": "TTTC8434R",
+    "paperTrId": "VTTC8434R",
+    "requestParameters": [
+      "CANO",
+      "ACNT_PRDT_CD",
+      "AFHR_FLPR_YN",
+      "OFL_YN",
+      "INQR_DVSN",
+      "UNPR_DVSN",
+      "FUND_STTL_ICLD_YN",
+      "FNCG_AMT_AUTO_RDPT_YN",
+      "PRCS_DVSN",
+      "CTX_AREA_FK100",
+      "CTX_AREA_NK100"
+    ],
+    "realPageLimit": 50,
+    "paperPageLimit": 20,
+    "continuationResponseHeaders": ["M", "F"],
+    "terminalBehavior": {
+      "liveObservedResponseHeaders": ["D", "E"],
+      "observedAt": "2026-08-19",
+      "officialPinnedSampleContinuesOnlyOn": ["M", "F"],
+      "unknownHeadersAcceptedByCollector": false
+    },
+    "continuationRequestHeader": {"tr_cont": "N"},
+    "cursorFields": ["ctx_area_fk100", "ctx_area_nk100"]
+  },
+  "authorityProjection": {
+    "output1": {
+      "pdno": "DOMESTIC_PRODUCT_NUMBER",
+      "hldg_qty": "TOTAL_HOLDING_QUANTITY",
+      "ord_psbl_qty": "ORDER_AVAILABLE_QUANTITY"
+    },
+    "output2": {
+      "dnca_tot_amt": "TOTAL_DEPOSIT_CASH"
+    },
+    "capture": "TWO_CONSECUTIVE_EQUAL_AUTHORITY_RELEVANT_PROJECTIONS",
+    "providerAtomicSnapshotClaimed": false,
+    "observationTime": "CAPTURED_BEFORE_FIRST_PROVIDER_READ",
+    "returnedScope": "KR_DOMESTIC_SIX_DIGIT_ACCOUNT_PRODUCTS",
+    "krxCommonStockClassification": "BLOCKED_MISSING_INSTRUMENT_AUTHORITY",
+    "persistence": "BLOCKED_PROVIDER_EVIDENCE"
+  }
+}

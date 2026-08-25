@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "provider": "KIS",
+  "captured_at": "2026-08-24T00:00:00Z",
+  "maximum_age_days": 30,
+  "source_urls": [
+    "https://github.com/koreainvestment/open-trading-api/blob/main/backtester/kis_backtest/providers/kis/constants.py",
+    "https://github.com/koreainvestment/open-trading-api/blob/main/legacy/Sample01/kis_domstk.py",
+    "https://github.com/koreainvestment/open-trading-api/blob/main/examples_llm/domestic_stock/inquire_daily_ccld/inquire_daily_ccld.py"
+  ],
+  "selection_note": "The v6 execution profile pins the provider's legacy 080x cash write family because the official repository contains conflicting 001x and 080x examples. Any future change requires a new evidence artifact and contract version.",
+  "endpoints": {
+    "order": "/uapi/domestic-stock/v1/trading/order-cash",
+    "cancel": "/uapi/domestic-stock/v1/trading/order-rvsecncl",
+    "reconciliation": "/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+  },
+  "tr_ids": {
+    "order": {
+      "live_buy": "TTTC0802U",
+      "live_sell": "TTTC0801U",
+      "paper_buy": "VTTC0802U",
+      "paper_sell": "VTTC0801U"
+    },
+    "cancel": {
+      "live": "TTTC0803U",
+      "paper": "VTTC0803U"
+    },
+    "reconciliation": {
+      "live": "TTTC0081R",
+      "paper": "VTTC0081R"
+    }
+  },
+  "fields": {
+    "order_request": [
+      "CANO",
+      "ACNT_PRDT_CD",
+      "PDNO",
+      "ORD_DVSN",
+      "ORD_QTY",
+      "ORD_UNPR",
+      "EXCG_ID_DVSN_CD",
+      "SLL_TYPE",
+      "CNDT_PRIC"
+    ],
+    "order_response": [
+      "rt_cd",
+      "msg_cd",
+      "msg1",
+      "output.KRX_FWDG_ORD_ORGNO",
+      "output.ODNO",
+      "output.ORD_TMD"
+    ],
+    "cancel_request": [
+      "CANO",
+      "ACNT_PRDT_CD",
+      "KRX_FWDG_ORD_ORGNO",
+      "ORGN_ODNO",
+      "ORD_DVSN",
+      "RVSE_CNCL_DVSN_CD",
+      "ORD_QTY",
+      "ORD_UNPR",
+      "QTY_ALL_ORD_YN",
+      "EXCG_ID_DVSN_CD"
+    ],
+    "reconciliation_request": [
+      "CANO",
+      "ACNT_PRDT_CD",
+      "INQR_STRT_DT",
+      "INQR_END_DT",
+      "SLL_BUY_DVSN_CD",
+      "PDNO",
+      "CCLD_DVSN",
+      "INQR_DVSN",
+      "INQR_DVSN_3",
+      "ORD_GNO_BRNO",
+      "ODNO",
+      "INQR_DVSN_1",
+      "CTX_AREA_FK100",
+      "CTX_AREA_NK100",
+      "EXCG_ID_DVSN_CD"
+    ],
+    "reconciliation_pagination": [
+      "tr_cont",
+      "ctx_area_fk100",
+      "ctx_area_nk100"
+    ]
+  },
+  "artifact_sha256": "5630ac47f8daef848a8e2957c5107304e3b71e65ad0b86a078410b719869b4a2"
+}

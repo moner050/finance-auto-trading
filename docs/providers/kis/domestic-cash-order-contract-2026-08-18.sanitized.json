@@ -1,0 +1,193 @@
+{
+  "status": "BLOCKED_PROVIDER_EVIDENCE",
+  "capturedAt": "2026-08-18",
+  "officialRepository": {
+    "url": "https://github.com/koreainvestment/open-trading-api",
+    "branch": "main",
+    "commit": "b093e42ba32d1df5f5ddad7a71cb715cbc800832",
+    "capturedAt": "2026-08-18"
+  },
+  "sources": [
+    {
+      "url": "https://github.com/koreainvestment/open-trading-api/blob/b093e42ba32d1df5f5ddad7a71cb715cbc800832/examples_llm/domestic_stock/order_cash/order_cash.py",
+      "contentUrl": "https://raw.githubusercontent.com/koreainvestment/open-trading-api/b093e42ba32d1df5f5ddad7a71cb715cbc800832/examples_llm/domestic_stock/order_cash/order_cash.py",
+      "hashOf": "RAW_FILE_BYTES",
+      "sha256": "f8d592f0b0c2789d1db16348229d08b4171969e4a9085ab8ca0602ed02e8e95d"
+    },
+    {
+      "url": "https://github.com/koreainvestment/open-trading-api/blob/b093e42ba32d1df5f5ddad7a71cb715cbc800832/examples_user/kis_auth.py",
+      "contentUrl": "https://raw.githubusercontent.com/koreainvestment/open-trading-api/b093e42ba32d1df5f5ddad7a71cb715cbc800832/examples_user/kis_auth.py",
+      "hashOf": "RAW_FILE_BYTES",
+      "sha256": "2c23617eb9829934dc14f530cfae126426676919b630a07aa2a4832682ffdb9f"
+    },
+    {
+      "url": "https://github.com/koreainvestment/open-trading-api/blob/b093e42ba32d1df5f5ddad7a71cb715cbc800832/kis_devlp.yaml",
+      "contentUrl": "https://raw.githubusercontent.com/koreainvestment/open-trading-api/b093e42ba32d1df5f5ddad7a71cb715cbc800832/kis_devlp.yaml",
+      "hashOf": "RAW_FILE_BYTES",
+      "sha256": "61f036e51e02c4f8b86fb26e361fe98ecb26e0d587160d724f2d62768a60e2a2"
+    },
+    {
+      "url": "https://apiportal.koreainvestment.com/api/apis/public/detail?accessUrl=%2Fuapi%2Fdomestic-stock%2Fv1%2Ftrading%2Forder-cash",
+      "sha256": "86eb9ee0b0d3633cb2477df102ef0716de6291c4b6c8251c545fad196bbb1d3e"
+    },
+    {
+      "url": "https://apiportal.koreainvestment.com/api/apis/guide/property/aade4c72-5fb7-418a-9ff2-254b4d5f0ceb",
+      "sha256": "0fff8219a14a93e7d551c80198561779dd6f39013f74c7db3de84393f6ec2c36"
+    },
+    {
+      "url": "https://apiportal.koreainvestment.com/api/apis/public/detail?accessUrl=%2Fuapi%2Fdomestic-stock%2Fv1%2Ftrading%2Finquire-daily-ccld",
+      "sha256": "f2d98f25dc1746775f862c09ec2cd1cf48010d8a734c19db533ef41a6194d11b"
+    },
+    {
+      "url": "https://apiportal.koreainvestment.com/api/apis/guide/property/bc51f9f7-146f-4971-a5ae-ebd574acec12",
+      "sha256": "908f0fe4b812b1211ea59c52de2d9a8d190cfcb06fc8a696c4f4f49f58c62653"
+    },
+    {
+      "url": "https://apiportal.koreainvestment.com/api/contents/kind?title=ERRORCODE&kind=CONTENTS",
+      "sha256": "cdff096ceb7ecd8e67f8ba9ea9dab622e9c105502f11c97d4d5a86b4a948bc77"
+    }
+  ],
+  "hosts": {
+    "real": "https://openapi.koreainvestment.com:9443",
+    "paper": "https://openapivts.koreainvestment.com:29443"
+  },
+  "submit": {
+    "method": "POST",
+    "path": "/uapi/domestic-stock/v1/trading/order-cash",
+    "trIds": {
+      "realSell": "TTTC0011U",
+      "realBuy": "TTTC0012U",
+      "paperSell": "VTTC0011U",
+      "paperBuy": "VTTC0012U"
+    },
+    "bodyFields": {
+      "portalRequired": [
+        "CANO",
+        "ACNT_PRDT_CD",
+        "PDNO",
+        "ORD_DVSN",
+        "ORD_QTY",
+        "ORD_UNPR"
+      ],
+      "portalOptional": [
+        "SLL_TYPE",
+        "CNDT_PRIC",
+        "EXCG_ID_DVSN_CD"
+      ],
+      "currentSampleRequired": [
+        "CANO",
+        "ACNT_PRDT_CD",
+        "PDNO",
+        "ORD_DVSN",
+        "ORD_QTY",
+        "ORD_UNPR",
+        "EXCG_ID_DVSN_CD"
+      ],
+      "currentSampleOptionalWithEmptyDefault": [
+        "SLL_TYPE",
+        "CNDT_PRIC"
+      ],
+      "allKeysUppercase": true
+    }
+  },
+  "headers": {
+    "portalRequired": [
+      "content-type",
+      "authorization",
+      "appkey",
+      "appsecret",
+      "tr_id",
+      "custtype"
+    ],
+    "portalOptional": [
+      "personalseckey",
+      "tr_cont",
+      "seq_no",
+      "mac_address",
+      "phone_number",
+      "ip_addr",
+      "gt_uid"
+    ],
+    "contentType": "application/json; charset=utf-8",
+    "authorizationScheme": "Bearer",
+    "hashkey": {
+      "portalOrderContractField": null,
+      "currentWrapperGeneration": "COMMENTED_OUT",
+      "omissionGuaranteed": false,
+      "status": "UNRESOLVED_LEGACY_CONFLICT"
+    }
+  },
+  "currentWrapperDefaults": {
+    "baseHeaders": {
+      "Content-Type": "application/json",
+      "Accept": "text/plain",
+      "charset": "UTF-8",
+      "User-Agent": "configured my_agent"
+    },
+    "perRequestHeaders": {
+      "custtype": "P"
+    }
+  },
+  "currentOrderCashCall": {
+    "trContArgument": "",
+    "appendHeadersArgument": null,
+    "postFlagArgument": true,
+    "hashFlagArgument": "OMITTED_DEFAULT_TRUE",
+    "effectiveHeaders": {
+      "custtype": "P",
+      "tr_cont": ""
+    },
+    "hashGeneration": "COMMENTED_OUT"
+  },
+  "successIdentity": {
+    "httpStatusHandledByCurrentSample": 200,
+    "successCode": {
+      "field": "rt_cd",
+      "value": "0"
+    },
+    "orderOrganizationField": "KRX_FWDG_ORD_ORGNO",
+    "orderNumberField": "ODNO",
+    "officialPortalOrderNumberLength": 10,
+    "officialPortalExampleOrderNumberLength": 10,
+    "repositoryDecoderAcceptedOrderNumberLength": 10,
+    "repositoryDecoderCompatibleWithOfficialPortal": true,
+    "orderTimeField": "ORD_TMD",
+    "tradingDateField": null,
+    "globallyUniqueIdentityPinned": false
+  },
+  "recovery": {
+    "officialReadPath": "/uapi/domestic-stock/v1/trading/inquire-daily-ccld",
+    "readRecordFields": [
+      "ord_dt",
+      "ord_gno_brno",
+      "odno",
+      "pdno",
+      "sll_buy_dvsn_cd",
+      "ord_qty",
+      "ord_unpr",
+      "ord_tmd"
+    ],
+    "individualClientOrderIdField": null,
+    "timeoutLookupByRequestIdentityPinned": false,
+    "deduplicationGuaranteePinned": false,
+    "idempotencyGuaranteePinned": false,
+    "automaticResubmitAllowed": false
+  },
+  "errorEvidence": {
+    "invalidHashkey": "EGW00131",
+    "connectionTimeoutCheckPreviousTransaction": "EGW00301",
+    "transactionTimeoutCheckPreviousTransaction": "EGW00302"
+  },
+  "unresolved": [
+    "hashkey omission behavior for this order/account class",
+    "trading-date-bearing globally unique success identity",
+    "timeout recovery by a caller-supplied unique request identity",
+    "provider deduplication or idempotency guarantee"
+  ],
+  "implementationBoundary": {
+    "kisWriter": false,
+    "kisWriteTransport": false,
+    "productionDispatchComposition": false,
+    "brokerEndpointCalledDuringCapture": false
+  }
+}

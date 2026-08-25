@@ -1,0 +1,257 @@
+{
+  "schema_version": 1,
+  "kind": "BINANCE_USDM_V6_PROVIDER_CONTRACT",
+  "provider": "BINANCE",
+  "captured_at": "2026-08-24T15:12:36Z",
+  "maximum_age_days": 30,
+  "sources": {
+    "catalog": {
+      "url": "https://developers.binance.com/en/docs/llms.txt",
+      "captured_at": "2026-08-24T15:12:36Z",
+      "hash_of": "UTF8_RESPONSE_CONTENT_BYTES",
+      "bytes": 167471,
+      "sha256": "6e3d397189c8de791e9b80cc99784f5220ad991ba933b6ae9afa04abe742ca98"
+    },
+    "full_documentation": {
+      "url": "https://developers.binance.com/en/docs/llms-full.txt",
+      "captured_at": "2026-08-24T15:12:49Z",
+      "hash_of": "UTF8_RESPONSE_CONTENT_BYTES",
+      "bytes": 7978091,
+      "sha256": "05d03d6a21bd3c53a369066e4066473362b58beec7d55e061296bc7f9c84883e"
+    }
+  },
+  "references": {
+    "general_info": "https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/general-info",
+    "trade": "https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/trade",
+    "account": "https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/account",
+    "market_data": "https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data",
+    "schema": "https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/1.0.0/schema.yaml"
+  },
+  "base_url": "https://fapi.binance.com",
+  "scope": {
+    "product": "USD_M_FUTURES",
+    "symbol": "BTCUSDT",
+    "contract_type": "PERPETUAL",
+    "margin_asset": "USDT"
+  },
+  "endpoints": {
+    "server_time": {
+      "method": "GET",
+      "path": "/fapi/v1/time"
+    },
+    "exchange_info": {
+      "method": "GET",
+      "path": "/fapi/v1/exchangeInfo"
+    },
+    "account_config": {
+      "method": "GET",
+      "path": "/fapi/v1/accountConfig"
+    },
+    "position_mode": {
+      "method": "GET",
+      "path": "/fapi/v1/positionSide/dual"
+    },
+    "symbol_config": {
+      "method": "GET",
+      "path": "/fapi/v1/symbolConfig"
+    },
+    "margin_type": {
+      "method": "POST",
+      "path": "/fapi/v1/marginType"
+    },
+    "leverage": {
+      "method": "POST",
+      "path": "/fapi/v1/leverage"
+    },
+    "balances": {
+      "method": "GET",
+      "path": "/fapi/v3/balance"
+    },
+    "positions": {
+      "method": "GET",
+      "path": "/fapi/v3/positionRisk"
+    },
+    "trades": {
+      "method": "GET",
+      "path": "/fapi/v1/userTrades"
+    },
+    "income": {
+      "method": "GET",
+      "path": "/fapi/v1/income"
+    },
+    "normal_order_create": {
+      "method": "POST",
+      "path": "/fapi/v1/order"
+    },
+    "normal_order_query": {
+      "method": "GET",
+      "path": "/fapi/v1/order"
+    },
+    "normal_open_orders": {
+      "method": "GET",
+      "path": "/fapi/v1/openOrders"
+    },
+    "normal_order_history": {
+      "method": "GET",
+      "path": "/fapi/v1/allOrders"
+    },
+    "algo_order_create": {
+      "method": "POST",
+      "path": "/fapi/v1/algoOrder"
+    },
+    "algo_order_query": {
+      "method": "GET",
+      "path": "/fapi/v1/algoOrder"
+    },
+    "algo_open_orders": {
+      "method": "GET",
+      "path": "/fapi/v1/openAlgoOrders"
+    },
+    "algo_order_history": {
+      "method": "GET",
+      "path": "/fapi/v1/allAlgoOrders"
+    }
+  },
+  "fields": {
+    "signed_common_required": [
+      "timestamp"
+    ],
+    "recv_window_maximum_ms": 60000,
+    "normal_order_required": [
+      "symbol",
+      "side",
+      "type",
+      "timestamp"
+    ],
+    "normal_order_client_id": "newClientOrderId",
+    "normal_order_query_required": [
+      "symbol",
+      "timestamp"
+    ],
+    "normal_order_query_identifier_one_of": [
+      "orderId",
+      "origClientOrderId"
+    ],
+    "normal_order_recovery_client_id": "origClientOrderId",
+    "algo_order_required": [
+      "algoType",
+      "symbol",
+      "side",
+      "type",
+      "timestamp"
+    ],
+    "algo_order_client_id": "clientAlgoId",
+    "algo_order_query_required": [
+      "timestamp"
+    ],
+    "algo_order_query_identifier_one_of": [
+      "algoId",
+      "clientAlgoId"
+    ],
+    "algo_order_recovery_client_id": "clientAlgoId",
+    "account_config_fields": [
+      "canTrade",
+      "canDeposit",
+      "canWithdraw",
+      "dualSidePosition",
+      "multiAssetsMargin"
+    ],
+    "position_mode_field": "dualSidePosition",
+    "symbol_config_fields": [
+      "symbol",
+      "marginType",
+      "isAutoAddMargin",
+      "leverage",
+      "maxNotionalValue"
+    ],
+    "margin_type_required": [
+      "symbol",
+      "marginType",
+      "timestamp"
+    ],
+    "margin_type_values": [
+      "ISOLATED",
+      "CROSSED"
+    ],
+    "leverage_required": [
+      "symbol",
+      "leverage",
+      "timestamp"
+    ],
+    "provider_leverage_range": [
+      1,
+      125
+    ],
+    "balance_fields": [
+      "asset",
+      "balance",
+      "availableBalance",
+      "updateTime"
+    ],
+    "position_fields": [
+      "symbol",
+      "positionSide",
+      "positionAmt",
+      "entryPrice",
+      "markPrice",
+      "unRealizedProfit"
+    ],
+    "trade_fields": [
+      "id",
+      "orderId",
+      "symbol",
+      "side",
+      "qty",
+      "price",
+      "commission",
+      "commissionAsset",
+      "realizedPnl",
+      "time"
+    ],
+    "income_fields": [
+      "symbol",
+      "incomeType",
+      "income",
+      "asset",
+      "time",
+      "tranId",
+      "tradeId"
+    ]
+  },
+  "protection": {
+    "endpoint": "algo_order_create",
+    "algoType": "CONDITIONAL",
+    "type": "STOP_MARKET",
+    "positionSide": "BOTH",
+    "workingType": "MARK_PRICE",
+    "closePosition": "true",
+    "priceProtect": "false",
+    "forbidden_parameters": [
+      "quantity",
+      "reduceOnly"
+    ]
+  },
+  "rate_limits": {
+    "exchange_info_source": "/fapi/v1/exchangeInfo.rateLimits",
+    "used_weight_header_pattern": "X-MBX-USED-WEIGHT-(intervalNum)(intervalLetter)",
+    "order_count_header_pattern": "X-MBX-ORDER-COUNT-(intervalNum)(intervalLetter)",
+    "rate_limited_status": 429,
+    "ip_banned_status": 418,
+    "unknown_write_status": 503
+  },
+  "provider_facts": {
+    "auto_add_margin": {
+      "state": "AVAILABLE",
+      "source_field": "SymbolConfig.isAutoAddMargin"
+    },
+    "withdrawal_permission": {
+      "state": "ACCOUNT_TRANSFER_ONLY",
+      "source_field": "AccountConfig.canWithdraw",
+      "api_key_withdrawal_permission_state": "NOT_AVAILABLE_VIA_USDM_REST"
+    },
+    "api_key_ip_restriction": {
+      "state": "NOT_AVAILABLE_VIA_USDM_REST"
+    }
+  },
+  "artifact_sha256": "5f3d074431637ddbe2d488974576ffba1367d110d521bcd205b16bdd98e69261"
+}

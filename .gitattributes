@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.md text working-tree-encoding=UTF-8
+*.json text working-tree-encoding=UTF-8
+*.py text working-tree-encoding=UTF-8
+build/official-facts/** -text whitespace=-trailing-space,-space-before-tab,-blank-at-eof

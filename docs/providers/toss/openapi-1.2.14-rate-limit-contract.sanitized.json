@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "kind": "TOSS_OPENAPI_RATE_LIMIT_CONTRACT",
+  "capturedAt": "2026-08-19",
+  "sources": {
+    "openapi": {
+      "url": "https://openapi.tossinvest.com/openapi-docs/latest/openapi.json",
+      "hashOf": "RAW_RESPONSE_BYTES",
+      "openapi": "3.1.0",
+      "version": "1.2.14",
+      "sha256": "fccf49abd11f37f557bdd349138f4a03c42b829ebd8b5c14ab4907116fb84c7a"
+    },
+    "overview": {
+      "url": "https://openapi.tossinvest.com/openapi-docs/overview.md",
+      "hashOf": "RAW_RESPONSE_BYTES",
+      "sha256": "dfad8c9251917daf39d2b2a9e455f0d7cadddafb42a34f47b2ee8d67bf4addd8"
+    }
+  },
+  "reviewedSourceChange": {
+    "previousOpenapiSha256": "d29f9079a557c0b6affcec330aa131f93b09fd49932354668e3dc4524cd42180",
+    "previousOverviewSha256": "747954c11b38e683792efc0f604a163bc4b126e4a1ea80935ec280ad13a43c2a",
+    "rateLimitSemanticsChanged": false
+  },
+  "endpointGroups": {
+    "oauth": "AUTH",
+    "accounts": "ACCOUNT",
+    "holdings": "ASSET",
+    "buyingPower": "ORDER_INFO",
+    "sellableQuantity": "ORDER_INFO",
+    "openOrders": "ORDER_HISTORY"
+  },
+  "limits": {
+    "AUTH": {
+      "normalTps": 5
+    },
+    "ACCOUNT": {
+      "normalTps": 1
+    },
+    "ASSET": {
+      "normalTps": 5
+    },
+    "ORDER_INFO": {
+      "normalTps": 6,
+      "peakKst": "09:00:00/09:10:00",
+      "peakTps": 3
+    },
+    "ORDER_HISTORY": {
+      "normalTps": 5
+    }
+  },
+  "headers": {
+    "limit": "X-RateLimit-Limit",
+    "remaining": "X-RateLimit-Remaining",
+    "resetSeconds": "X-RateLimit-Reset",
+    "retryAfterSeconds": "Retry-After"
+  },
+  "clientPolicy": {
+    "documentedLimitsAreInitialCaps": true,
+    "dynamicLimitMayOnlyLowerCap": true,
+    "maximum429Retries": 1,
+    "retryMustFitAbsoluteDeadline": true,
+    "credentialOrPayloadExamplesStored": false
+  }
+}

@@ -1,0 +1,223 @@
+from __future__ import annotations
+
+from datetime import datetime
+from decimal import Decimal
+from uuid import UUID
+
+from sqlalchemy import (
+    BINARY,
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import Mapped, mapped_column
+
+from autotrader.persistence.mysql.models.core import CoreBase
+from autotrader.persistence.mysql.types import UtcDateTime, UuidBinary
+from autotrader.shared.ids import new_uuid7
+
+
+class StrategyDefinition(CoreBase):
+    __tablename__ = "strategy_definition"
+    __table_args__ = (UniqueConstraint("code", name="uq_strategy_definition_code"),)
+
+    id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True, default=new_uuid7)
+    code: Mapped[str] = mapped_column(
+        String(128, collation="utf8mb4_bin"), nullable=False
+    )
+    research_only: Mapped[bool] = mapped_column(Boolean(), nullable=False)
+    configuration_hash: Mapped[bytes] = mapped_column(BINARY(32), nullable=False)
+
+
+class StrategyVersion(CoreBase):
+    __tablename__ = "strategy_version"
+    __table_args__ = (
+        UniqueConstraint("definition_id", "version", name="uq_strategy_version_number"),
+        CheckConstraint(
+            "status IN ('SHADOW', 'LIVE_APPROVED', 'RETIRED')",
+            name="ck_strategy_version_status",
+        ),
+        CheckConstraint(
+            "NOT (research_only AND status = 'LIVE_APPROVED')",
+            name="ck_strategy_version_research_only",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True, default=new_uuid7)
+    definition_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
+    version: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    research_only: Mapped[bool] = mapped_column(Boolean(), nullable=False)
+
+
+class StrategyRule(CoreBase):
+    __tablename__ = "strategy_rule"
+
+    id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True, default=new_uuid7)
+    strategy_version_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
+    rule_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    hard_rule: Mapped[bool] = mapped_column(Boolean(), nullable=False)
+
+
+class StrategyRuleSource(CoreBase):
+    __tablename__ = "strategy_rule_source"
+
+    rule_id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True)
+    source_reference_id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True)
+
+
+class StrategySourceReference(CoreBase):
+    __tablename__ = "strategy_source_reference"
+
+    id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True, default=new_uuid7)
+    source_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    verified: Mapped[bool] = mapped_column(Boolean(), nullable=False)
+
+
+class StrategyFeatureSchema(CoreBase):
+    __tablename__ = "strategy_feature_schema"
+
+    id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True, default=new_uuid7)
+    strategy_version_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
+    schema_hash: Mapped[bytes] = mapped_column(BINARY(32), nullable=False)
+
+
+class StrategyFeatureSnapshot(CoreBase):
+    __tablename__ = "strategy_feature_snapshot"
+
+    id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True, default=new_uuid7)
+    feature_schema_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
+    payload_hash: Mapped[bytes] = mapped_column(BINARY(32), nullable=False)
+    available_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+
+
+class StrategySetup(CoreBase):
+    __tablename__ = "strategy_setup"
+
+    id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True, default=new_uuid7)
+    strategy_version_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class StrategySignal(CoreBase):
+    __tablename__ = "strategy_signal"
+    __table_args__ = (
+        UniqueConstraint(
+            "setup_id", "signal_type", "signal_hash", name="uq_strategy_signal_identity"
+        ),
+        CheckConstraint(
+            "valid_until > generated_at", name="ck_strategy_signal_validity"
+        ),
+        CheckConstraint(
+            "planned_entry_price > 0 AND trigger_price > 0 AND invalidation_price > 0",
+            name="ck_strategy_signal_prices_positive",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True, default=new_uuid7)
+    strategy_version_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
+    setup_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
+    feature_snapshot_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
+    instrument_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
+    signal_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    order_style: Mapped[str] = mapped_column(String(16), nullable=False)
+    planned_entry_price: Mapped[Decimal] = mapped_column(
+        Numeric(38, 18), nullable=False
+    )
+    trigger_price: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    invalidation_price: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    valid_until: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    session_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    signal_hash: Mapped[bytes] = mapped_column(BINARY(32), nullable=False)
+
+
+class PersistedShadowCandidate(CoreBase):
+    __tablename__ = "strategy_shadow_candidate"
+    __table_args__ = (
+        UniqueConstraint("candidate_hash", name="uq_strategy_shadow_candidate_hash"),
+        UniqueConstraint(
+            "id",
+            "feature_snapshot_id",
+            name="uq_strategy_shadow_candidate_id_snapshot",
+        ),
+        CheckConstraint(
+            "status = 'SHADOW'", name="ck_strategy_shadow_candidate_status"
+        ),
+        CheckConstraint(
+            "side IN ('BUY', 'SELL')", name="ck_strategy_shadow_candidate_side"
+        ),
+        CheckConstraint(
+            "entry_price > 0 AND stop_price > 0 AND "
+            "((side = 'BUY' AND stop_price < entry_price) OR "
+            "(side = 'SELL' AND stop_price > entry_price))",
+            name="ck_strategy_shadow_candidate_prices",
+        ),
+        CheckConstraint(
+            "qualifying_first_index >= 0 "
+            "AND qualifying_second_index > qualifying_first_index "
+            "AND confirmation_first_index >= qualifying_first_index "
+            "AND confirmation_second_index >= qualifying_second_index "
+            "AND confirmation_second_index > confirmation_first_index",
+            name="ck_strategy_shadow_candidate_pivots",
+        ),
+        Index(
+            "ix_strategy_shadow_candidate_setup_generated",
+            "setup_id",
+            "generated_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True)
+    strategy_version_id: Mapped[UUID] = mapped_column(
+        UuidBinary(),
+        ForeignKey(
+            "strategy_version.id",
+            name="fk_strategy_shadow_candidate_version",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    setup_id: Mapped[UUID] = mapped_column(
+        UuidBinary(),
+        ForeignKey(
+            "strategy_setup.id",
+            name="fk_strategy_shadow_candidate_setup",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    feature_snapshot_id: Mapped[UUID] = mapped_column(
+        UuidBinary(),
+        ForeignKey(
+            "strategy_feature_snapshot.id",
+            name="fk_strategy_shadow_candidate_feature_snapshot",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    instrument_id: Mapped[UUID] = mapped_column(
+        UuidBinary(),
+        ForeignKey(
+            "core_instrument.id",
+            name="fk_strategy_shadow_candidate_instrument",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    entry_price: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    stop_price: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    qualifying_first_index: Mapped[int] = mapped_column(nullable=False)
+    qualifying_second_index: Mapped[int] = mapped_column(nullable=False)
+    confirmation_first_index: Mapped[int] = mapped_column(nullable=False)
+    confirmation_second_index: Mapped[int] = mapped_column(nullable=False)
+    policy_hash: Mapped[bytes] = mapped_column(BINARY(32), nullable=False)
+    candidate_hash: Mapped[bytes] = mapped_column(BINARY(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)

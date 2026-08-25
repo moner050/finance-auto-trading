@@ -1,0 +1,1 @@
+"""MySQL persistence integration tests."""

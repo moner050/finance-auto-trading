@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+build/
+.pytest_cache/
+.mypy_cache/
+.pyright/
+.ruff_cache/
+infra/compose/.env
+.env
+.env.*
+!.env.example

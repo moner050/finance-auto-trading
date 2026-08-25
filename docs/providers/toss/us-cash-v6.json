@@ -1,0 +1,261 @@
+{
+  "schema_version": 1,
+  "kind": "TOSS_US_CASH_V6_PROVIDER_CONTRACT",
+  "provider": "TOSS",
+  "captured_at": "2026-08-24T13:51:33Z",
+  "maximum_age_days": 30,
+  "sources": {
+    "openapi": {
+      "url": "https://openapi.tossinvest.com/openapi-docs/latest/openapi.json",
+      "hash_of": "RAW_RESPONSE_BYTES",
+      "openapi": "3.1.0",
+      "version": "1.2.14",
+      "bytes": 417769,
+      "sha256": "a7b32ba754401d13fa649ba91eebd212420eb1afab28e9c2c0d6ea8d43055fed"
+    },
+    "overview": {
+      "url": "https://openapi.tossinvest.com/openapi-docs/overview.md",
+      "hash_of": "RAW_RESPONSE_BYTES",
+      "bytes": 27864,
+      "sha256": "dfad8c9251917daf39d2b2a9e455f0d7cadddafb42a34f47b2ee8d67bf4addd8"
+    }
+  },
+  "scope": {
+    "market_country": "US",
+    "instrument_type": "COMMON_STOCK",
+    "settlement_asset": "USD",
+    "position_mode": "LONG_ONLY",
+    "submission_mode": "QUANTITY_ONLY"
+  },
+  "endpoints": {
+    "order_create": {
+      "method": "POST",
+      "path": "/api/v1/orders",
+      "rate_limit_group": "ORDER"
+    },
+    "open_orders": {
+      "method": "GET",
+      "path": "/api/v1/orders?status=OPEN",
+      "rate_limit_group": "ORDER_HISTORY"
+    },
+    "closed_orders": {
+      "method": "GET",
+      "path": "/api/v1/orders?status=CLOSED",
+      "rate_limit_group": "ORDER_HISTORY",
+      "maximum_page_size": 100
+    },
+    "order_detail": {
+      "method": "GET",
+      "path": "/api/v1/orders/{orderId}",
+      "rate_limit_group": "ORDER_HISTORY"
+    },
+    "holdings": {
+      "method": "GET",
+      "path": "/api/v1/holdings",
+      "rate_limit_group": "ASSET"
+    },
+    "sellable_quantity": {
+      "method": "GET",
+      "path": "/api/v1/sellable-quantity",
+      "rate_limit_group": "ORDER_INFO"
+    },
+    "buying_power_usd": {
+      "method": "GET",
+      "path": "/api/v1/buying-power?currency=USD",
+      "rate_limit_group": "ORDER_INFO"
+    },
+    "commissions": {
+      "method": "GET",
+      "path": "/api/v1/commissions",
+      "rate_limit_group": "ACCOUNT"
+    }
+  },
+  "fields": {
+    "quantity_order_create_required": [
+      "symbol",
+      "side",
+      "orderType",
+      "quantity"
+    ],
+    "quantity_order_create_optional": [
+      "clientOrderId",
+      "timeInForce",
+      "price",
+      "confirmHighValueOrder"
+    ],
+    "order_create_response_required": [
+      "orderId"
+    ],
+    "order_create_response_properties": [
+      "orderId",
+      "clientOrderId"
+    ],
+    "order_required": [
+      "orderId",
+      "symbol",
+      "side",
+      "orderType",
+      "timeInForce",
+      "status",
+      "quantity",
+      "currency",
+      "orderedAt",
+      "execution"
+    ],
+    "order_properties": [
+      "orderId",
+      "symbol",
+      "side",
+      "orderType",
+      "timeInForce",
+      "status",
+      "price",
+      "quantity",
+      "orderAmount",
+      "currency",
+      "orderedAt",
+      "canceledAt",
+      "execution"
+    ],
+    "paginated_order_required": [
+      "orders",
+      "nextCursor",
+      "hasNext"
+    ],
+    "execution_required": [
+      "filledQuantity",
+      "averageFilledPrice",
+      "filledAmount",
+      "commission",
+      "tax",
+      "filledAt",
+      "settlementDate"
+    ],
+    "holdings_overview_required": [
+      "totalPurchaseAmount",
+      "marketValue",
+      "profitLoss",
+      "dailyProfitLoss",
+      "items"
+    ],
+    "holding_item_required": [
+      "symbol",
+      "name",
+      "marketCountry",
+      "currency",
+      "quantity",
+      "lastPrice",
+      "averagePurchasePrice",
+      "marketValue",
+      "profitLoss",
+      "dailyProfitLoss",
+      "cost"
+    ],
+    "buying_power_required": [
+      "currency",
+      "cashBuyingPower"
+    ],
+    "sellable_quantity_required": [
+      "sellableQuantity"
+    ],
+    "commission_required": [
+      "marketCountry",
+      "commissionRate"
+    ],
+    "order_status_values": [
+      "PENDING",
+      "PENDING_CANCEL",
+      "PENDING_REPLACE",
+      "PARTIAL_FILLED",
+      "FILLED",
+      "CANCELED",
+      "REJECTED",
+      "CANCEL_REJECTED",
+      "REPLACE_REJECTED",
+      "REPLACED"
+    ]
+  },
+  "provider_facts": {
+    "usd_buying_power": {
+      "state": "AVAILABLE",
+      "source_field": "BuyingPowerResponse.cashBuyingPower"
+    },
+    "holdings": {
+      "state": "AVAILABLE",
+      "source_field": "HoldingsOverview.items"
+    },
+    "sellable_quantity": {
+      "state": "AVAILABLE",
+      "source_field": "SellableQuantityResponse.sellableQuantity"
+    },
+    "fills_and_fees": {
+      "state": "AVAILABLE",
+      "source_fields": [
+        "Order.execution.filledQuantity",
+        "Order.execution.averageFilledPrice",
+        "Order.execution.filledAmount",
+        "Order.execution.commission",
+        "Order.execution.tax"
+      ]
+    },
+    "commission_schedule": {
+      "state": "AVAILABLE",
+      "source_field": "Commission.commissionRate"
+    },
+    "client_order_id_in_create_acknowledgement": {
+      "state": "OPTIONAL",
+      "source_field": "OrderResponse.clientOrderId"
+    },
+    "client_order_id_in_order_list_or_detail": {
+      "state": "UNAVAILABLE",
+      "reason": "The Order schema contains no direct clientOrderId field."
+    },
+    "provider_account_identity_in_order_list_or_detail": {
+      "state": "UNAVAILABLE",
+      "reason": "The Order schema contains no direct provider account identity field."
+    }
+  },
+  "submission_recovery": {
+    "idempotency_field": "clientOrderId",
+    "provider_window_description": "10 minutes",
+    "window_seconds": 600,
+    "deadline_rule": "elapsed_seconds < 600",
+    "same_request_body_required": true,
+    "same_request_headers_excluding_credentials_required": true,
+    "changed_body_result": "CONFLICT",
+    "maximum_replays": 1,
+    "list_or_detail_recovery_allowed": false,
+    "at_or_after_deadline_result": "UNKNOWN_NO_REPLAY"
+  },
+  "rate_limits": {
+    "AUTH": {
+      "normal_tps": 5
+    },
+    "ACCOUNT": {
+      "normal_tps": 1
+    },
+    "ASSET": {
+      "normal_tps": 5
+    },
+    "ORDER": {
+      "normal_tps": 10,
+      "peak_kst": "09:00:00/09:10:00",
+      "peak_tps": 10
+    },
+    "ORDER_HISTORY": {
+      "normal_tps": 5
+    },
+    "ORDER_INFO": {
+      "normal_tps": 6,
+      "peak_kst": "09:00:00/09:10:00",
+      "peak_tps": 3
+    }
+  },
+  "rate_limit_headers": {
+    "limit": "X-RateLimit-Limit",
+    "remaining": "X-RateLimit-Remaining",
+    "reset_seconds": "X-RateLimit-Reset",
+    "retry_after_seconds": "Retry-After"
+  },
+  "artifact_sha256": "1158c0082b512eb2d88632849834e8eed4c0cbee64ab52f7d85ab1eafaacbb29"
+}

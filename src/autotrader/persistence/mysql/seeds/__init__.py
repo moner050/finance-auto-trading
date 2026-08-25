@@ -1,0 +1,1 @@
+"""Idempotent MySQL seed data."""

@@ -1,0 +1,94 @@
+{
+  "source": {
+    "url": "https://openapi.tossinvest.com/openapi-docs/latest/openapi.json",
+    "capturedAt": "2026-08-18",
+    "openapi": "3.1.0",
+    "version": "1.2.14",
+    "sha256": "d29f9079a557c0b6affcec330aa131f93b09fd49932354668e3dc4524cd42180"
+  },
+  "holdings": {
+    "method": "GET",
+    "path": "/api/v1/holdings",
+    "accountHeader": "X-Tossinvest-Account",
+    "optionalQuery": [
+      "symbol"
+    ],
+    "omittedSymbolReturns": "ALL_KR_AND_US_HOLDINGS",
+    "paginationParameters": [],
+    "resultSchema": "HoldingsOverview",
+    "resultRequired": [
+      "totalPurchaseAmount",
+      "marketValue",
+      "profitLoss",
+      "dailyProfitLoss",
+      "items"
+    ],
+    "itemSchema": "HoldingsItem",
+    "itemRequired": [
+      "symbol",
+      "name",
+      "marketCountry",
+      "currency",
+      "quantity",
+      "lastPrice",
+      "averagePurchasePrice",
+      "marketValue",
+      "profitLoss",
+      "dailyProfitLoss",
+      "cost"
+    ],
+    "nestedRequired": {
+      "Price": ["krw"],
+      "OverviewMarketValue": ["amount", "amountAfterCost"],
+      "OverviewProfitLoss": ["amount", "amountAfterCost", "rate", "rateAfterCost"],
+      "OverviewDailyProfitLoss": ["amount", "rate"],
+      "MarketValue": ["purchaseAmount", "amount", "amountAfterCost"],
+      "ProfitLoss": ["amount", "amountAfterCost", "rate", "rateAfterCost"],
+      "DailyProfitLoss": ["amount", "rate"],
+      "Cost": ["commission"]
+    },
+    "nestedOptionalNullable": {
+      "Price": ["usd"],
+      "Cost": ["tax"]
+    },
+    "quantityMeaning": "TOTAL_HOLDING_QUANTITY",
+    "sellableMeaning": false
+  },
+  "buyingPower": {
+    "method": "GET",
+    "path": "/api/v1/buying-power",
+    "requiredQuery": {
+      "currency": "KRW"
+    },
+    "resultSchema": "BuyingPowerResponse",
+    "resultRequired": [
+      "currency",
+      "cashBuyingPower"
+    ],
+    "cashBuyingPowerMeaning": "CASH_ONLY_NO_CREDIT_KRW"
+  },
+  "sellableQuantity": {
+    "method": "GET",
+    "path": "/api/v1/sellable-quantity",
+    "requiredQuery": [
+      "symbol"
+    ],
+    "resultSchema": "SellableQuantityResponse",
+    "resultRequired": [
+      "sellableQuantity"
+    ],
+    "quantityMeaning": "SELLABLE_QUANTITY_FOR_ONE_REQUESTED_SYMBOL",
+    "batchSupported": false,
+    "exchangeProvided": false,
+    "securityTypeProvided": false
+  },
+  "implementationBoundary": {
+    "capture": "TWO_CONSECUTIVE_EQUAL_AUTHORITY_RELEVANT_PROJECTIONS",
+    "providerAtomicSnapshotClaimed": false,
+    "totalHoldingSubstitutesForSellable": false,
+    "returnedScope": "KR_DOMESTIC_SIX_DIGIT_HOLDINGS",
+    "krxCommonStockClassification": "BLOCKED_MISSING_INSTRUMENT_AUTHORITY",
+    "persistence": "BLOCKED_PROVIDER_EVIDENCE",
+    "blocker": "A complete successful live reconciliation run cannot be produced from the current Toss order recovery contract."
+  }
+}
