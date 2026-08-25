@@ -264,7 +264,6 @@ def _semantic_blockers(
     checks = {
         "universe": ("eligible", "UNIVERSE_INELIGIBLE", True),
         "regime": ("excluded", "REGIME_EXCLUDED", False),
-        "metodo": ("normal_technical_confirmation", "METODO_GATE_FAILED", True),
         "calendar": ("block_new_exposure", "CALENDAR_BLOCKED", False),
         "session": ("entry_allowed", "SESSION_ENTRY_BLOCKED", True),
     }
@@ -276,7 +275,25 @@ def _semantic_blockers(
         if observed is not required_value:
             blockers.append(blocker)
 
+    _metodo_blocker(valid_values, blockers)
     _hlit_blockers(valid_values, side, entry_price, blockers)
+
+
+def _metodo_blocker(valid_values: dict[str, object], blockers: list[str]) -> None:
+    """Admit signals A and B always, and signal C only at a pessimism extreme."""
+    metodo = valid_values.get("metodo")
+    if metodo is None:
+        return
+    facts = cast(MetodoFacts, metodo)
+    if facts.normal_technical_confirmation:
+        return
+    regime = valid_values.get("regime")
+    pessimism_extreme = (
+        regime is not None and cast(RegimeFacts, regime).pessimism_extreme is True
+    )
+    if facts.trend_up and facts.macd_cross_up_below_zero and pessimism_extreme:
+        return
+    blockers.append("METODO_GATE_FAILED")
 
 
 def _hlit_blockers(

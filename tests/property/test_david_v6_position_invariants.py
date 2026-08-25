@@ -58,6 +58,7 @@ def test_emitted_position_transitions_never_increase_structural_risk(
         fib_50_price=entry + direction * Decimal("51"),
         fib_66_price=entry + direction * Decimal("52"),
         blocking_big_trade=False,
+        metodo_exit_signal=False,
         protection_failed=False,
     )
 

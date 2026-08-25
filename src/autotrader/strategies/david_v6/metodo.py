@@ -37,6 +37,7 @@ class MetodoFacts:
     macd: Decimal
     macd_signal: Decimal
     macd_cross_up_above_zero: bool
+    macd_cross_up_below_zero: bool
     latest_volume: Decimal
     mean_volume_20d: Decimal
     normal_technical_confirmation: bool
@@ -91,11 +92,11 @@ def evaluate_metodo(
     )
     cross_up = previous_sma_6 <= previous_sma_70 and current_sma_6 > current_sma_70
     cross_down = previous_sma_6 >= previous_sma_70 and current_sma_6 < current_sma_70
-    macd_cross_up = (
-        previous_macd <= previous_signal
-        and current_macd > current_signal
-        and current_macd > 0
-    )
+    macd_crosses_up = previous_macd <= previous_signal and current_macd > current_signal
+    macd_cross_up = macd_crosses_up and current_macd > 0
+    # Section 2.3 signal C: a cross below zero is admissible only when the
+    # regime reports a pessimism extreme, which this module cannot see.
+    macd_cross_up_below_zero = macd_crosses_up and current_macd < 0
     facts = MetodoFacts(
         observed_at=bars[-1].timestamp,
         sma_6=current_sma_6,
@@ -110,6 +111,7 @@ def evaluate_metodo(
         macd=current_macd,
         macd_signal=current_signal,
         macd_cross_up_above_zero=macd_cross_up,
+        macd_cross_up_below_zero=macd_cross_up_below_zero,
         latest_volume=bars[-1].volume,
         mean_volume_20d=(
             sum((bar.volume for bar in bars[-20:]), start=Decimal(0)) / Decimal(20)

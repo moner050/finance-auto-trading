@@ -195,6 +195,7 @@ def _fact_value(key: str) -> object:
             macd=Decimal("1"),
             macd_signal=Decimal("0.5"),
             macd_cross_up_above_zero=True,
+            macd_cross_up_below_zero=False,
             latest_volume=Decimal("100"),
             mean_volume_20d=Decimal("100"),
             normal_technical_confirmation=True,
@@ -737,3 +738,76 @@ def test_a_grade_needs_the_full_weighted_score() -> None:
 
     assert full.grade is SetupGrade.A
     assert partial.grade is SetupGrade.NORMAL
+
+
+def _metodo_signal_c_bundle(*, pessimism_extreme: bool) -> V6EvidenceBundle:
+    """Trend is up, signals A and B are absent, MACD crosses up below zero."""
+    metodo = _fact_value("metodo")
+    assert isinstance(metodo, MetodoFacts)
+    regime = _fact_value("regime")
+    assert isinstance(regime, RegimeFacts)
+    facts = {name: _item(name) for name in FACT_KEYS}
+    facts["metodo"] = EvidenceItem(
+        state=EvidenceState.AVAILABLE,
+        value=replace(
+            metodo,
+            macd=Decimal("-1"),
+            macd_signal=Decimal("-2"),
+            sma_6_70_cross_up=False,
+            macd_cross_up_above_zero=False,
+            macd_cross_up_below_zero=True,
+            normal_technical_confirmation=False,
+            same_bar_a_confirmation=False,
+        ),
+        provenance=_provenance("metodo"),
+        blocker_code=None,
+    )
+    facts["regime"] = EvidenceItem(
+        state=EvidenceState.AVAILABLE,
+        value=replace(regime, pessimism_extreme=pessimism_extreme),
+        provenance=_provenance("regime"),
+        blocker_code=None,
+    )
+    return V6EvidenceBundle(
+        market=V6Market.US_CASH,
+        instrument_id=new_uuid7(),
+        decision_at=NOW,
+        bars={},
+        **facts,
+    )
+
+
+def test_macd_cross_below_zero_is_admitted_at_a_pessimism_extreme() -> None:
+    bundle = _metodo_signal_c_bundle(pessimism_extreme=True)
+
+    decision = evaluate_v6(
+        bundle,
+        manifest=_manifest(),
+        risk_context=_context(bundle, family=StrategyFamily.METODO, side=Side.BUY),
+    )
+
+    assert "METODO_GATE_FAILED" not in decision.blockers
+
+
+def test_macd_cross_below_zero_alone_is_rejected() -> None:
+    bundle = _metodo_signal_c_bundle(pessimism_extreme=False)
+
+    decision = evaluate_v6(
+        bundle,
+        manifest=_manifest(),
+        risk_context=_context(bundle, family=StrategyFamily.METODO, side=Side.BUY),
+    )
+
+    assert "METODO_GATE_FAILED" in decision.blockers
+
+
+def test_signals_a_and_b_still_pass_without_a_pessimism_extreme() -> None:
+    bundle = _bundle(market=V6Market.US_CASH)
+
+    decision = evaluate_v6(
+        bundle,
+        manifest=_manifest(),
+        risk_context=_context(bundle, family=StrategyFamily.METODO, side=Side.BUY),
+    )
+
+    assert "METODO_GATE_FAILED" not in decision.blockers

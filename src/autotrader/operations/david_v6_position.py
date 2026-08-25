@@ -18,6 +18,7 @@ class V6PositionActionKind(StrEnum):
     OBSERVE_PARTIAL_1_2R = "OBSERVE_PARTIAL_1_2R"
     OBSERVE_PARTIAL_1_5R = "OBSERVE_PARTIAL_1_5R"
     EXIT_FULL_FIB_66 = "EXIT_FULL_FIB_66"
+    EXIT_FULL_METODO_CROSS_DOWN = "EXIT_FULL_METODO_CROSS_DOWN"
     EXIT_FULL_BLOCKING_BIG_TRADE = "EXIT_FULL_BLOCKING_BIG_TRADE"
     EMERGENCY_EXIT_FULL = "EMERGENCY_EXIT_FULL"
 
@@ -94,22 +95,24 @@ class V6PositionFacts:
     taker_exit_fee_per_unit: Decimal
     q95_adverse_stop_slippage: Decimal
     slippage_sample_sufficient: bool
-    fib_25_price: Decimal
-    fib_50_price: Decimal
-    fib_66_price: Decimal
+    fib_25_price: Decimal | None
+    fib_50_price: Decimal | None
+    fib_66_price: Decimal | None
     blocking_big_trade: bool
+    metodo_exit_signal: bool
     protection_failed: bool
 
     def __post_init__(self) -> None:
-        for name in (
-            "current_price",
-            "atr_5m",
-            "tick_size",
-            "fib_25_price",
-            "fib_50_price",
-            "fib_66_price",
-        ):
+        for name in ("current_price", "atr_5m", "tick_size"):
             value = require_decimal(getattr(self, name))
+            if value <= 0:
+                raise ValueError(f"{name} must be positive")
+            object.__setattr__(self, name, value)
+        for name in ("fib_25_price", "fib_50_price", "fib_66_price"):
+            level = getattr(self, name)
+            if level is None:
+                continue
+            value = require_decimal(level)
             if value <= 0:
                 raise ValueError(f"{name} must be positive")
             object.__setattr__(self, name, value)
@@ -162,7 +165,17 @@ def manage_v6_position(
                 False,
             ),
         )
-    if _reached(position.side, facts.current_price, facts.fib_66_price):
+    if facts.metodo_exit_signal:
+        return (
+            _full_exit(
+                position,
+                V6PositionActionKind.EXIT_FULL_METODO_CROSS_DOWN,
+                False,
+            ),
+        )
+    if facts.fib_66_price is not None and _reached(
+        position.side, facts.current_price, facts.fib_66_price
+    ):
         return (_full_exit(position, V6PositionActionKind.EXIT_FULL_FIB_66, False),)
     if not position.initial_stop_active:
         return (
@@ -187,12 +200,16 @@ def manage_v6_position(
     break_even = _break_even_action(position, facts)
     if break_even is not None:
         actions.append(break_even)
-    if not position.fib_25_recorded and _reached(
-        position.side, facts.current_price, facts.fib_25_price
+    if (
+        not position.fib_25_recorded
+        and facts.fib_25_price is not None
+        and _reached(position.side, facts.current_price, facts.fib_25_price)
     ):
         actions.append(_telemetry(position, V6PositionActionKind.RECORD_FIB_25))
-    if not position.fib_50_recorded and _reached(
-        position.side, facts.current_price, facts.fib_50_price
+    if (
+        not position.fib_50_recorded
+        and facts.fib_50_price is not None
+        and _reached(position.side, facts.current_price, facts.fib_50_price)
     ):
         actions.append(
             _telemetry(position, V6PositionActionKind.RECORD_FIB_50_RESEARCH)

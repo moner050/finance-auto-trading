@@ -50,6 +50,7 @@ def _facts(**changes: object) -> V6PositionFacts:
         fib_50_price=Decimal("102"),
         fib_66_price=Decimal("103"),
         blocking_big_trade=False,
+        metodo_exit_signal=False,
         protection_failed=False,
     )
     return replace(facts, **changes)
@@ -256,3 +257,46 @@ def test_short_add_uses_inverse_favorable_and_break_even_directions() -> None:
 
     assert _kinds(actions) == (V6PositionActionKind.ADD_AND_MOVE_STOP,)
     assert actions[0].stop_price == Decimal("99.3")
+
+
+def test_metodo_cross_down_exits_the_whole_position() -> None:
+    """Section 12 exit rule: cross_down(sma6, sma70) closes the swing."""
+    actions = manage_v6_position(
+        _position(),
+        _facts(metodo_exit_signal=True),
+        mode=RuntimeMode.PAPER,
+    )
+
+    assert len(actions) == 1
+    assert actions[0].kind is V6PositionActionKind.EXIT_FULL_METODO_CROSS_DOWN
+    assert actions[0].reduce_only is True
+    assert actions[0].account_halt is False
+
+
+def test_a_metodo_position_needs_no_hlit_levels() -> None:
+    actions = manage_v6_position(
+        _position(),
+        _facts(fib_25_price=None, fib_50_price=None, fib_66_price=None),
+        mode=RuntimeMode.PAPER,
+    )
+
+    assert all(
+        action.kind
+        not in {
+            V6PositionActionKind.EXIT_FULL_FIB_66,
+            V6PositionActionKind.RECORD_FIB_25,
+            V6PositionActionKind.RECORD_FIB_50_RESEARCH,
+        }
+        for action in actions
+    )
+
+
+def test_protection_failure_still_outranks_the_metodo_exit() -> None:
+    actions = manage_v6_position(
+        _position(),
+        _facts(metodo_exit_signal=True, protection_failed=True),
+        mode=RuntimeMode.PAPER,
+    )
+
+    assert actions[0].kind is V6PositionActionKind.EMERGENCY_EXIT_FULL
+    assert actions[0].account_halt is True
