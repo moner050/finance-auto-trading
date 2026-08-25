@@ -10,6 +10,7 @@ _EXCLUDED_SECTORS = {"energy", "financial", "financials", "real_estate"}
 
 @dataclass(frozen=True, slots=True)
 class UniverseFacts:
+    country_strength_confirmed: bool
     member_as_of: bool
     common_stock_as_of: bool
     median_value_20d: Decimal
@@ -22,6 +23,7 @@ class UniverseFacts:
 
 def evaluate_cash_universe(
     *,
+    country_strength_confirmed: bool,
     member_as_of: bool,
     common_stock_as_of: bool,
     median_value_20d: Decimal,
@@ -29,7 +31,11 @@ def evaluate_cash_universe(
     sector_return_70d_rank: int,
     sector_classification: str | None,
 ) -> UniverseFacts:
-    if type(member_as_of) is not bool or type(common_stock_as_of) is not bool:
+    if (
+        type(country_strength_confirmed) is not bool
+        or type(member_as_of) is not bool
+        or type(common_stock_as_of) is not bool
+    ):
         raise TypeError("point-in-time membership facts must be exact bool")
     median_value = require_decimal(median_value_20d)
     cross_section_median = require_decimal(cross_section_median_value_20d)
@@ -39,6 +45,9 @@ def evaluate_cash_universe(
         raise ValueError("sector rank must be a positive integer")
     sector = _normalize_sector(sector_classification)
     blockers: list[str] = []
+    # Section 2.1 filter one: the country must currently be a strong one.
+    if not country_strength_confirmed:
+        blockers.append("COUNTRY_NOT_STRONG")
     if not member_as_of:
         blockers.append("NOT_MEMBER_AS_OF")
     if not common_stock_as_of:
@@ -53,6 +62,7 @@ def evaluate_cash_universe(
         blockers.append("EXCLUDED_SECTOR")
     canonical_blockers = tuple(sorted(blockers))
     return UniverseFacts(
+        country_strength_confirmed=country_strength_confirmed,
         member_as_of=member_as_of,
         common_stock_as_of=common_stock_as_of,
         median_value_20d=median_value,

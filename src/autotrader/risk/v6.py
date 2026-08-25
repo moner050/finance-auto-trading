@@ -19,6 +19,9 @@ _DAILY_LOSS_FRACTION = Decimal("0.0075")
 _WEEKLY_LOSS_FRACTION = Decimal("0.0200")
 _OPEN_RISK_FRACTION = Decimal("0.0075")
 _MAX_SPREAD_TICKS = Decimal(3)
+# Section 6 refuses a fixed daily trade count and marks this bound as an
+# anti-overtrading safety candidate rather than one of David's values.
+_SESSION_TRADE_SAFETY_UPPER_BOUND = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +44,7 @@ class V6RiskRequest:
     quantity_step: Decimal
     cost_per_unit: Decimal
     leverage: int | None
+    session_trade_count: int = 0
     size_multiplier: Decimal = Decimal(1)
     max_quantity: Decimal | None = None
 
@@ -81,11 +85,10 @@ class V6RiskRequest:
             if atr <= 0:
                 raise ValueError("atr_30s must be positive when present")
             object.__setattr__(self, "atr_30s", atr)
-        if (
-            type(self.consecutive_net_losses) is not int
-            or self.consecutive_net_losses < 0
-        ):
-            raise ValueError("consecutive_net_losses must be non-negative")
+        for name in ("consecutive_net_losses", "session_trade_count"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
         if self.leverage is not None and (
             type(self.leverage) is not int or self.leverage <= 0
         ):
@@ -212,6 +215,8 @@ def evaluate_v6_risk(request: V6RiskRequest) -> V6RiskAuthority:
         blockers.append("WEEKLY_LOSS_LIMIT")
     if request.consecutive_net_losses >= 2:
         blockers.append("CONSECUTIVE_LOSS_LIMIT")
+    if request.session_trade_count >= _SESSION_TRADE_SAFETY_UPPER_BOUND:
+        blockers.append("SESSION_TRADE_UPPER_BOUND")
     if (
         request.current_open_structural_risk + risk_budget
         > risk_base * _OPEN_RISK_FRACTION

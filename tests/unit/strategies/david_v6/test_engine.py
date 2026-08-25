@@ -162,6 +162,7 @@ def _item(key: str) -> EvidenceItem[object]:
 def _fact_value(key: str) -> object:
     if key == "universe":
         return UniverseFacts(
+            country_strength_confirmed=True,
             member_as_of=True,
             common_stock_as_of=True,
             median_value_20d=Decimal("100"),

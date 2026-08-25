@@ -30,6 +30,23 @@ _INTRADAY_OPEN_KINDS = frozenset({SessionKind.KRX_HLIT, SessionKind.US_HLIT})
 
 
 @dataclass(frozen=True, slots=True)
+class KrxMarketSafety:
+    """Broker-neutral KRX state that section 14.3 excludes from trading."""
+
+    observed_at: datetime
+    has_active_krx_vi: bool
+    is_single_price_auction: bool
+
+    def __post_init__(self) -> None:
+        if type(self.observed_at) is not datetime:
+            raise TypeError("observed_at must be an exact datetime")
+        object.__setattr__(self, "observed_at", require_utc(self.observed_at))
+        for name in ("has_active_krx_vi", "is_single_price_auction"):
+            if type(getattr(self, name)) is not bool:
+                raise TypeError(f"{name} must be bool")
+
+
+@dataclass(frozen=True, slots=True)
 class ExchangeCalendar:
     session_date: date
     kind: SessionKind
@@ -120,9 +137,13 @@ class SessionFacts:
 def evaluate_session(
     calendar: ExchangeCalendar,
     decision_at: datetime,
+    *,
+    market_safety: KrxMarketSafety | None = None,
 ) -> SessionFacts:
     if type(calendar) is not ExchangeCalendar:
         raise TypeError("calendar must be an exact ExchangeCalendar")
+    if market_safety is not None and type(market_safety) is not KrxMarketSafety:
+        raise TypeError("market_safety must be an exact KrxMarketSafety")
     decision = _require_datetime(decision_at, "decision_at")
     overnight = calendar.kind is SessionKind.CASH_METODO
     if calendar.captured_at > decision:
@@ -172,7 +193,7 @@ def evaluate_session(
     )
     entry_allowed = (session_open and decision < entry_cutoff) or pre_open
     must_be_flat = session_open and decision >= flat_at
-    blockers: list[str] = []
+    blockers: list[str] = _krx_safety_blockers(calendar, market_safety)
     if not session_open and not pre_open:
         blockers.append("SESSION_CLOSED")
     if session_open and decision >= entry_cutoff:
@@ -182,8 +203,8 @@ def evaluate_session(
     return SessionFacts(
         state=EvidenceState.AVAILABLE,
         session_open=session_open,
-        entry_allowed=entry_allowed,
-        reduce_only=not entry_allowed,
+        entry_allowed=entry_allowed and not blockers,
+        reduce_only=not (entry_allowed and not blockers),
         must_be_flat=must_be_flat,
         overnight_allowed=False,
         pre_open=pre_open,
@@ -193,6 +214,23 @@ def evaluate_session(
         flat_at=flat_at,
         blockers=tuple(sorted(blockers)),
     )
+
+
+def _krx_safety_blockers(
+    calendar: ExchangeCalendar,
+    market_safety: KrxMarketSafety | None,
+) -> list[str]:
+    """KRX excludes VI periods and single-price auctions (section 14.3)."""
+    if calendar.kind is not SessionKind.KRX_HLIT:
+        return []
+    if market_safety is None:
+        return ["KRX_MARKET_SAFETY_UNAVAILABLE"]
+    blockers: list[str] = []
+    if market_safety.has_active_krx_vi:
+        blockers.append("KRX_VI_ACTIVE")
+    if market_safety.is_single_price_auction:
+        blockers.append("KRX_SINGLE_PRICE_AUCTION")
+    return blockers
 
 
 def _size_multiplier(
@@ -237,4 +275,10 @@ def _require_datetime(value: object, name: str) -> datetime:
     return require_utc(value)
 
 
-__all__ = ("ExchangeCalendar", "SessionFacts", "SessionKind", "evaluate_session")
+__all__ = (
+    "ExchangeCalendar",
+    "KrxMarketSafety",
+    "SessionFacts",
+    "SessionKind",
+    "evaluate_session",
+)

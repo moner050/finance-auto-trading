@@ -12,6 +12,7 @@ from autotrader.strategies.david_v6.universe import (
 
 def _evaluate(**changes: object) -> UniverseFacts:
     values: dict[str, object] = {
+        "country_strength_confirmed": True,
         "member_as_of": True,
         "common_stock_as_of": True,
         "median_value_20d": Decimal("100"),
@@ -47,3 +48,18 @@ def test_excluded_sector_authorities_are_rejected(sector: str) -> None:
 
     assert facts.eligible is False
     assert facts.blockers == ("EXCLUDED_SECTOR",)
+
+
+def test_a_weak_country_is_rejected() -> None:
+    """Section 2.1 filter one runs before sector and instrument checks."""
+    facts = _evaluate(country_strength_confirmed=False)
+
+    assert facts.eligible is False
+    assert "COUNTRY_NOT_STRONG" in facts.blockers
+
+
+def test_a_strong_country_alone_does_not_qualify() -> None:
+    facts = _evaluate(country_strength_confirmed=True, sector_return_70d_rank=4)
+
+    assert facts.eligible is False
+    assert "SECTOR_OUTSIDE_TOP_THREE" in facts.blockers

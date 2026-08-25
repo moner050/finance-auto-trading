@@ -187,3 +187,23 @@ def test_size_multiplier_must_be_within_zero_and_one() -> None:
     for invalid in (Decimal(0), Decimal("1.5"), Decimal("-1")):
         with pytest.raises(ValueError, match="size_multiplier"):
             _request(size_multiplier=invalid)
+
+
+def test_session_trade_count_below_the_bound_is_allowed() -> None:
+    """Section 6 refuses a fixed daily count, so seven trades must pass."""
+    authority = evaluate_v6_risk(_request(session_trade_count=7))
+
+    assert "SESSION_TRADE_UPPER_BOUND" not in authority.blocker_codes
+    assert authority.quantity > Decimal(0)
+
+
+def test_the_eighth_trade_of_a_session_is_blocked() -> None:
+    authority = evaluate_v6_risk(_request(session_trade_count=8))
+
+    assert "SESSION_TRADE_UPPER_BOUND" in authority.blocker_codes
+    assert authority.quantity == Decimal(0)
+
+
+def test_session_trade_count_must_be_a_non_negative_integer() -> None:
+    with pytest.raises(ValueError, match="session_trade_count"):
+        _request(session_trade_count=-1)

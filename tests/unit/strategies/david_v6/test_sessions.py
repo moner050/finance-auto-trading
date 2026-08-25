@@ -8,6 +8,7 @@ import pytest
 from autotrader.strategies.david_v6.models import EvidenceState
 from autotrader.strategies.david_v6.sessions import (
     ExchangeCalendar,
+    KrxMarketSafety,
     SessionKind,
     evaluate_session,
 )
@@ -178,3 +179,78 @@ def test_binance_is_continuous_and_never_halves_size() -> None:
     facts = evaluate_session(calendar, datetime(2026, 11, 27, 0, 5, tzinfo=UTC))
 
     assert facts.size_multiplier == Decimal(1)
+
+
+def _krx_calendar(**changes: object) -> ExchangeCalendar:
+    open_at = datetime(2026, 11, 27, 0, 0, tzinfo=UTC)
+    values: dict[str, object] = {
+        "session_date": date(2026, 11, 27),
+        "kind": SessionKind.KRX_HLIT,
+        "source_timezone": "Asia/Seoul",
+        "is_trading_day": True,
+        "session_open_at": open_at,
+        "session_close_at": open_at + timedelta(hours=6, minutes=30),
+        "close_auction_at": open_at + timedelta(hours=6, minutes=20),
+        "pre_open_at": None,
+        "captured_at": open_at - timedelta(days=1),
+        "valid_until": open_at + timedelta(hours=7),
+    }
+    values.update(changes)
+    return ExchangeCalendar(**values)  # type: ignore[arg-type]
+
+
+def _safety(**changes: object) -> KrxMarketSafety:
+    values: dict[str, object] = {
+        "observed_at": datetime(2026, 11, 27, 1, 0, tzinfo=UTC),
+        "has_active_krx_vi": False,
+        "is_single_price_auction": False,
+    }
+    values.update(changes)
+    return KrxMarketSafety(**values)  # type: ignore[arg-type]
+
+
+KRX_MIDSESSION = datetime(2026, 11, 27, 1, 0, tzinfo=UTC)
+
+
+def test_krx_without_market_safety_evidence_fails_closed() -> None:
+    facts = evaluate_session(_krx_calendar(), KRX_MIDSESSION)
+
+    assert facts.entry_allowed is False
+    assert "KRX_MARKET_SAFETY_UNAVAILABLE" in facts.blockers
+
+
+def test_krx_volatility_interruption_blocks_entry() -> None:
+    facts = evaluate_session(
+        _krx_calendar(),
+        KRX_MIDSESSION,
+        market_safety=_safety(has_active_krx_vi=True),
+    )
+
+    assert facts.entry_allowed is False
+    assert facts.reduce_only is True
+    assert "KRX_VI_ACTIVE" in facts.blockers
+
+
+def test_krx_single_price_auction_blocks_entry() -> None:
+    facts = evaluate_session(
+        _krx_calendar(),
+        KRX_MIDSESSION,
+        market_safety=_safety(is_single_price_auction=True),
+    )
+
+    assert facts.entry_allowed is False
+    assert "KRX_SINGLE_PRICE_AUCTION" in facts.blockers
+
+
+def test_clean_krx_market_safety_allows_entry() -> None:
+    facts = evaluate_session(_krx_calendar(), KRX_MIDSESSION, market_safety=_safety())
+
+    assert facts.entry_allowed is True
+    assert facts.blockers == ()
+
+
+def test_market_safety_is_not_required_outside_krx() -> None:
+    facts = evaluate_session(_us_calendar(), OPEN + timedelta(minutes=30))
+
+    assert facts.entry_allowed is True
+    assert facts.blockers == ()
