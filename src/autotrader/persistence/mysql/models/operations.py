@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, Index, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, CheckConstraint, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from autotrader.persistence.mysql.models.core import CoreBase
@@ -102,27 +102,5 @@ class OpsAuditLog(CoreBase):
     fencing_token: Mapped[int] = mapped_column(nullable=False)
     details: Mapped[dict[str, Any]] = mapped_column(JSON(), nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(
-        UtcDateTime(), default=lambda: datetime.now(UTC), nullable=False
-    )
-
-
-class OpsGateScenarioScope(CoreBase):
-    """CI-only durable binding between a named gate case and its DB entities."""
-
-    __tablename__ = "ops_gate_scenario_scope"
-    __table_args__ = (UniqueConstraint("scenario_id", name="uq_ops_gate_scenario_id"),)
-
-    id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True, default=new_uuid7)
-    scenario_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    command_id: Mapped[UUID | None] = mapped_column(UuidBinary(), nullable=True)
-    order_intent_id: Mapped[UUID | None] = mapped_column(UuidBinary(), nullable=True)
-    risk_decision_id: Mapped[UUID | None] = mapped_column(UuidBinary(), nullable=True)
-    order_id: Mapped[UUID | None] = mapped_column(UuidBinary(), nullable=True)
-    account_id: Mapped[UUID | None] = mapped_column(UuidBinary(), nullable=True)
-    broker_id: Mapped[UUID | None] = mapped_column(UuidBinary(), nullable=True)
-    reconciliation_run_id: Mapped[UUID | None] = mapped_column(
-        UuidBinary(), nullable=True
-    )
-    created_at: Mapped[datetime] = mapped_column(
         UtcDateTime(), default=lambda: datetime.now(UTC), nullable=False
     )

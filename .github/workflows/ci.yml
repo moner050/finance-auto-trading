@@ -21,6 +21,7 @@ jobs:
       - run: uv run pyright
       - run: uv run python scripts/check-utf8.py
       - run: uv run python scripts/check-import-boundaries.py
+      - run: uv run python scripts/generate-initial-migration.py --check
 
   test:
     strategy:

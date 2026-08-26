@@ -7,9 +7,12 @@ from sqlalchemy.engine import Connection
 
 from autotrader.config.settings import Settings
 from autotrader.persistence.mysql.engine import create_engine
+from autotrader.persistence.mysql.models import metadata
 
 config = context.config
-target_metadata = None
+# Bound so autogenerate can report drift between the ORM and the schema.
+# Leaving this at None is what let the two diverge unnoticed before.
+target_metadata = metadata
 
 
 def run_migrations(connection: Connection) -> None:

@@ -34,63 +34,6 @@ class _UtcDateTime6(UtcDateTime):
     cache_ok = True
 
 
-class BinanceUsdmCommandStateRow(CoreBase):
-    __tablename__ = "binance_usdm_command_state"
-    __table_args__ = (
-        UniqueConstraint(
-            "command_kind",
-            "client_id",
-            name="uq_binance_usdm_command_client_identity",
-        ),
-        CheckConstraint(
-            "command_kind IN ('NORMAL', 'ALGO') AND revision > 0 "
-            "AND CHAR_LENGTH(client_id) > 0 "
-            "AND OCTET_LENGTH(request_body) > 0 "
-            "AND OCTET_LENGTH(request_digest) = 32",
-            name="ck_binance_usdm_command_identity",
-        ),
-        CheckConstraint(
-            "(command_kind = 'NORMAL' AND state IN "
-            "('PREPARED', 'NOT_SENT', 'AMBIGUOUS', 'ACKNOWLEDGED', "
-            "'REJECTED', 'UNKNOWN')) OR "
-            "(command_kind = 'ALGO' AND state IN "
-            "('PREPARED', 'AMBIGUOUS', 'ACTIVE', 'REJECTED', "
-            "'EMERGENCY_CLOSED', 'UNKNOWN'))",
-            name="ck_binance_usdm_command_state",
-        ),
-        ForeignKeyConstraint(
-            ["binding_id", "account_id"],
-            list(_BINDING_FK_TARGET),
-            name="fk_binance_usdm_command_binding",
-            ondelete="RESTRICT",
-        ),
-        Index(
-            "ix_binance_usdm_command_readiness",
-            "binding_id",
-            "command_kind",
-            "state",
-        ),
-    )
-
-    id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True, default=new_uuid7)
-    binding_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
-    account_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
-    command_kind: Mapped[str] = mapped_column(
-        String(8, collation="ascii_bin"), nullable=False
-    )
-    client_id: Mapped[str] = mapped_column(
-        String(36, collation="ascii_bin"), nullable=False
-    )
-    request_body: Mapped[bytes] = mapped_column(VARBINARY(4096), nullable=False)
-    request_digest: Mapped[bytes] = mapped_column(VARBINARY(32), nullable=False)
-    state: Mapped[str] = mapped_column(
-        String(24, collation="ascii_bin"), nullable=False
-    )
-    record_payload: Mapped[dict[str, object]] = mapped_column(JSON(), nullable=False)
-    prepared_at: Mapped[datetime] = mapped_column(_UtcDateTime6(), nullable=False)
-    revision: Mapped[int] = mapped_column(BigInteger(), nullable=False)
-
-
 class BinanceUsdmReconciliationRunRow(CoreBase):
     __tablename__ = "binance_usdm_reconciliation_run"
     __table_args__ = (
@@ -491,7 +434,6 @@ class BinanceUsdmConfigurationFactRow(CoreBase):
 __all__ = (
     "BinanceUsdmAlgoOrderFactRow",
     "BinanceUsdmBalanceFactRow",
-    "BinanceUsdmCommandStateRow",
     "BinanceUsdmConfigurationFactRow",
     "BinanceUsdmIncomeFactRow",
     "BinanceUsdmOrderFactRow",

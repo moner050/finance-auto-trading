@@ -187,27 +187,6 @@ class RiskPolicyVersion(CoreBase):
     )
 
 
-class RiskLimit(CoreBase):
-    __tablename__ = "risk_limit"
-    __table_args__ = (
-        UniqueConstraint(
-            "policy_version_id", "limit_key", "currency", name="uq_risk_limit_key"
-        ),
-        ForeignKeyConstraint(
-            ["policy_version_id"],
-            ["risk_policy_version.id"],
-            name="fk_risk_limit_policy_version",
-        ),
-        CheckConstraint("amount >= 0", name="ck_risk_limit_amount_non_negative"),
-    )
-
-    id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True, default=new_uuid7)
-    policy_version_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
-    limit_key: Mapped[str] = mapped_column(String(128), nullable=False)
-    amount: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
-    currency: Mapped[str] = mapped_column(String(3), nullable=False)
-
-
 class AccountRiskPolicyBinding(CoreBase):
     __tablename__ = "exec_account_risk_policy_binding"
     __table_args__ = (

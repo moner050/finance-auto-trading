@@ -8,8 +8,6 @@ from sqlalchemy import (
     BINARY,
     Boolean,
     CheckConstraint,
-    ForeignKey,
-    Index,
     Numeric,
     String,
     UniqueConstraint,
@@ -135,89 +133,3 @@ class StrategySignal(CoreBase):
     valid_until: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
     session_type: Mapped[str] = mapped_column(String(32), nullable=False)
     signal_hash: Mapped[bytes] = mapped_column(BINARY(32), nullable=False)
-
-
-class PersistedShadowCandidate(CoreBase):
-    __tablename__ = "strategy_shadow_candidate"
-    __table_args__ = (
-        UniqueConstraint("candidate_hash", name="uq_strategy_shadow_candidate_hash"),
-        UniqueConstraint(
-            "id",
-            "feature_snapshot_id",
-            name="uq_strategy_shadow_candidate_id_snapshot",
-        ),
-        CheckConstraint(
-            "status = 'SHADOW'", name="ck_strategy_shadow_candidate_status"
-        ),
-        CheckConstraint(
-            "side IN ('BUY', 'SELL')", name="ck_strategy_shadow_candidate_side"
-        ),
-        CheckConstraint(
-            "entry_price > 0 AND stop_price > 0 AND "
-            "((side = 'BUY' AND stop_price < entry_price) OR "
-            "(side = 'SELL' AND stop_price > entry_price))",
-            name="ck_strategy_shadow_candidate_prices",
-        ),
-        CheckConstraint(
-            "qualifying_first_index >= 0 "
-            "AND qualifying_second_index > qualifying_first_index "
-            "AND confirmation_first_index >= qualifying_first_index "
-            "AND confirmation_second_index >= qualifying_second_index "
-            "AND confirmation_second_index > confirmation_first_index",
-            name="ck_strategy_shadow_candidate_pivots",
-        ),
-        Index(
-            "ix_strategy_shadow_candidate_setup_generated",
-            "setup_id",
-            "generated_at",
-        ),
-    )
-
-    id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True)
-    strategy_version_id: Mapped[UUID] = mapped_column(
-        UuidBinary(),
-        ForeignKey(
-            "strategy_version.id",
-            name="fk_strategy_shadow_candidate_version",
-            ondelete="RESTRICT",
-        ),
-        nullable=False,
-    )
-    setup_id: Mapped[UUID] = mapped_column(
-        UuidBinary(),
-        ForeignKey(
-            "strategy_setup.id",
-            name="fk_strategy_shadow_candidate_setup",
-            ondelete="RESTRICT",
-        ),
-        nullable=False,
-    )
-    feature_snapshot_id: Mapped[UUID] = mapped_column(
-        UuidBinary(),
-        ForeignKey(
-            "strategy_feature_snapshot.id",
-            name="fk_strategy_shadow_candidate_feature_snapshot",
-            ondelete="RESTRICT",
-        ),
-        nullable=False,
-    )
-    instrument_id: Mapped[UUID] = mapped_column(
-        UuidBinary(),
-        ForeignKey(
-            "core_instrument.id",
-            name="fk_strategy_shadow_candidate_instrument",
-            ondelete="RESTRICT",
-        ),
-        nullable=False,
-    )
-    side: Mapped[str] = mapped_column(String(8), nullable=False)
-    entry_price: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
-    stop_price: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
-    generated_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
-    qualifying_first_index: Mapped[int] = mapped_column(nullable=False)
-    qualifying_second_index: Mapped[int] = mapped_column(nullable=False)
-    confirmation_first_index: Mapped[int] = mapped_column(nullable=False)
-    confirmation_second_index: Mapped[int] = mapped_column(nullable=False)
-    policy_hash: Mapped[bytes] = mapped_column(BINARY(32), nullable=False)
-    candidate_hash: Mapped[bytes] = mapped_column(BINARY(32), nullable=False)
-    status: Mapped[str] = mapped_column(String(16), nullable=False)

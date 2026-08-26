@@ -1,5 +1,45 @@
-"""SQLAlchemy models owned by MySQL persistence."""
+"""SQLAlchemy models owned by MySQL persistence.
 
+Importing this package registers every table on the shared metadata, which is
+what Alembic compares the live schema against.
+"""
+
+from autotrader.persistence.mysql.models import (
+    accounts as accounts,
+)
+from autotrader.persistence.mysql.models import (
+    bindings as bindings,
+)
+from autotrader.persistence.mysql.models import (
+    david_v6 as david_v6,
+)
+from autotrader.persistence.mysql.models import (
+    events as events,
+)
+from autotrader.persistence.mysql.models import (
+    fills as fills,
+)
+from autotrader.persistence.mysql.models import (
+    intents as intents,
+)
+from autotrader.persistence.mysql.models import (
+    operations as operations,
+)
+from autotrader.persistence.mysql.models import (
+    orders as orders,
+)
+from autotrader.persistence.mysql.models import (
+    positions as positions,
+)
+from autotrader.persistence.mysql.models import (
+    reconciliation as reconciliation,
+)
+from autotrader.persistence.mysql.models import (
+    risk as risk,
+)
+from autotrader.persistence.mysql.models import (
+    strategy as strategy,
+)
 from autotrader.persistence.mysql.models.backoffice import (
     BackofficeBootstrapAuthorityRow,
     BackofficeCommandRow,
@@ -10,7 +50,6 @@ from autotrader.persistence.mysql.models.backoffice import (
 from autotrader.persistence.mysql.models.binance_usdm import (
     BinanceUsdmAlgoOrderFactRow,
     BinanceUsdmBalanceFactRow,
-    BinanceUsdmCommandStateRow,
     BinanceUsdmConfigurationFactRow,
     BinanceUsdmIncomeFactRow,
     BinanceUsdmOrderFactRow,
@@ -18,6 +57,7 @@ from autotrader.persistence.mysql.models.binance_usdm import (
     BinanceUsdmReconciliationRunRow,
     BinanceUsdmTradeFactRow,
 )
+from autotrader.persistence.mysql.models.core import CoreBase
 from autotrader.persistence.mysql.models.toss_us_reconciliation import (
     TossUsCashFactRow,
     TossUsOrderFactRow,
@@ -25,6 +65,8 @@ from autotrader.persistence.mysql.models.toss_us_reconciliation import (
     TossUsReconciliationRunRow,
     TossUsRecoveryLeaseRow,
 )
+
+metadata = CoreBase.metadata
 
 __all__ = [
     "BackofficeBootstrapAuthorityRow",
@@ -34,7 +76,6 @@ __all__ = [
     "BackofficeSecretVersionRow",
     "BinanceUsdmAlgoOrderFactRow",
     "BinanceUsdmBalanceFactRow",
-    "BinanceUsdmCommandStateRow",
     "BinanceUsdmConfigurationFactRow",
     "BinanceUsdmIncomeFactRow",
     "BinanceUsdmOrderFactRow",
@@ -46,4 +87,5 @@ __all__ = [
     "TossUsPositionFactRow",
     "TossUsReconciliationRunRow",
     "TossUsRecoveryLeaseRow",
+    "metadata",
 ]
