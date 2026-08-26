@@ -92,6 +92,10 @@ def test_account_isolation_secret_reference_and_signed_observed_position() -> No
                     instrument_id=instrument.id,
                     quantity=Decimal("-2"),
                     average_cost=Decimal("10"),
+                    # A non-zero position states what it is denominated in:
+                    # a currency for cash equity, a settlement asset for crypto.
+                    currency="USD",
+                    settlement_asset=None,
                     observed_at=NOW,
                     blocking_risk=True,
                 )

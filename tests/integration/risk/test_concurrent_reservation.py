@@ -11,6 +11,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from autotrader.config.settings import Settings
@@ -48,6 +49,15 @@ ROOT = Path(__file__).resolve().parents[3]
 NOW = datetime(2026, 8, 9, tzinfo=UTC)
 
 
+_DEADLOCK_ATTEMPTS = 10
+_MYSQL_DEADLOCK = 1213
+
+
+def _is_deadlock(error: OperationalError) -> bool:
+    code = error.orig.args[0] if error.orig and error.orig.args else None
+    return code == _MYSQL_DEADLOCK
+
+
 @pytest.mark.integration
 def test_concurrent_duplicate_and_distinct_reservations_are_serialized() -> None:
     url = os.environ.get("DATABASE_URL")
@@ -63,17 +73,31 @@ def test_concurrent_duplicate_and_distinct_reservations_are_serialized() -> None
             duplicate_key = f"reconciliation:{uuid7().hex}:{ids.account_id.hex}"
 
             async def duplicate() -> UUID:
-                async with sessions() as session:
-                    intent = _intent(
-                        id=uuid7(),
-                        account_id=ids.account_id,
-                        instrument_id=ids.instrument_id,
-                        key=duplicate_key,
-                        reconciliation_diff_id=ids.reconciliation_diff_id,
-                    )
-                    stored = await OrderIntentRepository(session).create_or_get(intent)
-                    await session.commit()
-                    return stored.id
+                # create_or_get inserts and then reads the row back under a
+                # lock, so concurrent callers on one key can deadlock. InnoDB
+                # answers a deadlock by asking for the transaction to be
+                # retried, which every caller of this repository must do.
+                for _ in range(_DEADLOCK_ATTEMPTS):
+                    async with sessions() as session:
+                        intent = _intent(
+                            id=uuid7(),
+                            account_id=ids.account_id,
+                            instrument_id=ids.instrument_id,
+                            key=duplicate_key,
+                            reconciliation_diff_id=ids.reconciliation_diff_id,
+                        )
+                        try:
+                            stored = await OrderIntentRepository(session).create_or_get(
+                                intent
+                            )
+                            await session.commit()
+                        except OperationalError as error:
+                            await session.rollback()
+                            if not _is_deadlock(error):
+                                raise
+                            continue
+                        return stored.id
+                raise AssertionError("deadlock did not clear within the retries")
 
             duplicate_ids = await asyncio.gather(*(duplicate() for _ in range(20)))
             assert len(set(duplicate_ids)) == 1
@@ -258,20 +282,15 @@ async def _seed(sessions: async_sessionmaker[object]) -> _Ids:
                 row_version=1,
             ),
         ]
-        session.add_all(
-            [
-                broker,
-                market,
-                exchange,
-                instrument,
-                account,
-                snapshot,
-                policy,
-                version,
-                risk_snapshot,
-                *anchors,
-            ]
-        )
+        # These models carry no relationships, so the unit of work cannot infer
+        # the foreign key order. Flush each generation before its children.
+        session.add_all([broker, market, policy])
+        await session.flush()
+        session.add_all([exchange, account, version])
+        await session.flush()
+        session.add_all([instrument, snapshot])
+        await session.flush()
+        session.add_all([risk_snapshot, *anchors])
         await session.flush()
         reconciliation_run = PersistedReconciliationRun(
             id=uuid7(),

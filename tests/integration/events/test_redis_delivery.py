@@ -3,12 +3,9 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import UTC, datetime
-from pathlib import Path
 from uuid import uuid7
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from pydantic import BaseModel
 from redis import asyncio as redis
 from sqlalchemy import func, select
@@ -23,7 +20,6 @@ from autotrader.persistence.redis.inbox_consumer import InboxConsumer
 from autotrader.persistence.redis.mysql_inbox_handler import MySqlInboxHandler
 from autotrader.persistence.redis.streams import RedisStreams
 
-ROOT = Path(__file__).resolve().parents[3]
 NOW = datetime(2026, 8, 9, tzinfo=UTC)
 
 
@@ -155,7 +151,9 @@ async def test_redis_transport_preserves_conflicting_payload_for_mysql_inbox() -
 @pytest.mark.integration
 async def test_redis_redelivery_uses_mysql_inbox() -> None:
     database_url = _database_url()
-    command.upgrade(Config(ROOT / "alembic.ini"), "head")
+    # The autouse fixture already migrated to head. Calling alembic from inside
+    # an async test cannot work: its env.py drives the migration with
+    # asyncio.run, which refuses to start inside a running loop.
     client = redis.from_url(_redis_url(), decode_responses=True)
     engine = create_engine(Settings(database_url=database_url))
     sessions = async_sessionmaker(bind=engine, expire_on_commit=False)
