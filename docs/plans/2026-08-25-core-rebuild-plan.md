@@ -54,30 +54,35 @@ fencing token 같은 기관용 컴플라이언스 구조를 먼저 지었기 때
 
 ---
 
-## Phase 0 — 스키마 통합
+## Phase 0 — 스키마 통합 ✅ 구현 완료 (`610afc1`) / MySQL 적용 미검증
 
-루프가 결정을 기록하려면 적용 가능한 스키마가 먼저 있어야 한다.
+**한 일**
 
-**작업**
+- 44개 마이그레이션 체인을 `0001_initial` 하나로 대체했다. 기존 체인은 실제 MySQL에
+  한 번도 적용된 적이 없고 오래전 제거된 전략의 테이블까지 누적돼 있었다.
+- **손으로 옮겨 적지 않고 ORM metadata에서 생성한다.** 70여 개 테이블을 전사하면
+  drift가 생긴다. `scripts/generate-initial-migration.py`가 생성하고,
+  `migrations/env.py`의 `target_metadata`를 연결했다 — `None`이던 탓에 모델과 스키마가
+  갈라져도 아무도 알 수 없었다.
+- 생성 즉시 실제 결함이 드러났다. FK 6개가 `exec_provider_account_binding`을 가리키는데
+  그 테이블은 앞선 정리에서 모듈째 사라져 있었다. 바인딩은 정산이 붙는 단위이자
+  Phase 5가 LIVE를 승인하는 단위이므로 복원하되, **정체성과 범위만** 되살리고 제거한
+  증거 원장의 해시들은 가져오지 않았다.
+- 참조가 0인 테이블 4개 제거: shadow candidate 원장, 이미 사라진 gate scenario scope,
+  v6 리스크 엔진이 대체한 risk_limit, 정리 때 저장소가 없어진 Binance command state.
+- 75개 테이블이 남았다.
 
-- `migrations/env.py`의 `target_metadata`를 `CoreBase.metadata`에 연결한다. 지금은
-  `None`이라 ORM과 스키마의 drift를 아무도 감지하지 못한다.
-- 남은 78개 ORM 테이블에 대해 `migrations/versions/0001_initial.py`를 단일
-  마이그레이션으로 작성한다.
-- 사용할 테이블만 남긴다. `strategy_shadow_candidate`,
-  `exec_order_intent_legacy_strategy_link`, `ops_gate_scenario_scope` 등 이전 전략
-  잔재는 이 단계에서 잘라낸다.
+**MySQL 없이 검증한 것**
 
-**검증**
+- 커밋된 파일이 여전히 metadata와 일치하는가 (drift 검사, CI에도 추가)
+- 매핑된 모든 테이블이 정확히 한 번씩 생성되는가
+- 어떤 테이블도 그것을 참조하는 것보다 먼저 생성되는가
+- 사라진 테이블을 가리키는 FK가 없는가
 
-- 사용자 승인 후 폐기용 MySQL(`TEST_DISPOSABLE_DATABASE_URL`)에 `alembic upgrade head`.
-- 두 번 연속 실행이 멱등인지 확인.
-- ORM ↔ 스키마 drift가 비어 있는지 autogenerate diff로 확인.
-- CI에 integration 잡을 다시 넣는다 (Compose로 MySQL/Redis 기동 → migrate → 통합 테스트).
+**아직 안 한 것**
 
-**완료 기준:** 빈 MySQL에서 `alembic upgrade head`가 성공하고 drift가 0이다.
-
----
+빈 MySQL에 `alembic upgrade head`를 적용해 본 적이 없다. Docker를 띄울 수 있게 되면
+멱등 실행과 autogenerate diff 0을 확인하고, CI에 integration 잡을 되살린다.
 
 ## Phase 1 — 증거 조립기 ✅ 완료 (`c8d38a2`)
 
