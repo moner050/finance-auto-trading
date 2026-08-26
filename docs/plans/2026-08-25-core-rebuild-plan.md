@@ -86,16 +86,25 @@ ORM에서 생성한 스키마는 ORM에 충실했기에 그 무결성 보장을 
 | 멱등성 | 재실행 no-op |
 | downgrade base → upgrade head | 왕복 정상 |
 | ORM drift (autogenerate) | **0** |
-| 전체 스위트 | **1523 passed, 4 skipped** |
+| 전체 스위트 | **1528 passed**, skip 0 |
 | ruff / pyright | clean / 0 errors |
 
 통합 테스트 3건도 고쳤다. 구 CI가 `AUTOTRADER_TEST_MIGRATION_TARGET=0011`로 훨씬
 오래된 스키마에 돌린 탓에 최종 스키마를 만난 적이 없던 것들이다 — flush 순서, 데드락
 재시도, 포지션 표시통화, async 테스트 안의 alembic 호출.
 
-**남은 것**
+**Redis 전송도 검증했다**
 
-Redis 통합 4건은 `REDIS_URL`이 없어 skip이다. Redis 경로는 아직 검증되지 않았다.
+Redis 7.0.15에 연결해 outbox/inbox 스트림 경로를 실제로 돌렸다. 그동안 skip만 되던
+테스트들이라 두 가지 가정이 드러났다 — 스트림 엔트리 ID를 `"1-0"`으로 하드코딩한 것
+(Redis는 시계에서 ID를 만든다), 그리고 제거된 official-fact 핀에서 온 정확한 컨테이너
+버전 단언이다. 후자는 코드가 실제로 요구하는 것으로 바꿨다: CHECK 제약을 위한 MySQL
+8.0.16, 스트림을 위한 Redis 5.0, 그리고 `XADD`·`XAUTOCLAIM` 존재 확인.
+
+마지막 검사는 값이 있다. 이번 작업에 처음 제시된 서버는 `PING`에 응답했지만 3.0.504였고
+전송이 쓰는 스트림 명령이 하나도 없었다.
+
+**전체 스위트: `1528 passed`, skip 0.**
 
 ## Phase 1 — 증거 조립기 ✅ 완료 (`c8d38a2`)
 
