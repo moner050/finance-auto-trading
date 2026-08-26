@@ -239,6 +239,10 @@ class DavidV6Repository:
             decision_hash=digest,
         )
         self._session.add(row)
+        # The indicator and blocker rows point at this decision and neither
+        # model carries a relationship, so the unit of work cannot order them
+        # behind it.
+        await self._session.flush()
         for ordinal, indicator in enumerate(decision.matched_indicators):
             self._session.add(
                 DavidV6IndicatorRow(

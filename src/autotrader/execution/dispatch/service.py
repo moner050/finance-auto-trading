@@ -11,7 +11,10 @@ from autotrader.execution.orders.models import BrokerOrderCommand, CommandType
 
 
 class BrokerSubmission(Protocol):
-    broker_order_id: str
+    @property
+    def broker_order_id(self) -> str:
+        """Read only, so a broker may answer with an immutable receipt."""
+        ...
 
 
 class BrokerSubmitter(Protocol):

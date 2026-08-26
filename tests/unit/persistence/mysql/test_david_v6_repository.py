@@ -63,6 +63,9 @@ class FakeSession:
         self.scalars_responses = list(scalars_responses)
         self.added: list[object] = []
         self.flush_count = 0
+        # What had been added by the time each flush ran, so a test can assert
+        # that a parent row reached the database before the rows pointing at it.
+        self.flushes: list[list[type[object]]] = []
 
     async def scalar(self, statement: object) -> object | None:
         del statement
@@ -77,6 +80,7 @@ class FakeSession:
 
     async def flush(self) -> None:
         self.flush_count += 1
+        self.flushes.append([type(value) for value in self.added])
 
 
 def _manifest() -> V6Manifest:
@@ -247,15 +251,14 @@ async def test_tradeable_decision_persists_signal_indicator_and_decision_once() 
     assert persisted.id == decision.id
     assert persisted.strategy_signal_id == decision.id
     assert persisted.decision_hash == decision.decision_hash()
-    assert [type(value) for value in session.added] == [
-        StrategySignal,
-        DavidV6DecisionRow,
-        DavidV6IndicatorRow,
+    # None of these models carry a relationship, so the unit of work cannot
+    # order the inserts. Every parent has to reach the database before the rows
+    # that reference it, which is what the flush boundaries prove.
+    assert session.flushes == [
+        [StrategySignal],
+        [StrategySignal, DavidV6DecisionRow],
+        [StrategySignal, DavidV6DecisionRow, DavidV6IndicatorRow],
     ]
-    # The decision points at the signal and neither model carries a
-    # relationship, so the signal is flushed on its own before the row that
-    # references it. Two flushes, in that order, is the guarantee.
-    assert session.flush_count == 2
 
 
 @pytest.mark.asyncio
@@ -280,12 +283,12 @@ async def test_reject_decision_persists_no_generic_strategy_signal() -> None:
     )
 
     assert persisted.strategy_signal_id is None
-    assert [type(value) for value in session.added] == [
-        DavidV6DecisionRow,
-        DavidV6IndicatorRow,
-        DavidV6BlockerRow,
+    # A rejection writes no signal, but its blockers still point at a decision
+    # row that has to exist first.
+    assert session.flushes == [
+        [DavidV6DecisionRow],
+        [DavidV6DecisionRow, DavidV6IndicatorRow, DavidV6BlockerRow],
     ]
-    assert session.flush_count == 1
 
 
 @pytest.mark.asyncio

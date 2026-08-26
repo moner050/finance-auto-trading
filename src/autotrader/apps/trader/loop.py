@@ -112,7 +112,14 @@ async def run_forever(
 
 class SystemClock:
     def now(self) -> datetime:
-        return datetime.now(UTC)
+        """Truncated to a whole second.
+
+        The stored timestamp columns carry no fractional seconds, so MySQL
+        rounds anything finer on the way in. A value that comes back larger
+        than the one compared against it in memory turns a valid provenance
+        check into a failure, and no decision here needs sub-second precision.
+        """
+        return datetime.now(UTC).replace(microsecond=0)
 
     async def sleep(self, seconds: float) -> None:
         await asyncio.sleep(seconds)

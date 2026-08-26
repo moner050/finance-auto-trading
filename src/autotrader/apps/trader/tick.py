@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime
+from decimal import Decimal
 from typing import Protocol, cast
 from uuid import UUID
 
@@ -25,9 +26,14 @@ from autotrader.strategies.david_v6.assembly import (
     derive_indicators,
 )
 from autotrader.strategies.david_v6.engine import evaluate_v6, to_strategy_decision
+from autotrader.strategies.david_v6.exhaustion import ExhaustionFacts
 from autotrader.strategies.david_v6.hlit import HlitSetup
 from autotrader.strategies.david_v6.manifest import V6Manifest
-from autotrader.strategies.david_v6.models import SetupGrade, V6Decision
+from autotrader.strategies.david_v6.models import (
+    EvidenceState,
+    SetupGrade,
+    V6Decision,
+)
 
 DISARMED = "DISARMED"
 NO_SETUP = "NO_SETUP_DRAWN"
@@ -108,7 +114,7 @@ async def run_tick(
     decision = evaluate_v6(
         assembled.bundle,
         manifest=context.manifest,
-        risk_context=_with_indicators(context.risk_context, assembled, side),
+        risk_context=_from_evidence(context.risk_context, assembled, side),
     )
     await recorder.record(decision)
 
@@ -131,7 +137,7 @@ async def run_tick(
     return TickOutcome(reason=SUBMITTED, decision=decision, order_id=order_id)
 
 
-def _with_indicators(
+def _from_evidence(
     risk_context: V6RiskContext,
     assembled: AssemblyResult,
     side: Side,
@@ -142,7 +148,35 @@ def _with_indicators(
         side=side,
         reference_price=risk_context.risk_request.entry_price,
     )
-    return replace(risk_context, matched_indicators=derived)
+    return replace(
+        risk_context,
+        matched_indicators=derived,
+        risk_request=replace(
+            risk_context.risk_request,
+            structural_reference=_structural_reference(risk_context, assembled, side),
+        ),
+    )
+
+
+def _structural_reference(
+    risk_context: V6RiskContext,
+    assembled: AssemblyResult,
+    side: Side,
+) -> Decimal:
+    """Section 9.2 puts the stop outside the confirmed low or high of the leg.
+
+    That price is the exhaustion's own reference, so a caller's guess never
+    stands in for it. Without a confirmed sequence the caller's value is kept
+    and the engine's exhaustion gate rejects the setup anyway.
+    """
+    item = assembled.bundle.exhaustion
+    if item.state is not EvidenceState.AVAILABLE:
+        return risk_context.risk_request.structural_reference
+    facts = cast(ExhaustionFacts, item.value)
+    sequence = facts.bullish if side is Side.BUY else facts.bearish
+    if sequence is None or not sequence.confirmed:
+        return risk_context.risk_request.structural_reference
+    return sequence.structural_reference_price
 
 
 __all__ = (

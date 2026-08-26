@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
@@ -24,7 +25,10 @@ from autotrader.domain.enums import OrderStyle, Side
 from autotrader.risk.v6 import V6RiskContext, V6RiskRequest
 from autotrader.shared.ids import new_uuid7
 from autotrader.strategies.common.decisions import StrategyDecision
-from autotrader.strategies.david_v6.assembly import AssemblyInputs
+from autotrader.strategies.david_v6.assembly import (
+    AssemblyInputs,
+    assemble_v6_evidence,
+)
 from autotrader.strategies.david_v6.calendar import EventCalendar
 from autotrader.strategies.david_v6.hlit import HlitSetup
 from autotrader.strategies.david_v6.manifest import (
@@ -263,3 +267,59 @@ def test_inputs_must_be_exact_assembly_inputs() -> None:
 
 def cast_object() -> AssemblyInputs:
     return object()  # type: ignore[return-value]
+
+
+@pytest.mark.asyncio
+async def test_the_stop_sits_at_the_exhaustion_low_not_the_caller_guess() -> None:
+    """Section 9.2 places the stop outside the confirmed low of the leg."""
+    context = _setup_context()
+    # A caller asking for a stop far below the leg must not get one.
+    wrong = replace(
+        context,
+        risk_context=replace(
+            context.risk_context,
+            risk_request=replace(
+                context.risk_context.risk_request,
+                structural_reference=Decimal("100.0"),
+            ),
+        ),
+    )
+
+    outcome = await run_tick(
+        wrong,
+        control=_Control(True),
+        recorder=_Recorder(),
+        execution=_Execution(new_uuid7()),
+    )
+
+    assert outcome.decision is not None
+    assert outcome.decision.grade is not SetupGrade.REJECT, outcome.blockers
+    exhaustion = assemble_v6_evidence(wrong.inputs).bundle.exhaustion.value
+    assert exhaustion is not None
+    sequence = exhaustion.bullish  # type: ignore[attr-defined]
+    assert sequence is not None
+    reference = sequence.structural_reference_price
+    stop = outcome.decision.structural_stop
+    assert stop is not None
+    # The stop sits just under the exhaustion low, nowhere near the guess.
+    assert stop < reference
+    assert reference - stop < Decimal("1")
+    assert stop > Decimal("119")
+
+
+@pytest.mark.asyncio
+async def test_without_a_confirmed_exhaustion_the_caller_value_stands() -> None:
+    context = _bare_context()
+    guessed = context.risk_context.risk_request.structural_reference
+
+    outcome = await run_tick(
+        context,
+        control=_Control(True),
+        recorder=_Recorder(),
+        execution=_Execution(),
+    )
+
+    # Nothing to take a reference from, and the exhaustion gate rejects anyway.
+    assert outcome.decision is not None
+    assert "EXHAUSTION_ABSENT" in outcome.blockers
+    assert context.risk_context.risk_request.structural_reference == guessed

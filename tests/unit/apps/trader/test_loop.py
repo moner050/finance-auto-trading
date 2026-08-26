@@ -16,6 +16,7 @@ from autotrader.apps.trader.loop import (
     NO_NEW_BAR,
     NOT_LEADER,
     LoopPorts,
+    SystemClock,
     run_forever,
     run_pass,
 )
@@ -242,3 +243,11 @@ async def test_the_interval_must_be_positive() -> None:
 async def test_ports_must_be_exact() -> None:
     with pytest.raises(TypeError, match="exact LoopPorts"):
         await run_pass(now=NOW, ports=object())  # type: ignore[arg-type]
+
+
+def test_the_system_clock_reports_whole_seconds() -> None:
+    """The stored columns have no fractional seconds, so MySQL would round."""
+    moment = SystemClock().now()
+
+    assert moment.tzinfo is UTC
+    assert moment.microsecond == 0
