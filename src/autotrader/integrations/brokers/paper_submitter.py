@@ -18,6 +18,7 @@ from uuid import UUID
 from autotrader.domain.enums import OrderStyle
 from autotrader.execution.orders.models import BrokerOrderCommand, CommandType
 from autotrader.integrations.brokers.internal_paper import (
+    PAPER_ACCOUNT_BINDINGS,
     InternalPaperBroker,
     PaperExecutionBar,
     PaperOrderCommand,
@@ -64,6 +65,15 @@ class PaperAccount:
     def __post_init__(self) -> None:
         if type(cast(object, self.market)) is not V6Market:
             raise TypeError("market must be an exact V6Market")
+        # The command refuses an alias that does not belong to this market,
+        # and dispatch turns anything a broker raises into UNKNOWN. Checking
+        # here means a misconfigured account fails at wiring, where it reads
+        # as the configuration error it is, rather than as a broker timeout.
+        if PAPER_ACCOUNT_BINDINGS.get(self.account_alias) is not self.market:
+            raise ValueError(
+                f"{self.account_alias!r} is not the paper account for "
+                f"{self.market.value}"
+            )
         if type(self.timeframe) is not timedelta or self.timeframe <= timedelta(0):
             raise ValueError("timeframe must be positive")
         for name in ("fee_per_unit", "slippage_per_unit"):

@@ -83,4 +83,4 @@ jobs:
         with:
           version: "0.12.3"
       - run: uv sync --frozen
-      - run: uv run python -m pytest tests/integration -q
+      - run: uv run python -m pytest tests/integration tests/acceptance -q

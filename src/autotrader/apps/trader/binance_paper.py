@@ -206,13 +206,13 @@ def build_ports(
             sessions=sessions,
             account=account,
             broker=PaperBrokerSubmitter(
-                journal=_SessionJournal(sessions), account=paper
+                journal=SessionPaperJournal(sessions), account=paper
             ),
         ),
     )
 
 
-class _SessionJournal:
+class SessionPaperJournal:
     """Open a short session per journal call, since dispatch owns its own."""
 
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
@@ -272,6 +272,7 @@ __all__ = (
     "PAPER_ALIAS",
     "AccountBudget",
     "BinanceRiskContexts",
+    "SessionPaperJournal",
     "build_ports",
     "open_market_data",
     "register_instruments",

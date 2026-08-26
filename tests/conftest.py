@@ -4,8 +4,6 @@ import asyncio
 import hashlib
 import hmac
 import os
-import subprocess
-import sys
 from pathlib import Path
 from typing import Protocol
 
@@ -137,33 +135,3 @@ def prepare_integration_database(request: _FixtureRequest) -> None:
     else:
         command.downgrade(config, "base")
     command.upgrade(config, os.environ.get("AUTOTRADER_TEST_MIGRATION_TARGET", "head"))
-
-
-@pytest.fixture(autouse=True)
-def collect_acceptance_scope(request: _FixtureRequest) -> object:
-    evidence_dir = os.environ.get("GATE_EVIDENCE_DIR")
-    if request.path.parent.name != "acceptance" or evidence_dir is None:
-        yield
-        return
-    scope_dir = Path(evidence_dir) / "scenarios"
-    scopes_before: set[Path] = (
-        set(scope_dir.glob("*.scope.json")) if scope_dir.exists() else set()
-    )
-    yield
-    for scope_path in sorted(set(scope_dir.glob("*.scope.json")) - scopes_before):
-        subprocess.run(
-            (
-                sys.executable,
-                "scripts/collect-gate-evidence.py",
-                "--database-url",
-                os.environ["DATABASE_URL"],
-                "--scope-dir",
-                str(scope_dir),
-                "--output-dir",
-                str(Path(evidence_dir) / "collected"),
-                "--scenario-id",
-                scope_path.stem.removesuffix(".scope"),
-            ),
-            check=True,
-            cwd=ROOT,
-        )

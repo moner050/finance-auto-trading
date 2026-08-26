@@ -15,7 +15,7 @@ from autotrader.shared.decimal import require_decimal
 from autotrader.shared.time import require_utc
 from autotrader.strategies.david_v6.models import V6Market
 
-_ACCOUNT_BINDINGS = {
+PAPER_ACCOUNT_BINDINGS = {
     "internal-krx-paper": V6Market.KRX_CASH,
     "internal-us-paper": V6Market.US_CASH,
     "internal-binance-usdm-paper": V6Market.BINANCE_USDM,
@@ -64,7 +64,7 @@ class PaperOrderCommand:
     def __post_init__(self) -> None:
         _require_uuid7(self.id, "id")
         _require_uuid7(self.order_id, "order_id")
-        if _ACCOUNT_BINDINGS.get(self.account_alias) is not self.market:
+        if PAPER_ACCOUNT_BINDINGS.get(self.account_alias) is not self.market:
             raise ValueError("exact internal paper account binding is required")
         if type(self.market) is not V6Market:
             raise TypeError("market must be an exact V6Market")
@@ -323,6 +323,7 @@ def _decimal_text(value: Decimal) -> str:
 
 
 __all__ = (
+    "PAPER_ACCOUNT_BINDINGS",
     "InternalPaperBroker",
     "PaperExecutionBar",
     "PaperJournalPort",
