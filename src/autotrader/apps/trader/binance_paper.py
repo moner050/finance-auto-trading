@@ -51,12 +51,27 @@ from autotrader.integrations.brokers.paper_submitter import (
 from autotrader.integrations.market_data.binance_public_rest import BinancePublicRest
 from autotrader.integrations.market_data.binance_usdm import BinanceUsdmMarketData
 from autotrader.persistence.mysql.paper_journal import MySqlPaperJournal
+from autotrader.persistence.mysql.repositories.core import (
+    CoreInstrumentRegistry,
+    InstrumentListing,
+)
+from autotrader.persistence.mysql.seeds.core import (
+    BINANCE_USDM_EXCHANGE_CODE,
+    seed_core_reference_session,
+)
 from autotrader.risk.v6 import V6RiskContext, V6RiskRequest
 from autotrader.shared.ids import new_uuid7
 from autotrader.strategies.david_v6.models import SetupGrade, StrategyFamily, V6Market
 
 PAPER_ALIAS = "internal-binance-usdm-paper"
 _ATR_WINDOW = 14
+
+BTCUSDT = InstrumentListing(
+    exchange_code=BINANCE_USDM_EXCHANGE_CODE,
+    code="BTCUSDT",
+    name="BTCUSDT Perpetual",
+    instrument_type="PERPETUAL",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +156,22 @@ def _average_true_range(
         )
     average = sum(ranges, start=Decimal(0)) / Decimal(len(ranges))
     return average if average > 0 else None
+
+
+async def register_instruments(
+    sessions: async_sessionmaker[AsyncSession],
+) -> UUID:
+    """Seed the fixed reference rows, register BTCUSDT, and return its id.
+
+    The loop has to name a canonical instrument in every decision it records.
+    Reading that id back from the registry is the only way a caller cannot
+    invent one that no table has ever heard of.
+    """
+    async with sessions() as session:
+        await seed_core_reference_session(session)
+        instrument_id = await CoreInstrumentRegistry(session).register(BTCUSDT)
+        await session.commit()
+    return instrument_id
 
 
 def build_ports(
@@ -237,11 +268,13 @@ async def run_one(ports: LoopPorts, *, clock: Clock | None = None) -> LoopPass:
 
 
 __all__ = (
+    "BTCUSDT",
     "PAPER_ALIAS",
     "AccountBudget",
     "BinanceRiskContexts",
     "build_ports",
     "open_market_data",
+    "register_instruments",
     "run",
     "run_one",
 )

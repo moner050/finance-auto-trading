@@ -92,6 +92,20 @@ def reset_schema(database_url: str, *, allow_targeted: bool = False) -> None:
     asyncio.run(drop_tables())
 
 
+def integration_database_url() -> str | None:
+    """The database the integration tests run against.
+
+    DATABASE_URL alone was never enough: the application builds its URL from
+    the MYSQL_* components too, so a configured .env left every MySQL test
+    quietly skipping. Asking Settings is the only way the tests see the same
+    database the application does.
+    """
+    configured = os.environ.get("DATABASE_URL")
+    if configured is not None:
+        return configured
+    return Settings().database_connection_url
+
+
 @pytest.fixture(autouse=True)
 def reset_integration_database(request: _FixtureRequest) -> None:
     prepare_integration_database(request)
@@ -102,15 +116,16 @@ def prepare_integration_database(request: _FixtureRequest) -> None:
         return
     if request.path.parent.name == "migrations":
         return
-    if os.environ.get("DATABASE_URL") is None:
+    database_url = integration_database_url()
+    if database_url is None:
         return
 
     # A non-local database is admitted only by an exact fingerprint match,
     # which is the same authorisation require_authorized_test_database uses.
-    require_authorized_test_database(os.environ["DATABASE_URL"])
+    require_authorized_test_database(database_url)
     config = Config(ROOT / "alembic.ini")
     if os.environ.get("AUTOTRADER_TEST_SCHEMA_RESET") == "1":
-        reset_schema(os.environ["DATABASE_URL"], allow_targeted=True)
+        reset_schema(database_url, allow_targeted=True)
     else:
         command.downgrade(config, "base")
     command.upgrade(config, os.environ.get("AUTOTRADER_TEST_MIGRATION_TARGET", "head"))
