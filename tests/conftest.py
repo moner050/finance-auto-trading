@@ -69,8 +69,8 @@ def require_authorized_test_database(database_url: str) -> None:
     _require_disposable_test_database(database_url, allow_targeted=True)
 
 
-def reset_schema(database_url: str) -> None:
-    _require_disposable_test_database(database_url)
+def reset_schema(database_url: str, *, allow_targeted: bool = False) -> None:
+    _require_disposable_test_database(database_url, allow_targeted=allow_targeted)
 
     async def drop_tables() -> None:
         engine = create_engine(Settings(database_url=database_url))
@@ -105,10 +105,12 @@ def prepare_integration_database(request: _FixtureRequest) -> None:
     if os.environ.get("DATABASE_URL") is None:
         return
 
-    _require_disposable_test_database(os.environ["DATABASE_URL"])
+    # A non-local database is admitted only by an exact fingerprint match,
+    # which is the same authorisation require_authorized_test_database uses.
+    require_authorized_test_database(os.environ["DATABASE_URL"])
     config = Config(ROOT / "alembic.ini")
     if os.environ.get("AUTOTRADER_TEST_SCHEMA_RESET") == "1":
-        reset_schema(os.environ["DATABASE_URL"])
+        reset_schema(os.environ["DATABASE_URL"], allow_targeted=True)
     else:
         command.downgrade(config, "base")
     command.upgrade(config, os.environ.get("AUTOTRADER_TEST_MIGRATION_TARGET", "head"))
