@@ -252,7 +252,10 @@ async def test_tradeable_decision_persists_signal_indicator_and_decision_once() 
         DavidV6DecisionRow,
         DavidV6IndicatorRow,
     ]
-    assert session.flush_count == 1
+    # The decision points at the signal and neither model carries a
+    # relationship, so the signal is flushed on its own before the row that
+    # references it. Two flushes, in that order, is the guarantee.
+    assert session.flush_count == 2
 
 
 @pytest.mark.asyncio

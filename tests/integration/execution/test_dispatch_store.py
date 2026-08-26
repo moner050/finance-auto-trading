@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid7
 
 import pytest
+from integration.execution.test_order_command_idempotency import _seed
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -30,7 +31,6 @@ from autotrader.persistence.mysql.models.orders import (
     PersistedOrderCommand,
 )
 from autotrader.persistence.mysql.repositories.orders import MySqlOrderStore
-from tests.integration.execution.test_order_command_idempotency import _seed
 
 NOW = datetime(2026, 8, 9, tzinfo=UTC)
 

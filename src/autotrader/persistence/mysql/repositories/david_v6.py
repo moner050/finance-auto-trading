@@ -202,6 +202,9 @@ class DavidV6Repository:
                     signal_hash=digest,
                 )
             )
+            # The decision row points at this signal and the models carry no
+            # relationship, so the unit of work cannot order the two inserts.
+            await self._session.flush()
 
         row = DavidV6DecisionRow(
             id=decision.id,
