@@ -143,32 +143,37 @@ exhaustion confirmed, zones 3개
 조립 → 지표 파생 → `evaluate_v6`까지 이어져 결정이 나오는 것을 테스트로 고정했다.
 신규 테스트 19건.
 
-## Phase 2 — 매매 루프 데몬 (Paper 전용)
+## Phase 2 — 매매 루프 데몬 (Paper 전용) — 진행 중
 
-**작업**
+**끝난 것**
 
-- `src/autotrader/apps/trader/` 신설. 시장별 async 루프 하나씩, 각자의 주기로 돈다.
-- 한 틱의 흐름:
-  1. `ops_trading_control` 확인 → DISARMED면 즉시 중단
-  2. `ops_scheduler_lease`로 단일 인스턴스 보장
-  3. watermark 이후의 **완성봉만** 조회
-  4. Phase 1 조립기로 번들 생성
-  5. `evaluate_v6` 호출
-  6. 결정을 **항상 저장한다** — REJECT와 blocker 포함. 이게 백오피스가 보여줄 내용이다
-  7. tradeable이면 `to_strategy_decision` → `OrderIntentFactory` → `OrderService`
-     → `DispatchService`로 `InternalPaperBroker`에 제출
-- 얇은 `MySqlDispatchStore` 재작성. 제거된 870줄 버전의 권한 판정 계층은 가져오지
-  않는다. 필요한 것은 멱등한 attempt 기록과 unknown 상태 처리뿐이다.
-- 주기: KRX/US 현금은 세션 중 5분·일봉, Binance는 5분·1시간 + 5초/30초 로컬 집계.
+- **`MySqlDispatchStore`** (`3a4afb7`). 프로토콜만 있고 구현이 없어 주문을 보낼 경로가
+  아예 없었다. 얇게 다시 썼다 — 전송 전 표식과 종결 상태만 담고, 권한 판정은 커맨드
+  생성 시점에 이미 끝났으므로 가져오지 않았다. 청구는 단일 조건부 UPDATE로 한 번만
+  성립하고, 수락은 나중 보고가 덮지 못한다.
+- **틱** (`5d6e563`). 포트 뒤에 둔 다섯 단계 — DISARMED 확인 → 조립 → 평가 → **항상 기록**
+  → 거래 가능할 때만 실행. 호출자가 지표를 주장하지 못하고 증거에서 파생된다.
+- **MySQL 배선과 end-to-end** (`7bffcbc`). 완성봉이 기록된 결정에 도달하고, 거래 가능한
+  결정이 브로커 경계를 넘어 ACCEPTED로 돌아오는 것을 실제 DB에서 확인했다.
+- **비동기 페이퍼 체결** (`3a72db0`). 체결 봉은 주문 전송 시점에 아직 마감되지 않는다.
+  동기 처리는 같은 봉으로 판단하고 체결하는 look-ahead가 된다. 전송은 스테이징만 하고
+  나중 패스가 정산한다. `exec_paper_order` 신설, 구현이 없던 저널 포트 구현, KRX 페이퍼
+  바인딩 추가.
+- **스케줄 루프** (`bd16d9f`). 리스 확보 → 미해소 주문 정산 → 새 봉이 있으면 평가.
+  리스를 잃으면 아무것도 하지 않는다.
 
-**검증**
+**남은 것**
 
-- 한 세션 동안 Binance read-only + paper broker로 돌려서 결정이 쌓이는 것을 확인한다.
-- 재시작 복구: 루프를 강제 종료했다 다시 띄웠을 때 봉을 건너뛰거나 중복 주문하지 않는다.
-- DISARM 즉시성: 틱 도중 DISARMED로 바꾸면 그 틱에서 멈춘다.
+- **`ContextSource` 구현.** 루프는 `context_for(now)` 포트를 통해 다음 평가를 받는데,
+  watermark 이후의 완성봉을 실제로 읽어오는 구현이 아직 없다.
+- **`ExecutionBars` 구현.** 정산이 체결 봉을 찾는 포트도 마찬가지다.
+- **진입점.** 명령 하나로 루프를 띄우는 실행 파일.
+- **한 세션 실측.** Binance read-only + 페이퍼로 돌려 결정이 쌓이고 페이퍼 포지션이
+  열리고 닫히는 것을 확인한다.
 
-**완료 기준:** 명령 하나로 루프가 뜨고, 한 세션 뒤 DB에 결정 이력이 남아 있으며,
-paper 포지션이 전략대로 열리고 닫힌다.
+**검증 (실제 MySQL + Redis)**
+
+`1557 passed`, skip 0. ruff clean, pyright 0 errors.
 
 ---
 
