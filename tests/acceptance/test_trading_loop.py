@@ -55,8 +55,10 @@ from autotrader.integrations.brokers.paper_submitter import (
 )
 from autotrader.persistence.mysql.engine import create_engine
 from autotrader.persistence.mysql.models.david_v6 import DavidV6DecisionRow
+from autotrader.persistence.mysql.models.fills import PersistedFill
 from autotrader.persistence.mysql.models.orders import PersistedOrder
 from autotrader.persistence.mysql.models.paper import PaperOrderRow
+from autotrader.persistence.mysql.models.positions import Position
 from autotrader.strategies.david_v6.models import V6Market
 
 TTL = timedelta(minutes=5)
@@ -104,10 +106,16 @@ class _Bars:
             source_digest=b"b" * 32,
         )
 
-    async def bar_at(self, command: PaperOrderCommand) -> PaperExecutionBar | None:
+    async def bar_at(
+        self, command: PaperOrderCommand, *, now: datetime
+    ) -> PaperExecutionBar | None:
+        del now
         return self._bar(command)
 
-    async def next_bar(self, command: PaperOrderCommand) -> PaperExecutionBar | None:
+    async def next_bar(
+        self, command: PaperOrderCommand, *, now: datetime
+    ) -> PaperExecutionBar | None:
+        del now
         return self._bar(command)
 
 
@@ -133,6 +141,7 @@ def _ports(
         settlement=MySqlFillSettlement(
             sessions=sessions,  # type: ignore[arg-type]
             bars=bars,
+            account=_account(ids),
         ),
         source=_OneClosedBar(context),
         control=MySqlTradingControl(sessions),  # type: ignore[arg-type]
@@ -307,5 +316,14 @@ def test_a_paper_order_settles_on_the_next_closed_bar_exactly_once() -> None:
             # The receipt half of the row, written only once the bar closed.
             assert row.status is not None
             assert row.filled_at is not None
+            # And the whole point of settling: the ledger now says what the
+            # account holds. A fill that stops at the receipt leaves the
+            # system believing it holds nothing.
+            position = await session.scalar(select(Position))
+            assert position is not None
+            assert position.quantity == row.filled_quantity
+            assert position.instrument_id == ids.instrument_id  # type: ignore[attr-defined]
+            # One execution, however many times settlement runs.
+            assert await session.scalar(select(func.count(PersistedFill.id))) == 1
 
     _drive(scenario)

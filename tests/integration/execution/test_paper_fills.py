@@ -61,11 +61,17 @@ def _account() -> PaperAccount:
 class _NoBarYet:
     """Market data for the moment before the fill bar has closed."""
 
-    async def bar_at(self, command: PaperOrderCommand) -> PaperExecutionBar | None:
+    async def bar_at(
+        self, command: PaperOrderCommand, *, now: datetime
+    ) -> PaperExecutionBar | None:
+        del now
         del command
         return None
 
-    async def next_bar(self, command: PaperOrderCommand) -> PaperExecutionBar | None:
+    async def next_bar(
+        self, command: PaperOrderCommand, *, now: datetime
+    ) -> PaperExecutionBar | None:
+        del now
         del command
         return None
 
@@ -88,10 +94,16 @@ class _BarHasClosed:
             source_digest=b"b" * 32,
         )
 
-    async def bar_at(self, command: PaperOrderCommand) -> PaperExecutionBar | None:
+    async def bar_at(
+        self, command: PaperOrderCommand, *, now: datetime
+    ) -> PaperExecutionBar | None:
+        del now
         return self._bar(command)
 
-    async def next_bar(self, command: PaperOrderCommand) -> PaperExecutionBar | None:
+    async def next_bar(
+        self, command: PaperOrderCommand, *, now: datetime
+    ) -> PaperExecutionBar | None:
+        del now
         return self._bar(command)
 
 
@@ -154,6 +166,7 @@ def test_a_staged_order_waits_while_its_bar_has_not_closed() -> None:
                     ),
                     journal=journal,
                     bars=_NoBarYet(),
+                    now=NOW,
                 )
                 await session.commit()
 
@@ -185,6 +198,7 @@ def test_a_closed_bar_settles_the_order_once() -> None:
                     broker=InternalPaperBroker(journal=journal, market_data=bars),
                     journal=journal,
                     bars=bars,
+                    now=NOW,
                 )
                 await session.commit()
 
@@ -207,6 +221,7 @@ def test_a_closed_bar_settles_the_order_once() -> None:
                     broker=InternalPaperBroker(journal=journal, market_data=bars),
                     journal=journal,
                     bars=bars,
+                    now=NOW,
                 )
                 await session.commit()
             assert again == ()

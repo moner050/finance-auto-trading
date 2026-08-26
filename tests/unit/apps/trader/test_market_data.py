@@ -203,7 +203,9 @@ async def test_the_fill_bar_is_the_one_exactly_after_the_signal() -> None:
     signal_at = NOW - timedelta(minutes=5)
     bars = _Bars((_bar(signal_at), _bar(NOW, "101")))
 
-    execution_bar = await BinanceExecutionBars(bars).bar_at(_command(signal_at))
+    execution_bar = await BinanceExecutionBars(bars).bar_at(
+        _command(signal_at), now=NOW
+    )
 
     assert execution_bar is not None
     assert execution_bar.bar.timestamp == NOW
@@ -217,4 +219,73 @@ async def test_a_bar_that_has_not_closed_is_not_a_missing_bar() -> None:
     bars = _Bars((_bar(NOW - timedelta(minutes=5)), _bar(NOW)))
 
     # The fill bar would be NOW + 5m, which has not closed.
-    assert await BinanceExecutionBars(bars).bar_at(_command(signal_at)) is None
+    assert await BinanceExecutionBars(bars).bar_at(_command(signal_at), now=NOW) is None
+
+
+def _resting_stop(signal_at: datetime, trigger: str) -> PaperOrderCommand:
+    """A protective stop: market style, resolved by whichever bar reaches it."""
+    return PaperOrderCommand(
+        id=new_uuid7(),
+        order_id=new_uuid7(),
+        account_alias="internal-binance-usdm-paper",
+        market=V6Market.BINANCE_USDM,
+        side=Side.SELL,
+        order_style=OrderStyle.MARKET,
+        quantity=Decimal(1),
+        limit_price=None,
+        signal_at=signal_at,
+        timeframe=HLIT_TIMEFRAME,
+        fee_per_unit=Decimal("0.01"),
+        slippage_per_unit=Decimal("0.01"),
+        trigger_price=Decimal(trigger),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_stop_rests_while_no_bar_reaches_it() -> None:
+    signal_at = NOW - timedelta(minutes=10)
+    # Both later bars trade between 99 and 101, never touching 90.
+    bars = _Bars((_bar(signal_at), _bar(NOW - timedelta(minutes=5)), _bar(NOW)))
+
+    resting = await BinanceExecutionBars(bars).bar_at(
+        _resting_stop(signal_at, "90"), now=NOW
+    )
+
+    # Nothing reached the stop, which is not the same as a missing bar.
+    assert resting is None
+
+
+@pytest.mark.asyncio
+async def test_a_stop_is_resolved_by_the_first_bar_that_reaches_it() -> None:
+    signal_at = NOW - timedelta(minutes=15)
+    breached = _bar(NOW - timedelta(minutes=5), "95")
+    bars = _Bars(
+        (
+            _bar(signal_at),
+            _bar(NOW - timedelta(minutes=10)),
+            breached,
+            _bar(NOW, "94"),
+        )
+    )
+
+    resolved = await BinanceExecutionBars(bars).bar_at(
+        # The stop sits at 94.5, which only the third bar's low of 94 reaches.
+        _resting_stop(signal_at, "94.5"),
+        now=NOW,
+    )
+
+    assert resolved is not None
+    # The first bar to reach it, not the latest bar available.
+    assert resolved.bar.timestamp == breached.timestamp
+
+
+@pytest.mark.asyncio
+async def test_a_stop_is_never_resolved_by_a_bar_from_before_it_existed() -> None:
+    signal_at = NOW - timedelta(minutes=5)
+    # An earlier bar reaches the stop price, but the order did not exist yet.
+    bars = _Bars((_bar(NOW - timedelta(minutes=10), "90"), _bar(NOW)))
+
+    assert (
+        await BinanceExecutionBars(bars).bar_at(_resting_stop(signal_at, "90"), now=NOW)
+        is None
+    )

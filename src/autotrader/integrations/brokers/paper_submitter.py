@@ -47,7 +47,9 @@ class PaperJournal(Protocol):
 
 
 class ExecutionBars(Protocol):
-    async def bar_at(self, command: PaperOrderCommand) -> PaperExecutionBar | None:
+    async def bar_at(
+        self, command: PaperOrderCommand, *, now: datetime
+    ) -> PaperExecutionBar | None:
         """The bar that resolves this command, once it has closed."""
         ...
 
@@ -151,6 +153,7 @@ async def resolve_paper_fills(
     broker: InternalPaperBroker,
     journal: PaperJournal,
     bars: ExecutionBars,
+    now: datetime,
     order_id: UUID | None = None,
 ) -> tuple[PaperOrderReceipt, ...]:
     """Settle every staged command whose fill bar has now closed.
@@ -163,9 +166,9 @@ async def resolve_paper_fills(
     """
     resolved: list[PaperOrderReceipt] = []
     for command in await journal.unresolved_commands(order_id=order_id):
-        if await bars.bar_at(command) is None:
+        if await bars.bar_at(command, now=now) is None:
             continue
-        resolved.append(await broker.submit(command))
+        resolved.append(await broker.submit(command, now=now))
     return tuple(resolved)
 
 

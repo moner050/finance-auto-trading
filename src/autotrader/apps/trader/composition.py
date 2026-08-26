@@ -18,8 +18,9 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from autotrader.domain.enums import OrderStyle
+from autotrader.domain.enums import IntentType, OrderStyle, Side
 from autotrader.execution.dispatch.service import BrokerSubmitter, DispatchService
+from autotrader.execution.fills.models import ChargeLegRole
 from autotrader.execution.intents.models import (
     AccountCandidate,
     OrderIntent,
@@ -27,7 +28,14 @@ from autotrader.execution.intents.models import (
 )
 from autotrader.execution.intents.service import OrderIntentFactory
 from autotrader.execution.orders.service import OrderService, OrderSubmissionContext
-from autotrader.integrations.brokers.internal_paper import InternalPaperBroker
+from autotrader.integrations.brokers.internal_paper import (
+    InternalPaperBroker,
+    PaperOrderReceipt,
+)
+from autotrader.integrations.brokers.paper_fills import (
+    paper_broker_order_id,
+    paper_execution_event,
+)
 from autotrader.integrations.brokers.paper_submitter import (
     ExecutionBars,
     resolve_paper_fills,
@@ -39,7 +47,11 @@ from autotrader.persistence.mysql.models.intents import (
     PersistedRiskReservation,
 )
 from autotrader.persistence.mysql.models.operations import OpsTradingControl
-from autotrader.persistence.mysql.models.orders import PersistedOrderCommand
+from autotrader.persistence.mysql.models.orders import (
+    PersistedBrokerOrderLink,
+    PersistedOrder,
+    PersistedOrderCommand,
+)
 from autotrader.persistence.mysql.models.strategy import (
     StrategyFeatureSchema,
     StrategyFeatureSnapshot,
@@ -47,6 +59,7 @@ from autotrader.persistence.mysql.models.strategy import (
 )
 from autotrader.persistence.mysql.paper_journal import MySqlPaperJournal
 from autotrader.persistence.mysql.repositories.david_v6 import DavidV6Repository
+from autotrader.persistence.mysql.repositories.fills import MySqlFillStore
 from autotrader.persistence.mysql.repositories.intents import OrderIntentRepository
 from autotrader.persistence.mysql.repositories.operations import (
     RuntimeControlRepository,
@@ -409,6 +422,13 @@ class MySqlSchedulerLease:
         return lease is not None
 
 
+_LEG_ROLES = {
+    IntentType.ENTRY: ChargeLegRole.ENTRY,
+    IntentType.EXIT: ChargeLegRole.EXIT_TARGET,
+    IntentType.PROTECTIVE: ChargeLegRole.EXIT_STOP,
+}
+
+
 class MySqlFillSettlement:
     """Resolve paper orders whose fill bar has closed since the last pass."""
 
@@ -417,12 +437,14 @@ class MySqlFillSettlement:
         *,
         sessions: async_sessionmaker[AsyncSession],
         bars: ExecutionBars,
+        account: ExecutionAccount,
     ) -> None:
         self._sessions = sessions
         self._bars = bars
+        self._account = account
 
     async def settle(self, now: datetime) -> int:
-        require_utc(now)
+        moment = require_utc(now)
         async with self._sessions() as session:
             journal = MySqlPaperJournal(session)
             receipts = await resolve_paper_fills(
@@ -431,6 +453,50 @@ class MySqlFillSettlement:
                 ),
                 journal=journal,
                 bars=self._bars,
+                now=moment,
             )
+            for receipt in receipts:
+                await self._apply_to_ledger(session, receipt, moment)
             await session.commit()
         return len(receipts)
+
+    async def _apply_to_ledger(
+        self, session: AsyncSession, receipt: PaperOrderReceipt, now: datetime
+    ) -> None:
+        """Carry a settled receipt into the position ledger.
+
+        An order that fills and never reaches exec_position leaves the system
+        believing it holds nothing, and everything downstream that reads the
+        ledger — reconciliation drift, protective-stop enforcement — believes
+        it too.
+        """
+        order = await session.get(PersistedOrder, receipt.order_id)
+        if order is None:
+            raise LookupError("a settled paper order has no canonical order")
+        link = await session.scalar(
+            select(PersistedBrokerOrderLink).where(
+                PersistedBrokerOrderLink.order_id == order.id,
+                PersistedBrokerOrderLink.broker_order_id
+                == paper_broker_order_id(receipt.command_id),
+            )
+        )
+        if link is None:
+            raise LookupError("a settled paper order has no broker link")
+        intent = await session.get(PersistedOrderIntent, order.order_intent_id)
+        if intent is None:
+            raise LookupError("a settled paper order has no intent")
+        event = paper_execution_event(
+            receipt=receipt,
+            account_id=order.account_id,
+            instrument_id=order.instrument_id,
+            broker_id=link.broker_id,
+            broker_client_order_id=order.broker_client_order_id,
+            side=Side(order.side),
+            currency=self._account.currency,
+            leg_role=_LEG_ROLES[IntentType(intent.intent_type)],
+            observed_at=now,
+        )
+        if event is None:
+            # A no-fill moved nothing, so there is no execution to record.
+            return
+        await MySqlFillStore(session).apply_event_once(event)

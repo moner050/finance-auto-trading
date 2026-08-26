@@ -17,6 +17,7 @@ from uuid import UUID
 
 from autotrader.apps.trader.tick import TickContext
 from autotrader.domain.completed_ohlcv import CompletedOhlcvBar
+from autotrader.domain.enums import Side
 from autotrader.integrations.brokers.internal_paper import (
     PaperExecutionBar,
     PaperOrderCommand,
@@ -160,14 +161,31 @@ class BinanceExecutionBars:
     def __init__(self, market_data: CompletedBars) -> None:
         self._market_data = market_data
 
-    async def bar_at(self, command: PaperOrderCommand) -> PaperExecutionBar | None:
+    async def bar_at(
+        self, command: PaperOrderCommand, *, now: datetime
+    ) -> PaperExecutionBar | None:
         expected_at = require_utc(command.signal_at) + command.timeframe
-        bars = await self._market_data.completed_bars(
-            command.timeframe, expected_at + command.timeframe
-        )
-        bar = next((row for row in bars if row.timestamp == expected_at), None)
+        moment = require_utc(now)
+        if command.trigger_price is None:
+            bars = await self._market_data.completed_bars(
+                command.timeframe, expected_at + command.timeframe
+            )
+            bar = next((row for row in bars if row.timestamp == expected_at), None)
+        else:
+            # A stop rests until a bar reaches it, so the window runs to the
+            # present rather than to one known bar.
+            bars = await self._market_data.completed_bars(command.timeframe, moment)
+            bar = next(
+                (
+                    row
+                    for row in bars
+                    if row.timestamp >= expected_at
+                    and _reaches(command.side, command.trigger_price, row)
+                ),
+                None,
+            )
         if bar is None:
-            # Not closed yet, which is not the same as missing.
+            # Not closed yet, or not reached yet. Neither is a missing bar.
             return None
         return PaperExecutionBar(
             bar=bar,
@@ -175,8 +193,19 @@ class BinanceExecutionBars:
             source_digest=_digest_of(bar),
         )
 
-    async def next_bar(self, command: PaperOrderCommand) -> PaperExecutionBar | None:
-        return await self.bar_at(command)
+    async def next_bar(
+        self, command: PaperOrderCommand, *, now: datetime
+    ) -> PaperExecutionBar | None:
+        return await self.bar_at(command, now=now)
+
+
+def _reaches(side: Side, trigger: Decimal, bar: CompletedOhlcvBar) -> bool:
+    """Whether this bar traded through the stop.
+
+    A stop that exits a long sits below the price and is reached on the way
+    down; one that exits a short sits above it.
+    """
+    return bar.high >= trigger if side is Side.BUY else bar.low <= trigger
 
 
 def _digest_of(bar: CompletedOhlcvBar) -> bytes:

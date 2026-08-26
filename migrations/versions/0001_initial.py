@@ -522,6 +522,7 @@ _CREATE: tuple[str, ...] = (
     order_style VARCHAR(16) NOT NULL,
     quantity NUMERIC(38, 18) NOT NULL,
     limit_price NUMERIC(38, 18),
+    trigger_price NUMERIC(38, 18),
     signal_at DATETIME NOT NULL,
     timeframe_seconds BIGINT NOT NULL,
     fee_per_unit NUMERIC(38, 18) NOT NULL,

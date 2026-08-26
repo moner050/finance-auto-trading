@@ -25,7 +25,10 @@ class _MarketData:
         self.execution_bar = execution_bar
         self.calls = 0
 
-    async def next_bar(self, command: PaperOrderCommand) -> PaperExecutionBar | None:
+    async def next_bar(
+        self, command: PaperOrderCommand, *, now: datetime
+    ) -> PaperExecutionBar | None:
+        del now
         del command
         self.calls += 1
         return self.execution_bar
@@ -128,7 +131,7 @@ async def test_exact_next_bar_fill_applies_fees_and_adverse_slippage() -> None:
     broker = InternalPaperBroker(journal=journal, market_data=_MarketData(_bar()))
     command = _command()
 
-    receipt = await broker.submit(command)
+    receipt = await broker.submit(command, now=NOW)
     state = await broker.reconcile(command.order_id)
 
     assert receipt.status is PaperOrderStatus.FILLED
@@ -148,7 +151,7 @@ async def test_later_bar_is_no_fill_and_is_never_substituted() -> None:
         market_data=_MarketData(_bar(timestamp=NOW + timedelta(minutes=2))),
     )
 
-    receipt = await broker.submit(_command())
+    receipt = await broker.submit(_command(), now=NOW)
 
     assert receipt.status is PaperOrderStatus.NO_FILL
     assert receipt.reason_code == "MISSING_EXACT_NEXT_BAR"
@@ -162,7 +165,7 @@ async def test_partial_fill_uses_only_available_next_bar_liquidity() -> None:
         market_data=_MarketData(_bar(available_quantity=Decimal("0.75"))),
     )
 
-    receipt = await broker.submit(_command(quantity=Decimal("2")))
+    receipt = await broker.submit(_command(quantity=Decimal("2")), now=NOW)
 
     assert receipt.status is PaperOrderStatus.PARTIALLY_FILLED
     assert receipt.filled_quantity == Decimal("0.75")
@@ -176,8 +179,8 @@ async def test_duplicate_command_id_reuses_one_persisted_receipt() -> None:
     broker = InternalPaperBroker(journal=journal, market_data=market_data)
     command = _command()
 
-    first = await broker.submit(command)
-    second = await broker.submit(command)
+    first = await broker.submit(command, now=NOW)
+    second = await broker.submit(command, now=NOW)
 
     assert second == first
     assert market_data.calls == 1
@@ -189,10 +192,10 @@ async def test_duplicate_command_id_with_changed_payload_is_rejected() -> None:
     journal = _Journal()
     broker = InternalPaperBroker(journal=journal, market_data=_MarketData(_bar()))
     command = _command()
-    await broker.submit(command)
+    await broker.submit(command, now=NOW)
 
     with pytest.raises(ValueError, match="identity payload collision"):
-        await broker.submit(_command(id=command.id, quantity=Decimal("3")))
+        await broker.submit(_command(id=command.id, quantity=Decimal("3")), now=NOW)
 
 
 def test_internal_adapter_exposes_no_live_provider_transport() -> None:
@@ -200,3 +203,62 @@ def test_internal_adapter_exposes_no_live_provider_transport() -> None:
 
     assert not hasattr(broker, "transport")
     assert not hasattr(broker, "provider_client")
+
+
+@pytest.mark.asyncio
+async def test_a_stop_fills_at_its_trigger_when_the_bar_crossed_it_midway() -> None:
+    """The bar opened at 101 and fell to 99, so a stop at 100 was reached
+    partway through. Filling at the open would report 101, a price the market
+    never offered to a seller once the stop had triggered."""
+    journal = _Journal()
+    broker = InternalPaperBroker(journal=journal, market_data=_MarketData(_bar()))
+
+    receipt = await broker.submit(
+        _command(side=Side.SELL, trigger_price=Decimal("100")), now=NOW
+    )
+
+    assert receipt.status is PaperOrderStatus.FILLED
+    assert receipt.fill_price == Decimal("100") - Decimal("0.1")
+
+
+@pytest.mark.asyncio
+async def test_a_stop_fills_at_the_open_when_the_bar_gapped_past_it() -> None:
+    """A gap does not hand the seller the stop price. The open is the first
+    price anyone could actually have traded at."""
+    journal = _Journal()
+    broker = InternalPaperBroker(journal=journal, market_data=_MarketData(_bar()))
+
+    receipt = await broker.submit(
+        # The bar opens at 101, already below a stop of 110.
+        _command(side=Side.SELL, trigger_price=Decimal("110")),
+        now=NOW,
+    )
+
+    assert receipt.fill_price == Decimal("101") - Decimal("0.1")
+
+
+@pytest.mark.asyncio
+async def test_a_stop_is_resolved_by_a_later_bar_unlike_a_one_shot_order() -> None:
+    journal = _Journal()
+    late = _bar(timestamp=NOW + timedelta(minutes=5))
+    broker = InternalPaperBroker(journal=journal, market_data=_MarketData(late))
+
+    resting = await broker.submit(
+        _command(side=Side.SELL, trigger_price=Decimal("100")), now=NOW
+    )
+    one_shot = await broker.submit(_command(side=Side.SELL), now=NOW)
+
+    # A stop waits for whichever bar reaches it.
+    assert resting.status is PaperOrderStatus.FILLED
+    # A one-shot order is settled by its own bar and by no other.
+    assert one_shot.status is PaperOrderStatus.NO_FILL
+    assert one_shot.reason_code == "MISSING_EXACT_NEXT_BAR"
+
+
+def test_a_stop_limit_is_refused_rather_than_half_modelled() -> None:
+    with pytest.raises(ValueError, match="triggered order must be a market order"):
+        _command(
+            order_style=OrderStyle.LIMIT,
+            limit_price=Decimal("100"),
+            trigger_price=Decimal("99"),
+        )

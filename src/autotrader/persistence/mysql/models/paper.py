@@ -79,6 +79,10 @@ class PaperOrderRow(CoreBase):
     order_style: Mapped[str] = mapped_column(String(16), nullable=False)
     quantity: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     limit_price: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    # A protective stop rests until a bar reaches this price.
+    trigger_price: Mapped[Decimal | None] = mapped_column(
+        Numeric(38, 18), nullable=True
+    )
     signal_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
     timeframe_seconds: Mapped[int] = mapped_column(BigInteger(), nullable=False)
     fee_per_unit: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)

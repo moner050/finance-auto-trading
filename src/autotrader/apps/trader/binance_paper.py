@@ -194,7 +194,7 @@ def build_ports(
 
     return LoopPorts(
         lease=MySqlSchedulerLease(sessions, lease),
-        settlement=MySqlFillSettlement(sessions=sessions, bars=bars),
+        settlement=MySqlFillSettlement(sessions=sessions, bars=bars, account=account),
         source=BinanceContextSource(
             market_data=market_data,
             inputs=inputs,
