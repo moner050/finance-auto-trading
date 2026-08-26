@@ -124,6 +124,10 @@ class PersistedOrderIntent(CoreBase):
     order_style: Mapped[str] = mapped_column(String(16), nullable=False)
     requested_quantity: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     limit_price: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    # A protective stop rests until the market reaches this price.
+    trigger_price: Mapped[Decimal | None] = mapped_column(
+        Numeric(38, 18), nullable=True
+    )
     strategy_signal_id: Mapped[UUID | None] = mapped_column(UuidBinary(), nullable=True)
     legacy_strategy_link_id: Mapped[UUID | None] = mapped_column(
         UuidBinary(), nullable=True

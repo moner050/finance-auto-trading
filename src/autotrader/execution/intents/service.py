@@ -172,7 +172,10 @@ class OrderIntentFactory:
             terms.limit_price is None or require_decimal(terms.limit_price) <= 0
         ):
             raise ValueError("positive limit price is required")
-        if order_style is OrderStyle.MARKET:
+        if order_style is OrderStyle.MARKET and terms.trigger_price is None:
+            # A market order goes to the market now, so the price it will get
+            # has to be known now. A stop does not: it waits, and its trigger
+            # is the price that decides when it stops waiting.
             if quote is None or not quote.fresh:
                 raise ValueError("fresh side-specific quote is required")
             side_quote = quote.ask if side is Side.BUY else quote.bid
@@ -189,6 +192,7 @@ class OrderIntentFactory:
             quantity=approved,
             limit_price=terms.limit_price,
             idempotency_key=OrderIntentFactory.identity(origin, source_id, account.id),
+            trigger_price=terms.trigger_price,
         )
 
     @staticmethod

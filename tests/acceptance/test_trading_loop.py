@@ -45,6 +45,7 @@ from autotrader.apps.trader.market_data import HLIT_TIMEFRAME
 from autotrader.apps.trader.tick import DISARMED, SUBMITTED, TickContext
 from autotrader.config.settings import Settings
 from autotrader.domain.completed_ohlcv import CompletedOhlcvBar
+from autotrader.domain.enums import IntentType
 from autotrader.integrations.brokers.internal_paper import (
     PaperExecutionBar,
     PaperOrderCommand,
@@ -56,7 +57,11 @@ from autotrader.integrations.brokers.paper_submitter import (
 from autotrader.persistence.mysql.engine import create_engine
 from autotrader.persistence.mysql.models.david_v6 import DavidV6DecisionRow
 from autotrader.persistence.mysql.models.fills import PersistedFill
-from autotrader.persistence.mysql.models.orders import PersistedOrder
+from autotrader.persistence.mysql.models.intents import PersistedOrderIntent
+from autotrader.persistence.mysql.models.orders import (
+    PersistedOrder,
+    PersistedOrderCommand,
+)
 from autotrader.persistence.mysql.models.paper import PaperOrderRow
 from autotrader.persistence.mysql.models.positions import Position
 from autotrader.strategies.david_v6.models import V6Market
@@ -84,15 +89,23 @@ class _OneClosedBar:
 
 
 class _Bars:
-    """The fill bar, once the scenario says it has closed."""
+    """The fill bar, once the scenario says it has closed.
+
+    A resting stop is a separate question from a closed bar: it is resolved by
+    whichever bar reaches its trigger, and until the scenario says one did, it
+    keeps waiting the way it would against real prices.
+    """
 
     def __init__(self) -> None:
         self.closed = False
+        self.stop_reached = False
 
     def _bar(self, command: PaperOrderCommand) -> PaperExecutionBar | None:
         if not self.closed:
             return None
-        centre = command.limit_price or Decimal("100")
+        if command.trigger_price is not None and not self.stop_reached:
+            return None
+        centre = command.trigger_price or command.limit_price or Decimal("100")
         return PaperExecutionBar(
             bar=CompletedOhlcvBar(
                 timestamp=command.signal_at + command.timeframe,
@@ -129,6 +142,16 @@ def _ports(
     runtime_instance_id: UUID | None = None,
 ) -> LoopPorts:
     """The loop wired to the real adapters, the way the driver wires them."""
+    submitter = PaperBrokerSubmitter(
+        journal=SessionPaperJournal(sessions),  # type: ignore[arg-type]
+        account=PaperAccount(
+            account_alias="internal-us-paper",
+            market=V6Market.US_CASH,
+            timeframe=HLIT_TIMEFRAME,
+            fee_per_unit=Decimal("0.01"),
+            slippage_per_unit=Decimal("0.01"),
+        ),
+    )
     return LoopPorts(
         lease=MySqlSchedulerLease(
             sessions,  # type: ignore[arg-type]
@@ -142,6 +165,7 @@ def _ports(
             sessions=sessions,  # type: ignore[arg-type]
             bars=bars,
             account=_account(ids),
+            broker=submitter,
         ),
         source=_OneClosedBar(context),
         control=MySqlTradingControl(sessions),  # type: ignore[arg-type]
@@ -149,16 +173,7 @@ def _ports(
         execution=MySqlPaperExecution(
             sessions=sessions,  # type: ignore[arg-type]
             account=_account(ids),
-            broker=PaperBrokerSubmitter(
-                journal=SessionPaperJournal(sessions),  # type: ignore[arg-type]
-                account=PaperAccount(
-                    account_alias="internal-us-paper",
-                    market=V6Market.US_CASH,
-                    timeframe=HLIT_TIMEFRAME,
-                    fee_per_unit=Decimal("0.01"),
-                    slippage_per_unit=Decimal("0.01"),
-                ),
-            ),
+            broker=submitter,
         ),
     )
 
@@ -325,5 +340,110 @@ def test_a_paper_order_settles_on_the_next_closed_bar_exactly_once() -> None:
             assert position.instrument_id == ids.instrument_id  # type: ignore[attr-defined]
             # One execution, however many times settlement runs.
             assert await session.scalar(select(func.count(PersistedFill.id))) == 1
+
+    _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_a_filled_entry_leaves_a_stop_behind_it() -> None:
+    """A position with nothing behind it is the one state this must not sit
+    in. Section 9.2 named the stop when the decision was made; the fill is
+    what turns it into an order."""
+
+    async def scenario(sessions: async_sessionmaker[object]) -> None:
+        ids = await _risk_seed(sessions)
+        await _arm(sessions, armed=True)
+        manifest = await _register_strategy(sessions, uuid7())
+        bars = _Bars()
+        ports = _ports(
+            sessions,
+            context=_context(manifest, ids.instrument_id),  # type: ignore[attr-defined]
+            ids=ids,
+            bars=bars,
+            lease_name=f"acceptance:{uuid7().hex[:12]}",
+        )
+
+        entry = await run_pass(now=NOW, ports=ports)
+        assert entry.reason == SUBMITTED
+        bars.closed = True
+        assert (await run_pass(now=NOW + HLIT_TIMEFRAME, ports=ports)).settled == 1
+
+        async with sessions() as session:  # type: ignore[operator]
+            decision = await session.scalar(select(DavidV6DecisionRow))
+            assert decision is not None
+            protection = await session.scalar(
+                select(PersistedOrderIntent).where(
+                    PersistedOrderIntent.intent_type == IntentType.PROTECTIVE.value
+                )
+            )
+            assert protection is not None
+            assert protection.protection_reason_code == "STRUCTURAL_STOP"
+            # It closes the position rather than adding to it.
+            assert protection.side != decision.side
+            order = await session.scalar(
+                select(PersistedOrder).where(
+                    PersistedOrder.order_intent_id == protection.id
+                )
+            )
+            assert order is not None
+            # The price the strategy named, not one invented at fill time.
+            assert order.trigger_price == decision.structural_stop
+            command = await session.scalar(
+                select(PersistedOrderCommand).where(
+                    PersistedOrderCommand.order_id == order.id
+                )
+            )
+            assert command is not None
+            assert command.authority_class == "SUBMIT_STRICT_REDUCTION"
+            # And it reached the broker, so it is resting rather than pending.
+            assert command.result_state == "ACCEPTED"
+
+    _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_a_stop_that_is_reached_closes_the_position() -> None:
+    """The stop only means something if it fires. A bar reaching it has to
+    take the position back to flat, and must not then be protected in turn."""
+
+    async def scenario(sessions: async_sessionmaker[object]) -> None:
+        ids = await _risk_seed(sessions)
+        await _arm(sessions, armed=True)
+        manifest = await _register_strategy(sessions, uuid7())
+        bars = _Bars()
+        ports = _ports(
+            sessions,
+            context=_context(manifest, ids.instrument_id),  # type: ignore[attr-defined]
+            ids=ids,
+            bars=bars,
+            lease_name=f"acceptance:{uuid7().hex[:12]}",
+        )
+
+        assert (await run_pass(now=NOW, ports=ports)).reason == SUBMITTED
+        bars.closed = True
+        assert (await run_pass(now=NOW + HLIT_TIMEFRAME, ports=ports)).settled == 1
+        async with sessions() as session:  # type: ignore[operator]
+            opened = await session.scalar(select(Position))
+            assert opened is not None and opened.quantity > 0
+
+        # Now a bar reaches the stop.
+        bars.stop_reached = True
+        assert (await run_pass(now=NOW + 2 * HLIT_TIMEFRAME, ports=ports)).settled == 1
+
+        async with sessions() as session:  # type: ignore[operator]
+            closed = await session.scalar(select(Position))
+            assert closed is not None
+            assert closed.quantity == 0
+            # Two executions, the entry and the stop, and no third.
+            assert await session.scalar(select(func.count(PersistedFill.id))) == 2
+            # A stop closing a position is not itself something to protect.
+            protective = await session.scalars(
+                select(PersistedOrderIntent).where(
+                    PersistedOrderIntent.intent_type == IntentType.PROTECTIVE.value
+                )
+            )
+            assert len(protective.all()) == 1
 
     _drive(scenario)

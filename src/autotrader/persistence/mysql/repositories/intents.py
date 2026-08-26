@@ -38,6 +38,7 @@ class OrderIntentRepository:
                 order_style=intent.order_style,
                 requested_quantity=intent.requested_quantity,
                 limit_price=intent.limit_price,
+                trigger_price=intent.trigger_price,
                 strategy_signal_id=intent.strategy_signal_id,
                 legacy_strategy_link_id=intent.legacy_strategy_link_id,
                 protection_position_id=intent.protection_position_id,

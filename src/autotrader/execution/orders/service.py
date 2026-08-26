@@ -45,6 +45,10 @@ class OrderSubmissionContext:
             raise ValueError("time_in_force and authority_class are required")
 
 
+NEW_EXPOSURE = "SUBMIT_NEW_EXPOSURE"
+STRICT_REDUCTION = "SUBMIT_STRICT_REDUCTION"
+
+
 class OrderCommandFactory:
     def create(
         self,
@@ -57,8 +61,8 @@ class OrderCommandFactory:
     ) -> BrokerOrderCommand:
         allowed_authorities = {
             CommandType.SUBMIT: {
-                "SUBMIT_NEW_EXPOSURE",
-                "SUBMIT_STRICT_REDUCTION",
+                NEW_EXPOSURE,
+                STRICT_REDUCTION,
             },
             CommandType.CANCEL: {"CANCEL"},
             CommandType.REPLACE: {"REPLACE_NON_INCREASING"},
@@ -88,6 +92,9 @@ class OrderCommandFactory:
             "target_broker_order_id": target_broker_order_id,
             "target_aggregate_version": target_version,
             "time_in_force": submission.time_in_force,
+            "trigger_price": (
+                str(order.trigger_price) if order.trigger_price else None
+            ),
         }
         canonical_bytes = json.dumps(
             canonical_payload, sort_keys=True, separators=(",", ":")
@@ -115,6 +122,7 @@ class OrderCommandFactory:
             quantity=order.requested_quantity,
             limit_price=order.limit_price,
             time_in_force=submission.time_in_force,
+            trigger_price=order.trigger_price,
         )
 
 
@@ -140,8 +148,15 @@ class OrderService:
         intent: OrderIntent,
         submission: OrderSubmissionContext,
     ) -> Order | None:
-        if decision.outcome is not RiskOutcome.APPROVE:
+        if decision.outcome not in {RiskOutcome.APPROVE, RiskOutcome.REDUCE}:
             return None
+        # A reduction reserves no risk, so it must not be able to borrow the
+        # authority that opens exposure, and an approval must not hide behind
+        # the authority that only ever closes it.
+        if (decision.outcome is RiskOutcome.REDUCE) != (
+            submission.authority_class == STRICT_REDUCTION
+        ):
+            raise ValueError("risk outcome and command authority must agree")
         if decision.order_intent_id != intent.id:
             raise ValueError("risk decision must belong to the order intent")
         order = Order(
@@ -162,6 +177,7 @@ class OrderService:
             aggregate_version=1,
             broker_client_order_id=submission.broker_client_order_id,
             created_at=submission.created_at,
+            trigger_price=intent.trigger_price,
         )
         command = OrderCommandFactory().create(
             order=order,

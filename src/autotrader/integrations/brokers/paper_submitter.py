@@ -145,6 +145,7 @@ class PaperBrokerSubmitter:
             timeframe=self._account.timeframe,
             fee_per_unit=self._account.fee_per_unit,
             slippage_per_unit=self._account.slippage_per_unit,
+            trigger_price=command.trigger_price,
         )
 
 

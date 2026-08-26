@@ -81,6 +81,7 @@ class OrderRepository:
                 "order_style",
                 "requested_quantity",
                 "limit_price",
+                "trigger_price",
             )
         ):
             raise OrderIdentityCollisionError("order intent identity payload collision")
@@ -256,6 +257,7 @@ class MySqlOrderStore:
                 requested_quantity=order.requested_quantity,
                 filled_quantity=0,
                 limit_price=order.limit_price,
+                trigger_price=order.trigger_price,
                 status=order.status.value,
                 aggregate_version=order.aggregate_version,
                 created_at=order.created_at,
@@ -307,6 +309,7 @@ class MySqlOrderStore:
                 order_style=canonical_command.order_style.value,
                 quantity=canonical_command.quantity,
                 limit_price=canonical_command.limit_price,
+                trigger_price=canonical_command.trigger_price,
                 time_in_force=canonical_command.time_in_force,
                 status=canonical_command.status,
                 dispatch_attempted_at=None,
@@ -348,6 +351,7 @@ class MySqlOrderStore:
             order_style=OrderStyle(order.order_style),
             requested_quantity=order.requested_quantity,
             limit_price=order.limit_price,
+            trigger_price=order.trigger_price,
             status=OrderStatus(order.status),
             aggregate_version=order.aggregate_version,
             broker_client_order_id=order.broker_client_order_id,

@@ -24,10 +24,16 @@ from autotrader.execution.fills.models import ChargeLegRole
 from autotrader.execution.intents.models import (
     AccountCandidate,
     OrderIntent,
+    OrderTerms,
+    ProtectionRequest,
     SizingApproved,
 )
 from autotrader.execution.intents.service import OrderIntentFactory
-from autotrader.execution.orders.service import OrderService, OrderSubmissionContext
+from autotrader.execution.orders.service import (
+    STRICT_REDUCTION,
+    OrderService,
+    OrderSubmissionContext,
+)
 from autotrader.integrations.brokers.internal_paper import (
     InternalPaperBroker,
     PaperOrderReceipt,
@@ -41,6 +47,7 @@ from autotrader.integrations.brokers.paper_submitter import (
     resolve_paper_fills,
 )
 from autotrader.persistence.mysql.dispatch_store import MySqlDispatchStore
+from autotrader.persistence.mysql.models.david_v6 import DavidV6DecisionRow
 from autotrader.persistence.mysql.models.intents import (
     PersistedOrderIntent,
     PersistedRiskDecision,
@@ -52,6 +59,7 @@ from autotrader.persistence.mysql.models.orders import (
     PersistedOrder,
     PersistedOrderCommand,
 )
+from autotrader.persistence.mysql.models.positions import Position
 from autotrader.persistence.mysql.models.strategy import (
     StrategyFeatureSchema,
     StrategyFeatureSnapshot,
@@ -261,6 +269,117 @@ class MySqlPaperExecution:
             )
 
 
+STRUCTURAL_STOP = "STRUCTURAL_STOP"
+
+
+@dataclass(frozen=True, slots=True)
+class _ProtectionPlan:
+    """Everything the stop needs, read back from what the entry left behind."""
+
+    position_id: UUID
+    instrument_id: UUID
+    entry_side: Side
+    quantity: Decimal
+    structural_stop: Decimal
+
+
+async def _protection_plan(
+    session: AsyncSession, receipt: PaperOrderReceipt
+) -> _ProtectionPlan | None:
+    order = await session.get(PersistedOrder, receipt.order_id)
+    if order is None:
+        raise LookupError("a settled paper order has no canonical order")
+    intent = await session.get(PersistedOrderIntent, order.order_intent_id)
+    if intent is None:
+        raise LookupError("a settled paper order has no intent")
+    if IntentType(intent.intent_type) is not IntentType.ENTRY:
+        # Only an entry opens exposure, so only an entry needs a stop behind
+        # it. A protective fill closing one does not need protecting.
+        return None
+    if intent.strategy_signal_id is None:
+        raise ValueError("an entry has no strategy signal to read a stop from")
+    stop = await session.scalar(
+        select(DavidV6DecisionRow.structural_stop).where(
+            DavidV6DecisionRow.strategy_signal_id == intent.strategy_signal_id
+        )
+    )
+    if stop is None:
+        # The decision that opened this position named a stop, or it was never
+        # tradeable. Either way, guessing one here would invent a risk limit
+        # the strategy never agreed to.
+        raise ValueError("a filled entry has no recorded structural stop")
+    position = await session.scalar(
+        select(Position).where(
+            Position.account_id == order.account_id,
+            Position.instrument_id == order.instrument_id,
+        )
+    )
+    if position is None:
+        raise LookupError("a settled entry left no position to protect")
+    return _ProtectionPlan(
+        position_id=position.id,
+        instrument_id=order.instrument_id,
+        entry_side=Side(order.side),
+        quantity=receipt.filled_quantity,
+        structural_stop=stop,
+    )
+
+
+def _protection_intent(
+    intent: OrderIntent, plan: _ProtectionPlan, now: datetime
+) -> PersistedOrderIntent:
+    row = _persisted_intent(intent, plan.position_id, now)
+    # The stop is owed to a position, not to a signal, and the row records
+    # which one so an operator can see what it is protecting.
+    row.strategy_signal_id = None
+    row.protection_position_id = plan.position_id
+    row.protection_reason_code = STRUCTURAL_STOP
+    return row
+
+
+def _reduction_decision(
+    *,
+    intent_id: UUID,
+    quantity: Decimal,
+    account: ExecutionAccount,
+    now: datetime,
+) -> PersistedRiskDecision:
+    """A stop closes exposure, so it reserves nothing."""
+    return PersistedRiskDecision(
+        id=new_uuid7(),
+        order_intent_id=intent_id,
+        policy_version_id=account.policy_version_id,
+        risk_snapshot_id=account.risk_snapshot_id,
+        outcome="REDUCE",
+        requested_quantity=quantity,
+        approved_quantity=quantity,
+        approved_limit_price=None,
+        reserved_risk_amount=Decimal(0),
+        currency=account.currency,
+        reason_codes=[STRUCTURAL_STOP],
+        decision_hash=_digest(f"stop:{intent_id.hex}"),
+        decided_at=now,
+    )
+
+
+def _consumed_reservation(
+    decision: PersistedRiskDecision, account_id: UUID, now: datetime
+) -> PersistedRiskReservation:
+    return PersistedRiskReservation(
+        id=new_uuid7(),
+        risk_decision_id=decision.id,
+        order_intent_id=decision.order_intent_id,
+        account_id=account_id,
+        initial_risk_amount=Decimal(0),
+        consumed_risk_amount=Decimal(0),
+        remaining_risk_amount=Decimal(0),
+        released_risk_amount=Decimal(0),
+        status="CONSUMED",
+        expires_at=now + _RESERVATION_WINDOW,
+        release_reason=None,
+    )
+
+
 def _digest(value: str) -> bytes:
     return hashlib.sha256(value.encode("utf-8")).digest()
 
@@ -438,10 +557,12 @@ class MySqlFillSettlement:
         sessions: async_sessionmaker[AsyncSession],
         bars: ExecutionBars,
         account: ExecutionAccount,
+        broker: BrokerSubmitter,
     ) -> None:
         self._sessions = sessions
         self._bars = bars
         self._account = account
+        self._broker = broker
 
     async def settle(self, now: datetime) -> int:
         moment = require_utc(now)
@@ -458,7 +579,99 @@ class MySqlFillSettlement:
             for receipt in receipts:
                 await self._apply_to_ledger(session, receipt, moment)
             await session.commit()
+        # The protective order is placed against a committed position, and
+        # dispatched against a committed command, for the same reason the entry
+        # is: the broker is reached from a second connection, which cannot see
+        # an open transaction.
+        for receipt in receipts:
+            await self._protect(receipt, moment)
         return len(receipts)
+
+    async def _protect(self, receipt: PaperOrderReceipt, now: datetime) -> None:
+        """Place the stop the decision named, now that the entry has filled.
+
+        Section 9.2 puts the stop outside the confirmed low or high of the leg,
+        and the decision recorded that price when it was made. A filled entry
+        with no stop behind it is the one state this system must not sit in.
+        """
+        if receipt.filled_quantity <= 0:
+            return
+        async with self._sessions() as session:
+            plan = await _protection_plan(session, receipt)
+            if plan is None:
+                return
+            command_id = await self._create_protective_order(session, plan, now)
+            await session.commit()
+        if command_id is None:
+            return
+        async with self._sessions() as session:
+            await DispatchService(
+                store=MySqlDispatchStore(session), broker=self._broker
+            ).dispatch(command_id=command_id, now=now)
+            await session.commit()
+
+    async def _create_protective_order(
+        self, session: AsyncSession, plan: _ProtectionPlan, now: datetime
+    ) -> UUID | None:
+        intent = OrderIntentFactory().from_protection(
+            account=self._account.account,
+            request=ProtectionRequest(
+                locked_position_id=plan.position_id,
+                reason_code=STRUCTURAL_STOP,
+                instrument_id=plan.instrument_id,
+                intent_type=IntentType.PROTECTIVE,
+                side=Side.SELL if plan.entry_side is Side.BUY else Side.BUY,
+                order_style=OrderStyle.MARKET,
+                terms=OrderTerms(
+                    requested_quantity=plan.quantity,
+                    limit_price=None,
+                    trigger_price=plan.structural_stop,
+                ),
+            ),
+        )
+        stored = await OrderIntentRepository(session).create_or_get(
+            _protection_intent(intent, plan, now)
+        )
+        risk_decision = _reduction_decision(
+            intent_id=stored.id,
+            quantity=plan.quantity,
+            account=self._account,
+            now=now,
+        )
+        await RiskReservationService(
+            uow=cast(RiskReservationUow, MySqlRiskReservationUow(session))
+        ).persist_approval(
+            decision=cast(RiskDecisionRecord, risk_decision),
+            reservation=cast(
+                RiskReservationRecord,
+                _consumed_reservation(risk_decision, self._account.account.id, now),
+            ),
+            account_id=self._account.account.id,
+            currency=self._account.currency,
+        )
+        order = await OrderService(
+            store=MySqlOrderStore(session)
+        ).create_from_risk_decision(
+            decision=_domain_decision(risk_decision, stored.id),
+            intent=intent,
+            submission=OrderSubmissionContext(
+                broker_client_order_id=f"stop-{stored.id.hex}",
+                owner_runtime_instance_id=self._account.runtime_instance_id,
+                fencing_token=self._account.fencing_token,
+                not_after=now + _RESERVATION_WINDOW,
+                time_in_force="GTC",
+                authority_class=STRICT_REDUCTION,
+                created_at=now,
+            ),
+        )
+        if order is None:
+            return None
+        await session.flush()
+        return await session.scalar(
+            select(PersistedOrderCommand.id).where(
+                PersistedOrderCommand.order_id == order.id
+            )
+        )
 
     async def _apply_to_ledger(
         self, session: AsyncSession, receipt: PaperOrderReceipt, now: datetime

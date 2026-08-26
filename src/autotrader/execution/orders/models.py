@@ -68,6 +68,7 @@ class Order:
     aggregate_version: int
     broker_client_order_id: str
     created_at: datetime
+    trigger_price: Decimal | None = None
 
     def __post_init__(self) -> None:
         quantity = require_decimal(self.requested_quantity)
@@ -79,6 +80,11 @@ class Order:
                 raise ValueError("limit order requires a positive limit price")
         elif self.limit_price is not None:
             raise ValueError("market order cannot carry a limit price")
+        if self.trigger_price is not None:
+            if self.order_style is not OrderStyle.MARKET:
+                raise ValueError("a triggered order must be a market order")
+            if require_decimal(self.trigger_price) <= 0:
+                raise ValueError("trigger_price must be positive")
         if self.aggregate_version < 0:
             raise ValueError("aggregate version must be non-negative")
 
@@ -176,5 +182,6 @@ class BrokerOrderCommand:
     quantity: Decimal
     limit_price: Decimal | None
     time_in_force: str
+    trigger_price: Decimal | None = None
     status: str = "PENDING"
     dispatch_attempted_at: datetime | None = None

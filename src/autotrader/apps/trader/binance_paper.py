@@ -192,9 +192,17 @@ def build_ports(
         slippage_per_unit=budget.spread,
     )
 
+    # One broker for both halves: the entry goes through it, and so does the
+    # stop that settlement places once the entry fills.
+    submitter = PaperBrokerSubmitter(
+        journal=SessionPaperJournal(sessions), account=paper
+    )
+
     return LoopPorts(
         lease=MySqlSchedulerLease(sessions, lease),
-        settlement=MySqlFillSettlement(sessions=sessions, bars=bars, account=account),
+        settlement=MySqlFillSettlement(
+            sessions=sessions, bars=bars, account=account, broker=submitter
+        ),
         source=BinanceContextSource(
             market_data=market_data,
             inputs=inputs,
@@ -203,11 +211,7 @@ def build_ports(
         control=MySqlTradingControl(sessions),
         recorder=MySqlDecisionRecorder(sessions),
         execution=MySqlPaperExecution(
-            sessions=sessions,
-            account=account,
-            broker=PaperBrokerSubmitter(
-                journal=SessionPaperJournal(sessions), account=paper
-            ),
+            sessions=sessions, account=account, broker=submitter
         ),
     )
 

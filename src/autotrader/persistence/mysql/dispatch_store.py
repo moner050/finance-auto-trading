@@ -194,6 +194,7 @@ def _to_command(row: PersistedOrderCommand) -> BrokerOrderCommand:
         order_style=OrderStyle(row.order_style),
         quantity=row.quantity,
         limit_price=row.limit_price,
+        trigger_price=row.trigger_price,
         time_in_force=row.time_in_force,
         status=row.status,
         dispatch_attempted_at=(

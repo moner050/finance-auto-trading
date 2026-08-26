@@ -76,6 +76,10 @@ class PersistedOrder(CoreBase):
     requested_quantity: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     filled_quantity: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     limit_price: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    # A protective stop rests until the market reaches this price.
+    trigger_price: Mapped[Decimal | None] = mapped_column(
+        Numeric(38, 18), nullable=True
+    )
     status: Mapped[str] = mapped_column(String(24), nullable=False)
     aggregate_version: Mapped[int] = mapped_column(BigInteger(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
@@ -176,6 +180,10 @@ class PersistedOrderCommand(CoreBase):
     order_style: Mapped[str] = mapped_column(String(16), nullable=False)
     quantity: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     limit_price: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    # A protective stop rests until the market reaches this price.
+    trigger_price: Mapped[Decimal | None] = mapped_column(
+        Numeric(38, 18), nullable=True
+    )
     time_in_force: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False)
     dispatch_attempted_at: Mapped[datetime | None] = mapped_column(

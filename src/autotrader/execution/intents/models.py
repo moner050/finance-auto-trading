@@ -6,6 +6,7 @@ from enum import StrEnum
 from uuid import UUID
 
 from autotrader.domain.enums import IntentType, OrderStyle, Side
+from autotrader.shared.decimal import require_decimal
 from autotrader.shared.ids import new_uuid7
 
 
@@ -55,6 +56,8 @@ class MarketQuote:
 class OrderTerms:
     requested_quantity: Decimal
     limit_price: Decimal | None
+    # A protective stop rests until the market reaches this price.
+    trigger_price: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +73,18 @@ class OrderIntent:
     limit_price: Decimal | None
     idempotency_key: str
     id: UUID = field(default_factory=new_uuid7)
+    trigger_price: Decimal | None = None
+
+    def __post_init__(self) -> None:
+        if self.trigger_price is None:
+            return
+        # A stop-limit fails to fill in its own way, and the paper broker
+        # refuses one for that reason. Accepting it here would let an order
+        # exist that no broker in this system can carry.
+        if self.order_style is not OrderStyle.MARKET:
+            raise ValueError("a triggered intent must be a market order")
+        if require_decimal(self.trigger_price) <= 0:
+            raise ValueError("trigger_price must be positive")
 
 
 @dataclass(frozen=True, slots=True)
