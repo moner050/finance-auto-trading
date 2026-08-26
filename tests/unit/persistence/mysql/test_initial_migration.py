@@ -73,19 +73,28 @@ def test_it_is_the_only_revision() -> None:
     assert versions == ["0001_initial.py"]
 
 
-def test_a_table_is_created_before_anything_references_it() -> None:
+def test_creation_defers_foreign_keys_because_the_schema_has_cycles() -> None:
+    """exec_order and its intent, diff and decision reference each other.
+
+    No creation order resolves every foreign key, so the migration disables the
+    checks while creating and restores them afterwards, as a dump would.
+    """
+    source = MIGRATION.read_text(encoding="utf-8")
+    upgrade = source[source.index("def upgrade()") : source.index("def downgrade()")]
+
+    assert 'op.execute("SET FOREIGN_KEY_CHECKS = 0")' in upgrade
+    assert 'op.execute("SET FOREIGN_KEY_CHECKS = 1")' in upgrade
+    assert "finally:" in upgrade
+
+
+def test_downgrade_drops_every_table_it_created() -> None:
     module = _module()
-    created: list[str] = []
-    for name in module.TABLES:
-        table = metadata.tables[name]
-        for key in sorted(
-            foreign_key._table_key() for foreign_key in table.foreign_keys
-        ):
-            # A self reference resolves within the same statement.
-            if key == name:
-                continue
-            assert key in created, f"{name} references {key} before it exists"
-        created.append(name)
+    source = MIGRATION.read_text(encoding="utf-8")
+    downgrade = source[source.index("def downgrade()") :]
+
+    assert "DROP TABLE IF EXISTS" in downgrade
+    assert 'op.execute("SET FOREIGN_KEY_CHECKS = 0")' in downgrade
+    assert set(module.TABLES) == set(metadata.tables)
 
 
 def test_no_foreign_key_points_at_a_table_that_no_longer_exists() -> None:

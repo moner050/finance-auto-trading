@@ -4,7 +4,13 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, Index, String
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    Index,
+    String,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from autotrader.persistence.mysql.models.core import CoreBase
@@ -40,6 +46,12 @@ class OpsTradingControl(CoreBase):
 
 class OpsRuntimeInstance(CoreBase):
     __tablename__ = "ops_runtime_instance"
+    __table_args__ = (
+        CheckConstraint(
+            "local_state in ('DISARMED','STANDBY')",
+            name="ck_ops_runtime_instance_state",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True, default=new_uuid7)
     local_state: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -49,6 +61,11 @@ class OpsRuntimeInstance(CoreBase):
 
 class OpsSchedulerLease(CoreBase):
     __tablename__ = "ops_scheduler_lease"
+    __table_args__ = (
+        CheckConstraint(
+            "fencing_token >= 0", name="ck_ops_scheduler_lease_fencing_token"
+        ),
+    )
 
     lease_name: Mapped[str] = mapped_column(String(64), primary_key=True)
     owner_runtime_instance_id: Mapped[UUID | None] = mapped_column(UuidBinary())

@@ -268,6 +268,14 @@ class AccountRiskPolicyBinding(CoreBase):
 class RiskSnapshot(CoreBase):
     __tablename__ = "risk_snapshot"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["account_id"], ["exec_account.id"], name="fk_risk_snapshot_account"
+        ),
+        ForeignKeyConstraint(
+            ["account_snapshot_id"],
+            ["exec_account_snapshot.id"],
+            name="fk_risk_snapshot_account_snapshot",
+        ),
         CheckConstraint(
             "(currency IS NOT NULL AND settlement_asset IS NULL) OR "
             "(currency IS NULL AND settlement_asset IS NOT NULL)",
@@ -298,6 +306,11 @@ class RiskSnapshot(CoreBase):
 class RiskBudgetAnchor(CoreBase):
     __tablename__ = "risk_budget_anchor"
     __table_args__ = (
+        CheckConstraint(
+            "(position_risk_amount >= 0) and (remaining_reservation_amount >= 0) and "
+            "(hard_limit_amount >= 0) and (row_version >= 0)",
+            name="ck_risk_budget_anchor_amounts",
+        ),
         UniqueConstraint(
             "scope_type", "scope_key", "currency", name="uq_risk_budget_anchor_scope"
         ),

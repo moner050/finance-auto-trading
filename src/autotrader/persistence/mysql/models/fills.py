@@ -9,6 +9,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    ForeignKeyConstraint,
     Numeric,
     String,
     UniqueConstraint,
@@ -23,6 +24,33 @@ from autotrader.shared.ids import new_uuid7
 class PersistedFill(CoreBase):
     __tablename__ = "exec_fill"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["account_id"],
+            ["exec_account.id"],
+            name="fk_exec_fill_account",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["broker_id"],
+            ["exec_broker.id"],
+            name="fk_exec_fill_broker",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["instrument_id"],
+            ["core_instrument.id"],
+            name="fk_exec_fill_instrument",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["order_id"],
+            ["exec_order.id"],
+            name="fk_exec_fill_order",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "(quantity > 0) and (price > 0)", name="ck_exec_fill_positive_terms"
+        ),
         UniqueConstraint(
             "broker_id",
             "account_id",
@@ -64,6 +92,23 @@ class PersistedFill(CoreBase):
 class PersistedFillChargeComponent(CoreBase):
     __tablename__ = "exec_fill_charge_component"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["fill_id"],
+            ["exec_fill.id"],
+            name="fk_exec_fill_charge_fill",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "((charge_basis = 'PER_UNIT') and (basis_quantity > 0) and (basis_notional "
+            "is null)) or ((charge_basis = 'PER_NOTIONAL') and (basis_notional > 0) "
+            "and (basis_quantity is null)) or ((charge_basis = 'PER_ORDER_MINIMUM') "
+            "and (basis_quantity is null) and (basis_notional is null))",
+            name="ck_exec_fill_charge_basis",
+        ),
+        CheckConstraint(
+            "regexp_like(currency,'^[A-Z]{3}$')", name="ck_exec_fill_charge_currency"
+        ),
+        CheckConstraint("amount > 0", name="ck_exec_fill_charge_positive_amount"),
         UniqueConstraint(
             "fill_id", "component_ordinal", name="uq_exec_fill_charge_component_ordinal"
         ),
@@ -95,6 +140,24 @@ class PersistedFillChargeComponent(CoreBase):
 class PersistedExecutionWatermark(CoreBase):
     __tablename__ = "exec_broker_execution_watermark"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["account_id"],
+            ["exec_account.id"],
+            name="fk_exec_execution_watermark_account",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["broker_id"],
+            ["exec_broker.id"],
+            name="fk_exec_execution_watermark_broker",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["reconciliation_run_id"],
+            ["exec_reconciliation_run.id"],
+            name="fk_exec_execution_watermark_reconciliation_run",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint(
             "broker_id",
             "account_id",
@@ -132,6 +195,16 @@ class PersistedExecutionWatermark(CoreBase):
 class PersistedExecutionGap(CoreBase):
     __tablename__ = "exec_execution_gap"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["watermark_id"],
+            ["exec_broker_execution_watermark.id"],
+            name="fk_exec_execution_gap_watermark",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "(from_sequence > 0) and (through_sequence >= from_sequence)",
+            name="ck_exec_execution_gap_range",
+        ),
         UniqueConstraint(
             "watermark_id",
             "from_sequence",
@@ -150,6 +223,12 @@ class PersistedExecutionGap(CoreBase):
 class PersistedExecutionCheckpointScope(CoreBase):
     __tablename__ = "exec_execution_checkpoint_scope"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["watermark_id"],
+            ["exec_broker_execution_watermark.id"],
+            name="fk_exec_checkpoint_scope_watermark",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint(
             "watermark_id",
             "scope_kind",

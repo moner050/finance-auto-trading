@@ -26,12 +26,56 @@ Table(
     "exec_order_intent_legacy_strategy_link",
     CoreBase.metadata,
     Column("intent_id", UuidBinary(), primary_key=True),
+    ForeignKeyConstraint(
+        ["intent_id"],
+        ["exec_order_intent.id"],
+        name="fk_exec_order_intent_legacy_link_intent",
+        ondelete="RESTRICT",
+    ),
 )
 
 
 class PersistedOrderIntent(CoreBase):
     __tablename__ = "exec_order_intent"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["account_id"], ["exec_account.id"], name="fk_exec_order_intent_account"
+        ),
+        ForeignKeyConstraint(
+            ["instrument_id"],
+            ["core_instrument.id"],
+            name="fk_exec_order_intent_instrument",
+        ),
+        ForeignKeyConstraint(
+            ["operator_audit_id"],
+            ["ops_audit_log.id"],
+            name="fk_exec_order_intent_operator_audit",
+        ),
+        ForeignKeyConstraint(
+            ["protection_position_id"],
+            ["exec_position.id"],
+            name="fk_exec_order_intent_protection_position",
+        ),
+        ForeignKeyConstraint(
+            ["reconciliation_diff_id"],
+            ["exec_reconciliation_diff.id"],
+            name="fk_exec_order_intent_reconciliation_diff",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["strategy_signal_id"],
+            ["strategy_signal.id"],
+            name="fk_exec_order_intent_strategy_signal",
+        ),
+        CheckConstraint(
+            "origin_type in ('STRATEGY','PROTECTION','OPERATOR','RECONCILIATION')",
+            name="ck_exec_order_intent_origin",
+        ),
+        CheckConstraint(
+            "(requested_quantity > 0) and ((order_style <> 'LIMIT') or (limit_price > "
+            "0))",
+            name="ck_exec_order_intent_terms",
+        ),
         UniqueConstraint(
             "idempotency_key", name="uq_exec_order_intent_idempotency_key"
         ),
@@ -101,6 +145,26 @@ class PersistedOrderIntent(CoreBase):
 class PersistedRiskDecision(CoreBase):
     __tablename__ = "risk_decision"
     __table_args__ = (
+        UniqueConstraint("id", "order_intent_id", name="uq_risk_decision_id_intent"),
+        ForeignKeyConstraint(
+            ["order_intent_id"],
+            ["exec_order_intent.id"],
+            name="fk_risk_decision_intent",
+        ),
+        ForeignKeyConstraint(
+            ["policy_version_id"],
+            ["risk_policy_version.id"],
+            name="fk_risk_decision_policy_version",
+        ),
+        ForeignKeyConstraint(
+            ["risk_snapshot_id"], ["risk_snapshot.id"], name="fk_risk_decision_snapshot"
+        ),
+        CheckConstraint(
+            "(outcome in ('APPROVE','REJECT','REDUCE','OBSERVED_BLOCKING')) and "
+            "((outcome <> 'OBSERVED_BLOCKING') or ((approved_quantity = 0) and "
+            "(reserved_risk_amount > 0)))",
+            name="ck_risk_decision_outcome_observed",
+        ),
         UniqueConstraint("order_intent_id", name="uq_risk_decision_order_intent"),
         CheckConstraint(
             "requested_quantity > 0 AND approved_quantity >= 0 "
@@ -131,6 +195,30 @@ class PersistedRiskDecision(CoreBase):
 class PersistedRiskReservation(CoreBase):
     __tablename__ = "risk_budget_reservation"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["account_id"],
+            ["exec_account.id"],
+            name="fk_risk_budget_reservation_account",
+        ),
+        ForeignKeyConstraint(
+            ["risk_decision_id"],
+            ["risk_decision.id"],
+            name="fk_risk_budget_reservation_decision",
+        ),
+        ForeignKeyConstraint(
+            ["order_intent_id"],
+            ["exec_order_intent.id"],
+            name="fk_risk_budget_reservation_intent",
+        ),
+        CheckConstraint(
+            "(initial_risk_amount >= 0) and (consumed_risk_amount >= 0) and "
+            "(remaining_risk_amount >= 0) and (released_risk_amount >= 0)",
+            name="ck_risk_budget_reservation_amounts_non_negative",
+        ),
+        CheckConstraint(
+            "status in ('ACTIVE','PARTIALLY_CONSUMED','CONSUMED','RELEASED')",
+            name="ck_risk_budget_reservation_status",
+        ),
         UniqueConstraint(
             "risk_decision_id", name="uq_risk_budget_reservation_decision"
         ),

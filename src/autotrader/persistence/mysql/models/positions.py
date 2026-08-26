@@ -4,7 +4,14 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import Boolean, CheckConstraint, Numeric, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    ForeignKeyConstraint,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from autotrader.persistence.mysql.models.core import CoreBase
@@ -15,6 +22,17 @@ from autotrader.shared.ids import new_uuid7
 class Position(CoreBase):
     __tablename__ = "exec_position"
     __table_args__ = (
+        UniqueConstraint(
+            "account_id", "instrument_id", name="uq_exec_position_account_instrument"
+        ),
+        ForeignKeyConstraint(
+            ["account_id"], ["exec_account.id"], name="fk_exec_position_account"
+        ),
+        ForeignKeyConstraint(
+            ["instrument_id"],
+            ["core_instrument.id"],
+            name="fk_exec_position_instrument",
+        ),
         CheckConstraint(
             "quantity >= 0 OR blocking_risk", name="ck_exec_position_negative_blocking"
         ),
@@ -39,6 +57,22 @@ class Position(CoreBase):
 class PersistedPositionLot(CoreBase):
     __tablename__ = "exec_position_lot"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["opening_fill_id"],
+            ["exec_fill.id"],
+            name="fk_exec_position_lot_opening_fill",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["position_id"],
+            ["exec_position.id"],
+            name="fk_exec_position_lot_position",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "(opened_quantity > 0) and (remaining_quantity >= 0)",
+            name="ck_exec_position_lot_quantities",
+        ),
         UniqueConstraint("opening_fill_id", name="uq_exec_position_lot_opening_fill"),
     )
 
@@ -53,6 +87,24 @@ class PersistedPositionLot(CoreBase):
 class PersistedPositionLifecycle(CoreBase):
     __tablename__ = "exec_position_lifecycle"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["closing_fill_id"],
+            ["exec_fill.id"],
+            name="fk_exec_position_lifecycle_close_fill",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["opening_fill_id"],
+            ["exec_fill.id"],
+            name="fk_exec_position_lifecycle_open_fill",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["position_id"],
+            ["exec_position.id"],
+            name="fk_exec_position_lifecycle_position",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint(
             "position_id",
             "lifecycle_ordinal",

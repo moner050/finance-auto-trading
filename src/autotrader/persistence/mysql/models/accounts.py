@@ -21,7 +21,10 @@ from autotrader.shared.ids import new_uuid7
 
 class Broker(CoreBase):
     __tablename__ = "exec_broker"
-    __table_args__ = (UniqueConstraint("id", "code", name="uq_exec_broker_id_code"),)
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_exec_broker_code"),
+        UniqueConstraint("id", "code", name="uq_exec_broker_id_code"),
+    )
     id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True, default=new_uuid7)
     code: Mapped[str] = mapped_column(
         String(64, collation="utf8mb4_bin"), nullable=False
@@ -32,6 +35,7 @@ class Broker(CoreBase):
 class Account(CoreBase):
     __tablename__ = "exec_account"
     __table_args__ = (
+        UniqueConstraint("id", "broker_id", name="uq_exec_account_id_broker"),
         ForeignKeyConstraint(
             ["broker_id"],
             ["exec_broker.id"],
@@ -66,6 +70,11 @@ class Account(CoreBase):
 
 class AccountSnapshot(CoreBase):
     __tablename__ = "exec_account_snapshot"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["account_id"], ["exec_account.id"], name="fk_exec_account_snapshot_account"
+        ),
+    )
     id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True, default=new_uuid7)
     account_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
     as_of: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
@@ -74,6 +83,13 @@ class AccountSnapshot(CoreBase):
 
 class CashSnapshot(CoreBase):
     __tablename__ = "exec_cash_snapshot"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["account_snapshot_id"],
+            ["exec_account_snapshot.id"],
+            name="fk_exec_cash_snapshot_account_snapshot",
+        ),
+    )
     id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True, default=new_uuid7)
     account_snapshot_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)

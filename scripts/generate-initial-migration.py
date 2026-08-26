@@ -11,6 +11,7 @@ Usage: python scripts/generate-initial-migration.py [--check]
 from __future__ import annotations
 
 import sys
+import warnings
 from pathlib import Path
 
 from sqlalchemy import Table
@@ -48,8 +49,14 @@ _CREATE: tuple[str, ...] = (
 
 
 def upgrade() -> None:
-    for statement in _CREATE:
-        op.execute(statement)
+    # exec_order, exec_order_intent, exec_reconciliation_diff and risk_decision
+    # reference each other, so no creation order resolves every foreign key.
+    op.execute("SET FOREIGN_KEY_CHECKS = 0")
+    try:
+        for statement in _CREATE:
+            op.execute(statement)
+    finally:
+        op.execute("SET FOREIGN_KEY_CHECKS = 1")
 
 
 def downgrade() -> None:
@@ -61,8 +68,10 @@ def downgrade() -> None:
 
 
 def _ordered_tables() -> list[Table]:
-    # Foreign keys must resolve, so create parents first.
-    return list(metadata.sorted_tables)
+    """Parents first where possible; cycles are handled by the migration."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Cannot correctly sort tables")
+        return list(metadata.sorted_tables)
 
 
 def _statements(tables: list[Table]) -> list[str]:

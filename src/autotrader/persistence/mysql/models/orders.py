@@ -4,7 +4,16 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import BINARY, BigInteger, Computed, Numeric, String, UniqueConstraint
+from sqlalchemy import (
+    BINARY,
+    BigInteger,
+    CheckConstraint,
+    Computed,
+    ForeignKeyConstraint,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from autotrader.persistence.mysql.models.core import CoreBase
@@ -15,6 +24,37 @@ from autotrader.shared.ids import new_uuid7
 class PersistedOrder(CoreBase):
     __tablename__ = "exec_order"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["account_id"],
+            ["exec_account.id"],
+            name="fk_exec_order_account",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["risk_decision_id", "order_intent_id"],
+            ["risk_decision.id", "risk_decision.order_intent_id"],
+            name="fk_exec_order_decision_intent",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["instrument_id"],
+            ["core_instrument.id"],
+            name="fk_exec_order_instrument",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["order_intent_id"],
+            ["exec_order_intent.id"],
+            name="fk_exec_order_intent",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "aggregate_version >= 0", name="ck_exec_order_aggregate_version"
+        ),
+        CheckConstraint(
+            "(requested_quantity > 0) and (filled_quantity >= 0)",
+            name="ck_exec_order_quantities",
+        ),
         UniqueConstraint("order_intent_id", name="uq_exec_order_intent"),
         UniqueConstraint(
             "account_id",
@@ -44,6 +84,54 @@ class PersistedOrder(CoreBase):
 class PersistedOrderCommand(CoreBase):
     __tablename__ = "exec_order_command"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["account_id"],
+            ["exec_account.id"],
+            name="fk_exec_order_command_account",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["order_id", "authority_class"],
+            [
+                "exec_order_command_authority.order_id",
+                "exec_order_command_authority.authority_class",
+            ],
+            name="fk_exec_order_command_authority",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["instrument_id"],
+            ["core_instrument.id"],
+            name="fk_exec_order_command_instrument",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["order_id"],
+            ["exec_order.id"],
+            name="fk_exec_order_command_order",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["replaces_command_id"],
+            ["exec_order_command.id"],
+            name="fk_exec_order_command_replaces",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "((command_type = 'SUBMIT') and (authority_class in "
+            "('SUBMIT_NEW_EXPOSURE','SUBMIT_STRICT_REDUCTION'))) or ((command_type = "
+            "'CANCEL') and (authority_class = 'CANCEL')) or ((command_type = "
+            "'REPLACE') and (authority_class = 'REPLACE_NON_INCREASING'))",
+            name="ck_exec_order_command_authority_terms",
+        ),
+        CheckConstraint(
+            "(quantity > 0) and (target_aggregate_version >= 0)",
+            name="ck_exec_order_command_terms",
+        ),
+        CheckConstraint(
+            "command_type in ('SUBMIT','CANCEL','REPLACE')",
+            name="ck_exec_order_command_type",
+        ),
         UniqueConstraint(
             "order_id", "command_sequence", name="uq_exec_order_command_sequence"
         ),
@@ -99,6 +187,17 @@ class PersistedOrderCommand(CoreBase):
 class PersistedOrderCommandAuthority(CoreBase):
     __tablename__ = "exec_order_command_authority"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["order_id"],
+            ["exec_order.id"],
+            name="fk_exec_order_command_authority_order",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "authority_class in "
+            "('SUBMIT_NEW_EXPOSURE','SUBMIT_STRICT_REDUCTION','CANCEL','REPLACE_NON_INCREASING')",
+            name="ck_exec_order_command_authority_class",
+        ),
         UniqueConstraint(
             "order_id", "authority_class", name="uq_exec_order_command_authority"
         ),
@@ -111,6 +210,21 @@ class PersistedOrderCommandAuthority(CoreBase):
 class PersistedBrokerOrderLink(CoreBase):
     __tablename__ = "exec_broker_order_link"
     __table_args__ = (
+        UniqueConstraint(
+            "order_id", "link_sequence", name="uq_exec_broker_link_sequence"
+        ),
+        ForeignKeyConstraint(
+            ["broker_id"],
+            ["exec_broker.id"],
+            name="fk_exec_broker_link_broker",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["order_id"],
+            ["exec_order.id"],
+            name="fk_exec_broker_link_order",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint(
             "broker_id", "broker_order_id", name="uq_exec_broker_link_broker_order"
         ),
@@ -129,6 +243,33 @@ class PersistedBrokerOrderLink(CoreBase):
 
 class PersistedBrokerOrderStatusEvent(CoreBase):
     __tablename__ = "exec_broker_order_status_event"
+    __table_args__ = (
+        UniqueConstraint(
+            "broker_id",
+            "account_id",
+            "source_partition",
+            "dedupe_key",
+            name="uq_exec_broker_status_identity",
+        ),
+        ForeignKeyConstraint(
+            ["account_id"],
+            ["exec_account.id"],
+            name="fk_exec_broker_status_account",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["broker_id"],
+            ["exec_broker.id"],
+            name="fk_exec_broker_status_broker",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["order_id"],
+            ["exec_order.id"],
+            name="fk_exec_broker_status_order",
+            ondelete="RESTRICT",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True, default=new_uuid7)
     order_id: Mapped[UUID | None] = mapped_column(UuidBinary(), nullable=True)
@@ -160,6 +301,16 @@ class PersistedBrokerOrderStatusEvent(CoreBase):
 class PersistedOrderStatusWatermark(CoreBase):
     __tablename__ = "exec_order_status_watermark"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["order_id"],
+            ["exec_order.id"],
+            name="fk_exec_order_status_watermark_order",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "last_contiguous_sequence >= 0",
+            name="ck_exec_order_status_watermark_sequence",
+        ),
         UniqueConstraint(
             "order_id", "source_partition", name="uq_exec_order_status_watermark"
         ),
@@ -175,6 +326,12 @@ class PersistedOrderStatusWatermark(CoreBase):
 class PersistedOrderEvent(CoreBase):
     __tablename__ = "exec_order_event"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["order_id"],
+            ["exec_order.id"],
+            name="fk_exec_order_event_order",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint(
             "order_id", "aggregate_version", name="uq_exec_order_event_version"
         ),

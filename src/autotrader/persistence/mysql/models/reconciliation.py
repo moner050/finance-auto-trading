@@ -3,7 +3,14 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import BINARY, Boolean, String, UniqueConstraint
+from sqlalchemy import (
+    BINARY,
+    Boolean,
+    CheckConstraint,
+    ForeignKeyConstraint,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from autotrader.persistence.mysql.models.core import CoreBase
@@ -14,6 +21,22 @@ from autotrader.shared.ids import new_uuid7
 class PersistedReconciliationRun(CoreBase):
     __tablename__ = "exec_reconciliation_run"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["account_id", "broker_id"],
+            ["exec_account.id", "exec_account.broker_id"],
+            name="fk_exec_reconciliation_run_account_broker",
+        ),
+        CheckConstraint(
+            "((status = 'RUNNING') and (complete = 0) and (completed_at is null)) or "
+            "((status = 'SUCCEEDED') and (complete = 1) and (completed_at is not "
+            "null)) or ((status = 'FAILED') and (complete = 0) and (completed_at is "
+            "not null))",
+            name="ck_exec_reconciliation_run_completion",
+        ),
+        CheckConstraint(
+            "status in ('RUNNING','SUCCEEDED','FAILED')",
+            name="ck_exec_reconciliation_run_status",
+        ),
         UniqueConstraint(
             "broker_id",
             "account_id",
@@ -44,6 +67,24 @@ class PersistedReconciliationRun(CoreBase):
 class PersistedReconciliationDiff(CoreBase):
     __tablename__ = "exec_reconciliation_diff"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["internal_order_id"],
+            ["exec_order.id"],
+            name="fk_exec_reconciliation_diff_internal_order",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["run_id"],
+            ["exec_reconciliation_run.id"],
+            name="fk_exec_reconciliation_diff_run",
+        ),
+        CheckConstraint(
+            "severity in ('INFO','WARNING','BLOCKING')",
+            name="ck_exec_reconciliation_diff_severity",
+        ),
+        CheckConstraint(
+            "status in ('OPEN','RESOLVED')", name="ck_exec_reconciliation_diff_status"
+        ),
         UniqueConstraint(
             "run_id", "diff_key", name="uq_exec_reconciliation_diff_identity"
         ),
