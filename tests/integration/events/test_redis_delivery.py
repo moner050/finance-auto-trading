@@ -69,7 +69,9 @@ async def test_redis_ack_happens_after_handler_commit_and_pending_is_recovered()
     stream = f"test:redis-delivery:{uuid7()}"
     transport = RedisStreams(client)
     try:
-        await transport.publish(
+        # Redis generates the entry id from the clock, so hold on to the one
+        # publish returns rather than assuming a sequence.
+        entry_id = await transport.publish(
             stream=stream, event_id="event-1", body={"value": "one"}
         )
         committed: list[str] = []
@@ -90,8 +92,8 @@ async def test_redis_ack_happens_after_handler_commit_and_pending_is_recovered()
         assert committed == ["event-1"]
         assert await client.xpending(stream, "consumer-group") == {
             "pending": 1,
-            "min": "1-0",
-            "max": "1-0",
+            "min": entry_id,
+            "max": entry_id,
             "consumers": [{"name": "dead-worker", "pending": 1}],
         }
         await asyncio.sleep(0.01)
