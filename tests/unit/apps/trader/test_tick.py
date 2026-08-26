@@ -25,7 +25,7 @@ from autotrader.risk.v6 import V6RiskContext, V6RiskRequest
 from autotrader.shared.ids import new_uuid7
 from autotrader.strategies.common.decisions import StrategyDecision
 from autotrader.strategies.david_v6.assembly import AssemblyInputs
-from autotrader.strategies.david_v6.calendar import MarketEvent
+from autotrader.strategies.david_v6.calendar import EventCalendar
 from autotrader.strategies.david_v6.hlit import HlitSetup
 from autotrader.strategies.david_v6.manifest import (
     V6_DESIGN_SHA256,
@@ -118,24 +118,12 @@ def _risk_context(side: Side = Side.BUY) -> V6RiskContext:
     )
 
 
-def _quiet_calendar() -> tuple[MarketEvent, ...]:
-    """One low-impact event proves the calendar was fetched.
-
-    An empty list is indistinguishable from a failed fetch, so the calendar
-    fact stays UNKNOWN and blocks. Only two and three star events block.
-    """
-    return (
-        MarketEvent(
-            event_id="minor",
-            source_key="test",
-            scheduled_at=SESSION_OPEN + timedelta(hours=3),
-            impact_stars=1,
-            strong_surprise=False,
-            is_nfp=False,
-            session_close_at=None,
-            calendar_captured_at=SESSION_OPEN - timedelta(hours=12),
-            calendar_valid_until=SESSION_OPEN + timedelta(hours=12),
-        ),
+def _quiet_calendar() -> EventCalendar:
+    """A calendar that was fetched and found nothing scheduled."""
+    return EventCalendar(
+        captured_at=SESSION_OPEN - timedelta(hours=12),
+        valid_until=SESSION_OPEN + timedelta(hours=12),
+        events=(),
     )
 
 

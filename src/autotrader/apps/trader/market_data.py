@@ -24,7 +24,7 @@ from autotrader.integrations.brokers.internal_paper import (
 from autotrader.risk.v6 import V6RiskContext
 from autotrader.shared.time import require_utc
 from autotrader.strategies.david_v6.assembly import AssemblyInputs, AssemblySource
-from autotrader.strategies.david_v6.calendar import MarketEvent
+from autotrader.strategies.david_v6.calendar import EventCalendar
 from autotrader.strategies.david_v6.costs import FeeSchedule
 from autotrader.strategies.david_v6.manifest import V6Manifest
 from autotrader.strategies.david_v6.models import V6Market
@@ -71,7 +71,7 @@ class BinanceLoopInputs:
     range_efficiency: Decimal
     pessimism: PessimismInputs
     benchmark_returns: tuple[Decimal, ...]
-    events: tuple[MarketEvent, ...] | None = None
+    events: EventCalendar | None = None
     trade_window: timedelta = field(default=timedelta(minutes=30))
 
 

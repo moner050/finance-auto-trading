@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -21,8 +20,6 @@ class MarketEvent:
     strong_surprise: bool | None
     is_nfp: bool
     session_close_at: datetime | None
-    calendar_captured_at: datetime
-    calendar_valid_until: datetime
 
     def __post_init__(self) -> None:
         _require_text(self.event_id, "event_id")
@@ -33,15 +30,9 @@ class MarketEvent:
             raise TypeError("strong_surprise must be bool or None")
         if type(self.is_nfp) is not bool:
             raise TypeError("is_nfp must be bool")
-        for name in (
-            "scheduled_at",
-            "calendar_captured_at",
-            "calendar_valid_until",
-        ):
-            value = getattr(self, name)
-            if type(value) is not datetime:
-                raise TypeError(f"{name} must be an exact datetime")
-            object.__setattr__(self, name, require_utc(value))
+        if type(self.scheduled_at) is not datetime:
+            raise TypeError("scheduled_at must be an exact datetime")
+        object.__setattr__(self, "scheduled_at", require_utc(self.scheduled_at))
         if self.session_close_at is not None:
             if type(self.session_close_at) is not datetime:
                 raise TypeError("session_close_at must be an exact datetime or None")
@@ -50,12 +41,40 @@ class MarketEvent:
                 "session_close_at",
                 require_utc(self.session_close_at),
             )
-        if self.calendar_valid_until < self.calendar_captured_at:
-            raise ValueError("calendar validity cannot end before capture")
         if self.is_nfp and (
             self.session_close_at is None or self.session_close_at <= self.scheduled_at
         ):
             raise ValueError("NFP requires a later authoritative session close")
+
+
+@dataclass(frozen=True, slots=True)
+class EventCalendar:
+    """One fetch of the economic calendar, and what it returned.
+
+    The window belongs here rather than to each event so that a calendar with
+    nothing scheduled is still evidence that it was fetched. Reading the window
+    off the rows made an empty result indistinguishable from a failed fetch,
+    which left a quiet day permanently blocked.
+    """
+
+    captured_at: datetime
+    valid_until: datetime
+    events: tuple[MarketEvent, ...]
+
+    def __post_init__(self) -> None:
+        for name in ("captured_at", "valid_until"):
+            value = getattr(self, name)
+            if type(value) is not datetime:
+                raise TypeError(f"{name} must be an exact datetime")
+            object.__setattr__(self, name, require_utc(value))
+        if self.valid_until < self.captured_at:
+            raise ValueError("calendar validity cannot end before capture")
+        if type(self.events) is not tuple or any(
+            type(event) is not MarketEvent for event in self.events
+        ):
+            raise TypeError("events must contain exact MarketEvent values")
+        if any(event.scheduled_at < self.captured_at for event in self.events):
+            raise ValueError("a calendar cannot carry an event from before its capture")
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,20 +88,19 @@ class CalendarFacts:
 
 
 def evaluate_event_window(
-    events: Sequence[MarketEvent],
+    calendar: EventCalendar,
     decision_at: datetime,
 ) -> CalendarFacts:
+    if type(calendar) is not EventCalendar:
+        raise TypeError("calendar must be an exact EventCalendar")
+    calendar.__post_init__()
     decision = _require_datetime(decision_at, "decision_at")
-    if any(type(event) is not MarketEvent for event in events):
-        raise TypeError("events must contain exact MarketEvent values")
-    canonical = _deduplicate(tuple(events))
     penalty = 1 if decision.weekday() == 0 else 0
-    if not canonical:
+    if calendar.captured_at > decision:
         return _blocked(EvidenceState.UNKNOWN, penalty)
-    if any(event.calendar_captured_at > decision for event in canonical):
-        return _blocked(EvidenceState.UNKNOWN, penalty)
-    if any(event.calendar_valid_until < decision for event in canonical):
+    if calendar.valid_until < decision:
         return _blocked(EvidenceState.STALE, penalty)
+    canonical = _deduplicate(calendar.events)
 
     active: list[tuple[MarketEvent, datetime]] = []
     for event in canonical:
@@ -147,4 +165,9 @@ def _require_text(value: object, name: str) -> str:
     return value
 
 
-__all__ = ("CalendarFacts", "MarketEvent", "evaluate_event_window")
+__all__ = (
+    "CalendarFacts",
+    "EventCalendar",
+    "MarketEvent",
+    "evaluate_event_window",
+)

@@ -16,7 +16,7 @@ from autotrader.strategies.david_v6.assembly import (
     assemble_v6_evidence,
     derive_indicators,
 )
-from autotrader.strategies.david_v6.calendar import MarketEvent
+from autotrader.strategies.david_v6.calendar import EventCalendar, MarketEvent
 from autotrader.strategies.david_v6.costs import FeeSchedule
 from autotrader.strategies.david_v6.engine import evaluate_v6
 from autotrader.strategies.david_v6.grading import (
@@ -106,6 +106,15 @@ def _calendar(kind: SessionKind) -> ExchangeCalendar:
     )
 
 
+def _quiet_calendar(*events: MarketEvent) -> EventCalendar:
+    """A calendar that was fetched, whatever it happened to contain."""
+    return EventCalendar(
+        captured_at=SESSION_OPEN - timedelta(hours=12),
+        valid_until=SESSION_OPEN + timedelta(hours=12),
+        events=events,
+    )
+
+
 def _trades() -> tuple[TradePrint, ...]:
     return tuple(
         TradePrint(
@@ -150,7 +159,7 @@ def _inputs(market: V6Market, **changes: object) -> AssemblyInputs:
         "calendar": _calendar(
             SessionKind.BINANCE_USDM if is_binance else SessionKind.US_HLIT
         ),
-        "events": (),
+        "events": _quiet_calendar(),
         "universe": (
             None
             if is_binance
@@ -339,11 +348,11 @@ def test_a_news_blackout_reaches_the_calendar_fact() -> None:
         strong_surprise=None,
         is_nfp=False,
         session_close_at=None,
-        calendar_captured_at=SESSION_OPEN - timedelta(days=1),
-        calendar_valid_until=SESSION_OPEN + timedelta(days=1),
     )
 
-    bundle = assemble_v6_evidence(_inputs(V6Market.US_CASH, events=(event,))).bundle
+    bundle = assemble_v6_evidence(
+        _inputs(V6Market.US_CASH, events=_quiet_calendar(event))
+    ).bundle
 
     calendar = bundle.calendar.value
     assert calendar is not None

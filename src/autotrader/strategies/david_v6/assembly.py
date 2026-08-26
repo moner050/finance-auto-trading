@@ -24,7 +24,7 @@ from autotrader.shared.decimal import require_decimal
 from autotrader.shared.time import require_utc
 from autotrader.strategies.david_v6.calendar import (
     CalendarFacts,
-    MarketEvent,
+    EventCalendar,
     evaluate_event_window,
 )
 from autotrader.strategies.david_v6.costs import FeeSchedule, estimate_round_trip_cost
@@ -135,7 +135,7 @@ class AssemblyInputs:
     bars: Mapping[str, tuple[CompletedOhlcvBar, ...]] = field(default_factory=_no_bars)
     calendar: ExchangeCalendar | None = None
     market_safety: KrxMarketSafety | None = None
-    events: tuple[MarketEvent, ...] | None = None
+    events: EventCalendar | None = None
     universe: UniverseFacts | None = None
     benchmark_returns: tuple[Decimal, ...] | None = None
     atr_ratio: Decimal | None = None
@@ -532,8 +532,8 @@ def _calendar(inputs: AssemblyInputs) -> EvidenceItem[object]:
         inputs,
         key="calendar",
         value=facts,
-        observed_at=inputs.decision_at,
-        payload={"events": len(inputs.events)},
+        observed_at=inputs.events.captured_at,
+        payload={"events": len(inputs.events.events)},
     )
 
 
