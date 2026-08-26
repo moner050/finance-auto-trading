@@ -39,8 +39,7 @@ fencing token 같은 기관용 컴플라이언스 구조를 먼저 지었기 때
    데몬이 없다.
 3. **`DispatchStore` 구현 없음.** 프로토콜만 있고, 유일한 구현(`MySqlDispatchStore`,
    870줄)은 정리 과정에서 제거했다. 얇게 다시 써야 한다.
-4. **적용 가능한 스키마 없음.** 마이그레이션 44개는 실제 MySQL에 한 번도 적용된 적이
-   없고, 삭제된 전략 테이블까지 누적돼 있어 전부 제거했다.
+4. ~~**적용 가능한 스키마 없음.**~~ Phase 0에서 해결했다.
 
 ## 작업 원칙
 
@@ -54,35 +53,49 @@ fencing token 같은 기관용 컴플라이언스 구조를 먼저 지었기 때
 
 ---
 
-## Phase 0 — 스키마 통합 ✅ 구현 완료 (`610afc1`) / MySQL 적용 미검증
+## Phase 0 — 스키마 통합 ✅ 완료 (`610afc1` … `6fc3a9f`)
 
 **한 일**
 
-- 44개 마이그레이션 체인을 `0001_initial` 하나로 대체했다. 기존 체인은 실제 MySQL에
-  한 번도 적용된 적이 없고 오래전 제거된 전략의 테이블까지 누적돼 있었다.
-- **손으로 옮겨 적지 않고 ORM metadata에서 생성한다.** 70여 개 테이블을 전사하면
-  drift가 생긴다. `scripts/generate-initial-migration.py`가 생성하고,
+- 44개 마이그레이션 체인을 `0001_initial` 하나로 대체하고, 손으로 전사하는 대신
+  `scripts/generate-initial-migration.py`가 ORM metadata에서 생성한다.
   `migrations/env.py`의 `target_metadata`를 연결했다 — `None`이던 탓에 모델과 스키마가
   갈라져도 아무도 알 수 없었다.
-- 생성 즉시 실제 결함이 드러났다. FK 6개가 `exec_provider_account_binding`을 가리키는데
-  그 테이블은 앞선 정리에서 모듈째 사라져 있었다. 바인딩은 정산이 붙는 단위이자
-  Phase 5가 LIVE를 승인하는 단위이므로 복원하되, **정체성과 범위만** 되살리고 제거한
-  증거 원장의 해시들은 가져오지 않았다.
-- 참조가 0인 테이블 4개 제거: shadow candidate 원장, 이미 사라진 gate scenario scope,
-  v6 리스크 엔진이 대체한 risk_limit, 정리 때 저장소가 없어진 Binance command state.
-- 75개 테이블이 남았다.
+- 참조가 0인 테이블 4개를 제거하고, 정리 과정에서 사라졌던
+  `exec_provider_account_binding`을 정체성·범위만으로 복원했다. 75개 테이블이 남았다.
 
-**MySQL 없이 검증한 것**
+**실제 MySQL에 적용하며 드러난 것**
 
-- 커밋된 파일이 여전히 metadata와 일치하는가 (drift 검사, CI에도 추가)
-- 매핑된 모든 테이블이 정확히 한 번씩 생성되는가
-- 어떤 테이블도 그것을 참조하는 것보다 먼저 생성되는가
-- 사라진 테이블을 가리키는 FK가 없는가
+배포돼 있던 스키마와 대조하니 **제약 104개가 DB에는 있고 ORM에는 없었다** — 외래키 66,
+CHECK 29, UNIQUE 9, 70개 중 35개 테이블. 손으로 쓴 마이그레이션이 사실상 정본이었고,
+ORM에서 생성한 스키마는 ORM에 충실했기에 그 무결성 보장을 조용히 버렸다.
 
-**아직 안 한 것**
+이를 모델에 선언해 복원했다. **FK 41→106, CHECK 76→101, UNIQUE 78→85.**
+복원 불가 8개는 사유가 있다 — 5개는 ORM이 모델링하지 않는 v5 퇴역 컬럼 참조,
+3개는 provider 바인딩의 증거 해시 참조 2개와 더 강한 CHECK와 중복되는 1개.
 
-빈 MySQL에 `alembic upgrade head`를 적용해 본 적이 없다. Docker를 띄울 수 있게 되면
-멱등 실행과 autogenerate diff 0을 확인하고, CI에 integration 잡을 되살린다.
+`exec_order`·intent·reconciliation diff·risk decision이 서로를 참조하는 순환이 있어
+어떤 생성 순서로도 FK가 풀리지 않는다. 덤프와 같이 생성 중 FK 검사를 끈다.
+
+**검증 (실제 MySQL)**
+
+| 항목 | 결과 |
+| --- | --- |
+| `alembic upgrade head` (빈 DB) | 성공, `0001_initial` |
+| 테이블 | 76 = ORM 75 + `alembic_version`, 누락·초과 0 |
+| 멱등성 | 재실행 no-op |
+| downgrade base → upgrade head | 왕복 정상 |
+| ORM drift (autogenerate) | **0** |
+| 전체 스위트 | **1523 passed, 4 skipped** |
+| ruff / pyright | clean / 0 errors |
+
+통합 테스트 3건도 고쳤다. 구 CI가 `AUTOTRADER_TEST_MIGRATION_TARGET=0011`로 훨씬
+오래된 스키마에 돌린 탓에 최종 스키마를 만난 적이 없던 것들이다 — flush 순서, 데드락
+재시도, 포지션 표시통화, async 테스트 안의 alembic 호출.
+
+**남은 것**
+
+Redis 통합 4건은 `REDIS_URL`이 없어 skip이다. Redis 경로는 아직 검증되지 않았다.
 
 ## Phase 1 — 증거 조립기 ✅ 완료 (`c8d38a2`)
 
