@@ -46,14 +46,17 @@ from autotrader.integrations.brokers.paper_submitter import (
     ExecutionBars,
     resolve_paper_fills,
 )
-from autotrader.persistence.mysql.dispatch_store import MySqlDispatchStore
+from autotrader.persistence.mysql.dispatch_store import ACCEPTED, MySqlDispatchStore
 from autotrader.persistence.mysql.models.david_v6 import DavidV6DecisionRow
 from autotrader.persistence.mysql.models.intents import (
     PersistedOrderIntent,
     PersistedRiskDecision,
     PersistedRiskReservation,
 )
-from autotrader.persistence.mysql.models.operations import OpsTradingControl
+from autotrader.persistence.mysql.models.operations import (
+    OpsIncident,
+    OpsTradingControl,
+)
 from autotrader.persistence.mysql.models.orders import (
     PersistedBrokerOrderLink,
     PersistedOrder,
@@ -106,6 +109,116 @@ class MySqlTradingControl:
             control.armed and control.kill_switch_level == NO_KILL_SWITCH
             for control in controls
         )
+
+
+POSITION_WITHOUT_PROTECTION = "POSITION_WITHOUT_PROTECTION"
+BLOCK_NEW_EXPOSURE = "BLOCK_NEW_EXPOSURE"
+
+
+class MySqlProtectionGuard:
+    """Refuse to open more while something already held has no stop.
+
+    The strategy's rule is that a position always has a protective stop behind
+    it. Placing one is settlement's job; this is the check that the job was
+    done, because an invariant nobody verifies is a comment.
+
+    It blocks new exposure rather than halting outright. A full halt would
+    also stop the protective order from being placed or filled, which is the
+    opposite of what an unprotected position needs.
+    """
+
+    def __init__(
+        self,
+        *,
+        sessions: async_sessionmaker[AsyncSession],
+        account: ExecutionAccount,
+    ) -> None:
+        self._sessions = sessions
+        self._account = account
+
+    async def unprotected(self, now: datetime) -> int:
+        moment = require_utc(now)
+        async with self._sessions() as session:
+            exposed = await self._exposed_instruments(session)
+            if not exposed:
+                return 0
+            protected = await self._protected_instruments(session, exposed)
+            missing = sorted(exposed - protected)
+            if not missing:
+                return 0
+            await self._raise_incidents(session, missing, moment)
+            await self._block_new_exposure(session)
+            await session.commit()
+        return len(missing)
+
+    async def _exposed_instruments(self, session: AsyncSession) -> set[UUID]:
+        rows = await session.scalars(
+            select(Position.instrument_id).where(
+                Position.account_id == self._account.account.id,
+                Position.quantity != 0,
+            )
+        )
+        return set(rows.all())
+
+    async def _protected_instruments(
+        self, session: AsyncSession, exposed: set[UUID]
+    ) -> set[UUID]:
+        """Instruments with a protective order that has reached the broker and
+        has not been used up."""
+        rows = await session.scalars(
+            select(PersistedOrder.instrument_id)
+            .join(
+                PersistedOrderIntent,
+                PersistedOrderIntent.id == PersistedOrder.order_intent_id,
+            )
+            .join(
+                PersistedOrderCommand,
+                PersistedOrderCommand.order_id == PersistedOrder.id,
+            )
+            .where(
+                PersistedOrder.account_id == self._account.account.id,
+                PersistedOrder.instrument_id.in_(exposed),
+                PersistedOrderIntent.intent_type == IntentType.PROTECTIVE.value,
+                PersistedOrderCommand.result_state == ACCEPTED,
+                PersistedOrder.filled_quantity < PersistedOrder.requested_quantity,
+            )
+        )
+        return set(rows.all())
+
+    async def _raise_incidents(
+        self, session: AsyncSession, missing: list[UUID], now: datetime
+    ) -> None:
+        for instrument_id in missing:
+            scope_key = str(instrument_id)
+            # One open incident per instrument: a loop that raises a new one
+            # every pass buries the first report under its own repetition.
+            existing = await session.scalar(
+                select(OpsIncident.id).where(
+                    OpsIncident.reason_code == POSITION_WITHOUT_PROTECTION,
+                    OpsIncident.scope_type == "INSTRUMENT",
+                    OpsIncident.scope_key == scope_key,
+                    OpsIncident.status == "OPEN",
+                )
+            )
+            if existing is not None:
+                continue
+            session.add(
+                OpsIncident(
+                    severity="BLOCKING",
+                    status="OPEN",
+                    reason_code=POSITION_WITHOUT_PROTECTION,
+                    scope_type="INSTRUMENT",
+                    scope_key=scope_key,
+                    created_at=now,
+                )
+            )
+
+    async def _block_new_exposure(self, session: AsyncSession) -> None:
+        controls = (await session.scalars(select(OpsTradingControl))).all()
+        for control in controls:
+            if control.kill_switch_level == NO_KILL_SWITCH:
+                control.kill_switch_level = BLOCK_NEW_EXPOSURE
+                control.row_version += 1
 
 
 class MySqlDecisionRecorder:

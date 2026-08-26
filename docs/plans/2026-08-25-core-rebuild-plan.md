@@ -143,52 +143,63 @@ exhaustion confirmed, zones 3개
 조립 → 지표 파생 → `evaluate_v6`까지 이어져 결정이 나오는 것을 테스트로 고정했다.
 신규 테스트 19건.
 
-## Phase 2 — 매매 루프 데몬 (Paper 전용) — 진행 중
+## Phase 2 — 매매 루프 데몬 (Paper 전용) ✅ 완료
 
 **끝난 것**
 
 - **`MySqlDispatchStore`** (`3a4afb7`). 프로토콜만 있고 구현이 없어 주문을 보낼 경로가
   아예 없었다. 얇게 다시 썼다 — 전송 전 표식과 종결 상태만 담고, 권한 판정은 커맨드
-  생성 시점에 이미 끝났으므로 가져오지 않았다. 청구는 단일 조건부 UPDATE로 한 번만
-  성립하고, 수락은 나중 보고가 덮지 못한다.
+  생성 시점에 이미 끝났으므로 가져오지 않았다.
 - **틱** (`5d6e563`). 포트 뒤에 둔 다섯 단계 — DISARMED 확인 → 조립 → 평가 → **항상 기록**
-  → 거래 가능할 때만 실행. 호출자가 지표를 주장하지 못하고 증거에서 파생된다.
-- **MySQL 배선과 end-to-end** (`7bffcbc`). 완성봉이 기록된 결정에 도달하고, 거래 가능한
-  결정이 브로커 경계를 넘어 ACCEPTED로 돌아오는 것을 실제 DB에서 확인했다.
+  → 거래 가능할 때만 실행.
+- **MySQL 배선과 end-to-end** (`7bffcbc`).
 - **비동기 페이퍼 체결** (`3a72db0`). 체결 봉은 주문 전송 시점에 아직 마감되지 않는다.
-  동기 처리는 같은 봉으로 판단하고 체결하는 look-ahead가 된다. 전송은 스테이징만 하고
-  나중 패스가 정산한다. `exec_paper_order` 신설, 구현이 없던 저널 포트 구현, KRX 페이퍼
-  바인딩 추가.
-- **스케줄 루프** (`bd16d9f`). 리스 확보 → 미해소 주문 정산 → 새 봉이 있으면 평가.
-  리스를 잃으면 아무것도 하지 않는다.
-
-**남은 것**
-
-- **`ContextSource` 구현.** 루프는 `context_for(now)` 포트를 통해 다음 평가를 받는데,
-  watermark 이후의 완성봉을 실제로 읽어오는 구현이 아직 없다.
-- **`ExecutionBars` 구현.** 정산이 체결 봉을 찾는 포트도 마찬가지다.
-- **진입점.** 명령 하나로 루프를 띄우는 실행 파일.
-- **한 세션 실측.** Binance read-only + 페이퍼로 돌려 결정이 쌓이고 페이퍼 포지션이
-  열리고 닫히는 것을 확인한다.
+- **스케줄 루프** (`bd16d9f`).
+- **시장 데이터 어댑터와 진입점** (`53c02e5`). `BinanceContextSource`(봉당 한 번만 평가),
+  `BinanceExecutionBars`, 그리고 `binance_paper.py`. 라이브 Binance 봉으로 실제 결정이
+  MySQL에 남는 것을 확인했다.
+- **인스트루먼트 등록 경로** (`115d434`). `CoreReferenceRepository`는 읽기만 있었고
+  애플리케이션이 인스트루먼트를 만드는 경로가 없어, 호출자가 어느 테이블에도 없는
+  UUID를 지어내는 수밖에 없었다.
+- **통합 테스트 전부 활성화** (`e80bbd1`). 76개가 조용히 건너뛰어지고 있었다 —
+  테스트는 `DATABASE_URL`만 읽는데 애플리케이션은 `MYSQL_*`로 URL을 만든다.
+  Redis는 더 나빴다: `REDIS_HOST/PORT/PW`를 읽는 코드가 `src/`에 아예 없었다.
+- **CI에 MySQL/Redis 서비스** (`22896ec`), **acceptance 스위트** (`b9a1811`).
 
 **검증 (실제 MySQL + Redis)**
 
-`1557 passed`, skip 0. ruff clean, pyright 0 errors.
+`1519 passed` + 통합 76 + acceptance 7. skip 0. ruff·pyright·import boundary 클린.
 
 ---
 
-## Phase 3 — 실 브로커 정산과 보호
+## Phase 3 — 실 브로커 정산과 보호 — 진행 중
 
-주문은 여전히 paper다. 여기서는 **실제 계좌 상태를 읽어** 로컬 상태와 맞춘다.
+**끝난 것 — 보호 손절**
 
-**작업**
+계획을 세울 때 전제했던 것이 성립하지 않았다. `PROTECTIVE` 인텐트를 만드는 코드가
+`src/` 어디에도 없었고, `MySqlFillStore`/`FillRepository`는 참조가 0건이었다.
+체결이 `exec_position`에 도달하는 경로가 통째로 없었으므로, "포지션이 있으면 보호
+손절 필수"를 검사해봐야 항상 통과하는 검사가 됐을 것이다.
+
+- **체결 → 포지션 원장** (`9dfccfd`). 영수증을 `BrokerExecutionEvent`로 옮기고 정산이
+  적용한다. 커맨드 id를 중복 제거 키로 삼아 정산이 두 번 돌아도 포지션이 두 배가 되지
+  않는다.
+- **대기 손절** (`9dfccfd`). 커맨드가 트리거가를 지니고, 그것이 *체결 가격*이 아니라
+  *어느 봉이 그 주문을 해소하는가*를 정한다. 일회성 주문의 규칙은 그대로다.
+  체결은 트리거가에, 갭이면 시가에 — 봉 중간에 관통한 경우 시가로 체결하면 시장이
+  그 방향으로 내주지 않은 가격을 보고하게 된다.
+- **생산자** (`0d21edd`). 진입이 체결되면 정산이 §9.2가 명명한 가격에 손절을 놓는다.
+  그 과정에서 `create_from_risk_decision`이 `REDUCE`를 거부하고 있던 것을 열되,
+  권한과 묶었다 — 축소는 노출을 여는 권한을 빌릴 수 없다.
+- **강제**. 보호 없는 열린 포지션을 발견하면 incident를 남기고 `BLOCK_NEW_EXPOSURE`로
+  신규 노출만 막는다. 전면 HALT는 보호 주문 자체도 막으므로 정확히 반대다.
+
+**남은 것 — 브로커 정산**
 
 - read-only 경로 연결: KIS `account_snapshot`, Toss `us_account_snapshot`,
   Binance `account`. 기존 어댑터를 그대로 쓴다.
-- 매 틱 정산: 기존 `execution/reconciliation/service.py`와 브로커별 reconciliation
-  모듈로 브로커 사실 ↔ 로컬 포지션을 비교하고 차이를 `exec_reconciliation_diff`에 남긴다.
-- 보호 손절 강제: 전략 불변식 "포지션이 있으면 보호 손절 필수"를 런타임에서 검사한다.
-  보호 없는 포지션을 발견하면 incident를 남기고 해당 시장을 HALT한다.
+- 매 틱 정산: `execution/reconciliation/service.py`로 브로커 사실 ↔ 로컬 포지션을
+  비교하고 차이를 `exec_reconciliation_diff`에 남긴다.
 
 **검증**
 

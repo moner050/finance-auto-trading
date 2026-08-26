@@ -37,10 +37,17 @@ from autotrader.apps.trader.composition import (
     MySqlDecisionRecorder,
     MySqlFillSettlement,
     MySqlPaperExecution,
+    MySqlProtectionGuard,
     MySqlSchedulerLease,
     MySqlTradingControl,
 )
-from autotrader.apps.trader.loop import NO_NEW_BAR, NOT_LEADER, LoopPorts, run_pass
+from autotrader.apps.trader.loop import (
+    NO_NEW_BAR,
+    NOT_LEADER,
+    UNPROTECTED,
+    LoopPorts,
+    run_pass,
+)
 from autotrader.apps.trader.market_data import HLIT_TIMEFRAME
 from autotrader.apps.trader.tick import DISARMED, SUBMITTED, TickContext
 from autotrader.config.settings import Settings
@@ -58,6 +65,10 @@ from autotrader.persistence.mysql.engine import create_engine
 from autotrader.persistence.mysql.models.david_v6 import DavidV6DecisionRow
 from autotrader.persistence.mysql.models.fills import PersistedFill
 from autotrader.persistence.mysql.models.intents import PersistedOrderIntent
+from autotrader.persistence.mysql.models.operations import (
+    OpsIncident,
+    OpsTradingControl,
+)
 from autotrader.persistence.mysql.models.orders import (
     PersistedOrder,
     PersistedOrderCommand,
@@ -166,6 +177,10 @@ def _ports(
             bars=bars,
             account=_account(ids),
             broker=submitter,
+        ),
+        protection=MySqlProtectionGuard(
+            sessions=sessions,  # type: ignore[arg-type]
+            account=_account(ids),
         ),
         source=_OneClosedBar(context),
         control=MySqlTradingControl(sessions),  # type: ignore[arg-type]
@@ -445,5 +460,70 @@ def test_a_stop_that_is_reached_closes_the_position() -> None:
                 )
             )
             assert len(protective.all()) == 1
+
+    _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_a_position_whose_stop_never_reached_the_broker_stops_the_loop() -> None:
+    """Dispatch turns an indeterminate broker into UNKNOWN, which is right,
+    but a stop that may or may not be resting is not protection. The loop has
+    to stop opening exposure and say so."""
+
+    async def scenario(sessions: async_sessionmaker[object]) -> None:
+        ids = await _risk_seed(sessions)
+        await _arm(sessions, armed=True)
+        manifest = await _register_strategy(sessions, uuid7())
+        bars = _Bars()
+        ports = _ports(
+            sessions,
+            context=_context(manifest, ids.instrument_id),  # type: ignore[attr-defined]
+            ids=ids,
+            bars=bars,
+            lease_name=f"acceptance:{uuid7().hex[:12]}",
+        )
+
+        assert (await run_pass(now=NOW, ports=ports)).reason == SUBMITTED
+        bars.closed = True
+        assert (await run_pass(now=NOW + HLIT_TIMEFRAME, ports=ports)).settled == 1
+
+        # The stop was placed, but its send never came back confirmed.
+        async with sessions() as session:  # type: ignore[operator]
+            protective = await session.scalar(
+                select(PersistedOrderCommand)
+                .join(
+                    PersistedOrder,
+                    PersistedOrder.id == PersistedOrderCommand.order_id,
+                )
+                .join(
+                    PersistedOrderIntent,
+                    PersistedOrderIntent.id == PersistedOrder.order_intent_id,
+                )
+                .where(PersistedOrderIntent.intent_type == IntentType.PROTECTIVE.value)
+            )
+            assert protective is not None
+            protective.result_state = "UNKNOWN"
+            await session.commit()
+
+        result = await run_pass(now=NOW + 2 * HLIT_TIMEFRAME, ports=ports)
+
+        assert result.reason == UNPROTECTED
+        assert result.outcome is None
+        async with sessions() as session:  # type: ignore[operator]
+            incident = await session.scalar(
+                select(OpsIncident).where(
+                    OpsIncident.reason_code == "POSITION_WITHOUT_PROTECTION"
+                )
+            )
+            assert incident is not None
+            assert incident.severity == "BLOCKING"
+            assert incident.status == "OPEN"
+            # New exposure is blocked, and only new exposure: a full halt
+            # would also stop the stop from ever being placed again.
+            control = await session.scalar(select(OpsTradingControl))
+            assert control is not None
+            assert control.kill_switch_level == "BLOCK_NEW_EXPOSURE"
+            assert control.armed is True
 
     _drive(scenario)

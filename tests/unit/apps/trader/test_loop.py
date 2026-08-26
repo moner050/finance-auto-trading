@@ -15,6 +15,7 @@ from unit.apps.trader.test_tick import (
 from autotrader.apps.trader.loop import (
     NO_NEW_BAR,
     NOT_LEADER,
+    UNPROTECTED,
     LoopPorts,
     SystemClock,
     run_forever,
@@ -58,6 +59,19 @@ class _Source:
         return self._context
 
 
+class _Protection:
+    """How many open positions have no stop behind them."""
+
+    def __init__(self, unprotected: int = 0) -> None:
+        self._unprotected = unprotected
+        self.calls = 0
+
+    async def unprotected(self, now: datetime) -> int:
+        del now
+        self.calls += 1
+        return self._unprotected
+
+
 def _ports(
     *,
     lease: _Lease,
@@ -66,10 +80,12 @@ def _ports(
     control: _Control | None = None,
     recorder: _Recorder | None = None,
     execution: _Execution | None = None,
+    protection: _Protection | None = None,
 ) -> LoopPorts:
     return LoopPorts(
         lease=lease,
         settlement=settlement,
+        protection=protection or _Protection(),
         source=source,
         control=control or _Control(True),
         recorder=recorder or _Recorder(),
@@ -251,3 +267,64 @@ def test_the_system_clock_reports_whole_seconds() -> None:
 
     assert moment.tzinfo is UTC
     assert moment.microsecond == 0
+
+
+@pytest.mark.asyncio
+async def test_an_unprotected_position_stops_the_pass_before_it_evaluates() -> None:
+    """Opening more while something already held has no stop is the one thing
+    the loop must not do, so it does not even look at the bar."""
+    source = _Source(_setup_context())
+    settlement = _Settlement(2)
+    result = await run_pass(
+        now=NOW,
+        ports=_ports(
+            lease=_Lease(True),
+            settlement=settlement,
+            source=source,
+            protection=_Protection(1),
+        ),
+    )
+
+    assert result.reason == UNPROTECTED
+    assert result.outcome is None
+    # Settling still happened: that is how a stop gets resolved at all.
+    assert result.settled == 2
+    assert source.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_protection_is_checked_only_after_settling() -> None:
+    """A stop filled on this pass takes the position flat, so checking before
+    settling would report a position that no longer exists."""
+    protection = _Protection()
+    settlement = _Settlement(1)
+    await run_pass(
+        now=NOW,
+        ports=_ports(
+            lease=_Lease(True),
+            settlement=settlement,
+            source=_Source(_setup_context()),
+            protection=protection,
+        ),
+    )
+
+    assert settlement.calls == 1
+    assert protection.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_without_the_lease_nothing_is_checked_either() -> None:
+    protection = _Protection(1)
+    result = await run_pass(
+        now=NOW,
+        ports=_ports(
+            lease=_Lease(False),
+            settlement=_Settlement(),
+            source=_Source(_setup_context()),
+            protection=protection,
+        ),
+    )
+
+    assert result.reason == NOT_LEADER
+    # Another instance owns this account, and owns the question too.
+    assert protection.calls == 0

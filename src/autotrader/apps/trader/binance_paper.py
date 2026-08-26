@@ -21,6 +21,7 @@ from autotrader.apps.trader.composition import (
     MySqlDecisionRecorder,
     MySqlFillSettlement,
     MySqlPaperExecution,
+    MySqlProtectionGuard,
     MySqlSchedulerLease,
     MySqlTradingControl,
 )
@@ -203,6 +204,7 @@ def build_ports(
         settlement=MySqlFillSettlement(
             sessions=sessions, bars=bars, account=account, broker=submitter
         ),
+        protection=MySqlProtectionGuard(sessions=sessions, account=account),
         source=BinanceContextSource(
             market_data=market_data,
             inputs=inputs,

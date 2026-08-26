@@ -25,6 +25,7 @@ from autotrader.shared.time import require_utc
 
 NOT_LEADER = "NOT_LEADER"
 NO_NEW_BAR = "NO_NEW_BAR"
+UNPROTECTED = "UNPROTECTED"
 
 
 class SchedulerLease(Protocol):
@@ -36,6 +37,12 @@ class SchedulerLease(Protocol):
 class FillSettlement(Protocol):
     async def settle(self, now: datetime) -> int:
         """Resolve orders whose fill bar has closed, returning how many."""
+        ...
+
+
+class ProtectionGuard(Protocol):
+    async def unprotected(self, now: datetime) -> int:
+        """How many open positions have no stop standing behind them."""
         ...
 
 
@@ -62,6 +69,7 @@ class LoopPass:
 class LoopPorts:
     lease: SchedulerLease
     settlement: FillSettlement
+    protection: ProtectionGuard
     source: ContextSource
     control: TradingControl
     recorder: DecisionRecorder
@@ -79,6 +87,12 @@ async def run_pass(*, now: datetime, ports: LoopPorts) -> LoopPass:
 
     # Settle first so the evaluation sees positions as they actually stand.
     settled = await ports.settlement.settle(moment)
+
+    # Then check what is already held before deciding anything new. An
+    # unprotected position is not a reason to trade more carefully; it is a
+    # reason to stop opening exposure until it has a stop behind it.
+    if await ports.protection.unprotected(moment):
+        return LoopPass(reason=UNPROTECTED, settled=settled, outcome=None)
 
     context = await ports.source.context_for(moment)
     if context is None:
@@ -128,11 +142,13 @@ class SystemClock:
 __all__ = (
     "NOT_LEADER",
     "NO_NEW_BAR",
+    "UNPROTECTED",
     "Clock",
     "ContextSource",
     "FillSettlement",
     "LoopPass",
     "LoopPorts",
+    "ProtectionGuard",
     "SchedulerLease",
     "SystemClock",
     "run_forever",
