@@ -29,6 +29,9 @@ from autotrader.persistence.mysql.models import (
     orders as orders,
 )
 from autotrader.persistence.mysql.models import (
+    paper as paper,
+)
+from autotrader.persistence.mysql.models import (
     positions as positions,
 )
 from autotrader.persistence.mysql.models import (

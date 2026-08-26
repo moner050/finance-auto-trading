@@ -16,6 +16,7 @@ from autotrader.shared.time import require_utc
 from autotrader.strategies.david_v6.models import V6Market
 
 _ACCOUNT_BINDINGS = {
+    "internal-krx-paper": V6Market.KRX_CASH,
     "internal-us-paper": V6Market.US_CASH,
     "internal-binance-usdm-paper": V6Market.BINANCE_USDM,
 }
