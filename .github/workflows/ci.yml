@@ -35,3 +35,52 @@ jobs:
           version: "0.12.3"
       - run: uv sync --frozen
       - run: uv run python -m pytest tests/unit tests/architecture tests/property tests/chaos -q
+
+  integration:
+    # Service containers are Linux only, so this job does not join the
+    # os matrix the other two use.
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        # CHECK constraints arrived in 8.0.16 and the schema leans on them
+        # heavily; 8.4 is the version the deployment targets.
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: finance_auto_trading_test
+          MYSQL_USER: autotrader
+          MYSQL_PASSWORD: autotrader
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+      redis:
+        # The event transport is built on streams, which arrived in 5.0.
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      # Every integration test drops and rebuilds the schema, so the guard in
+      # tests/conftest.py admits a database only at exactly this host, user
+      # and name, and only when CI is set. Nothing else is disposable.
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: finance_auto_trading_test
+      MYSQL_USER: autotrader
+      MYSQL_PASSWORD: autotrader
+      REDIS_URL: redis://127.0.0.1:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.12.3"
+      - run: uv sync --frozen
+      - run: uv run python -m pytest tests/integration -q
