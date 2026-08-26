@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import select
@@ -27,6 +27,11 @@ from autotrader.execution.intents.models import (
 )
 from autotrader.execution.intents.service import OrderIntentFactory
 from autotrader.execution.orders.service import OrderService, OrderSubmissionContext
+from autotrader.integrations.brokers.internal_paper import InternalPaperBroker
+from autotrader.integrations.brokers.paper_submitter import (
+    ExecutionBars,
+    resolve_paper_fills,
+)
 from autotrader.persistence.mysql.dispatch_store import MySqlDispatchStore
 from autotrader.persistence.mysql.models.intents import (
     PersistedOrderIntent,
@@ -40,8 +45,12 @@ from autotrader.persistence.mysql.models.strategy import (
     StrategyFeatureSnapshot,
     StrategySetup,
 )
+from autotrader.persistence.mysql.paper_journal import MySqlPaperJournal
 from autotrader.persistence.mysql.repositories.david_v6 import DavidV6Repository
 from autotrader.persistence.mysql.repositories.intents import OrderIntentRepository
+from autotrader.persistence.mysql.repositories.operations import (
+    RuntimeControlRepository,
+)
 from autotrader.persistence.mysql.repositories.orders import MySqlOrderStore
 from autotrader.persistence.mysql.repositories.risk import MySqlRiskReservationUow
 from autotrader.risk.models import RiskDecision, RiskOutcome
@@ -354,7 +363,74 @@ def _domain_decision(row: PersistedRiskDecision, intent_id: UUID) -> RiskDecisio
 
 __all__ = (
     "ExecutionAccount",
+    "LeaseSettings",
     "MySqlDecisionRecorder",
+    "MySqlFillSettlement",
     "MySqlPaperExecution",
+    "MySqlSchedulerLease",
     "MySqlTradingControl",
 )
+
+
+@dataclass(frozen=True, slots=True)
+class LeaseSettings:
+    lease_name: str
+    runtime_instance_id: UUID
+    ttl: timedelta
+
+    def __post_init__(self) -> None:
+        if type(self.ttl) is not timedelta or self.ttl <= timedelta(0):
+            raise ValueError("lease ttl must be positive")
+
+
+class MySqlSchedulerLease:
+    """Only the instance holding the named lease may trade the account."""
+
+    def __init__(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        settings: LeaseSettings,
+    ) -> None:
+        self._sessions = sessions
+        self._settings = settings
+
+    async def acquire(self, now: datetime) -> bool:
+        moment = require_utc(now)
+        async with self._sessions() as session:
+            lease = await RuntimeControlRepository(
+                session
+            ).acquire_named_scheduler_lease(
+                lease_name=self._settings.lease_name,
+                runtime_instance_id=self._settings.runtime_instance_id,
+                now=moment,
+                lease_expires_at=moment + self._settings.ttl,
+            )
+            await session.commit()
+        return lease is not None
+
+
+class MySqlFillSettlement:
+    """Resolve paper orders whose fill bar has closed since the last pass."""
+
+    def __init__(
+        self,
+        *,
+        sessions: async_sessionmaker[AsyncSession],
+        bars: ExecutionBars,
+    ) -> None:
+        self._sessions = sessions
+        self._bars = bars
+
+    async def settle(self, now: datetime) -> int:
+        require_utc(now)
+        async with self._sessions() as session:
+            journal = MySqlPaperJournal(session)
+            receipts = await resolve_paper_fills(
+                broker=InternalPaperBroker(
+                    journal=journal, market_data=cast(Any, self._bars)
+                ),
+                journal=journal,
+                bars=self._bars,
+            )
+            await session.commit()
+        return len(receipts)
