@@ -106,6 +106,14 @@ def integration_database_url() -> str | None:
     return Settings().database_connection_url
 
 
+def integration_redis_url() -> str | None:
+    """The Redis the integration tests run against, resolved as the app does."""
+    configured = os.environ.get("REDIS_URL")
+    if configured is not None:
+        return configured
+    return Settings().redis_connection_url
+
+
 @pytest.fixture(autouse=True)
 def reset_integration_database(request: _FixtureRequest) -> None:
     prepare_integration_database(request)

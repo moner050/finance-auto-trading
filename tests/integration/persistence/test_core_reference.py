@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 from uuid import uuid7
 
 import pytest
 from alembic import command
 from alembic.config import Config
+from conftest import integration_database_url
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -37,9 +37,9 @@ ROOT = Path(__file__).resolve().parents[3]
 
 @pytest.mark.integration
 def test_core_reference_seed_is_idempotent_and_constraints_hold() -> None:
-    url = os.environ.get("DATABASE_URL")
+    url = integration_database_url()
     if url is None:
-        pytest.skip("DATABASE_URL is required for MySQL integration tests")
+        pytest.skip("a MySQL connection is required for integration tests")
     command.upgrade(Config(ROOT / "alembic.ini"), "head")
 
     async def verify() -> None:

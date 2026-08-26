@@ -3,9 +3,16 @@ from __future__ import annotations
 from base64 import b64decode
 from binascii import Error as BinasciiError
 from enum import StrEnum
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
-from pydantic import HttpUrl, SecretStr, TypeAdapter, ValidationError, model_validator
+from pydantic import (
+    Field,
+    HttpUrl,
+    SecretStr,
+    TypeAdapter,
+    ValidationError,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
@@ -25,7 +32,7 @@ class TradingState(StrEnum):
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="", case_sensitive=False, extra="ignore"
+        env_prefix="", case_sensitive=False, extra="ignore", populate_by_name=True
     )
 
     trading_mode: RuntimeMode = RuntimeMode.SHADOW
@@ -37,6 +44,11 @@ class Settings(BaseSettings):
     mysql_user: str | None = None
     mysql_password: SecretStr | None = None
     redis_url: str | None = None
+    redis_host: str | None = None
+    redis_port: int | None = None
+    # The operator configures this as REDIS_PW, which is the name the
+    # deployment already uses; the field keeps the readable spelling.
+    redis_password: SecretStr | None = Field(default=None, alias="REDIS_PW")
     backoffice_public_url: str | None = None
     backoffice_master_key: SecretStr | None = None
     backoffice_master_key_version: int | None = None
@@ -82,6 +94,29 @@ class Settings(BaseSettings):
             raise ValueError(
                 "MYSQL_HOST, MYSQL_PORT, MYSQL_DATABASE, MYSQL_USER, and "
                 "MYSQL_PASSWORD must be configured together"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def resolve_redis_component_url(self) -> Settings:
+        components = (self.redis_host, self.redis_port, self.redis_password)
+        if self.redis_url is not None or not any(
+            component is not None for component in components
+        ):
+            return self
+        host = self.redis_host
+        port = self.redis_port
+        password = self.redis_password
+        if (
+            host is None
+            or port is None
+            or password is None
+            or not 1 <= port <= 65535
+            or not host.strip()
+            or not password.get_secret_value().strip()
+        ):
+            raise ValueError(
+                "REDIS_HOST, REDIS_PORT, and REDIS_PW must be configured together"
             )
         return self
 
@@ -192,6 +227,24 @@ class Settings(BaseSettings):
             port=self.mysql_port,
             database=self.mysql_database,
         ).render_as_string(hide_password=False)
+
+    @property
+    def redis_connection_url(self) -> str | None:
+        if self.redis_url is not None:
+            return self.redis_url
+        if any(
+            component is None
+            for component in (self.redis_host, self.redis_port, self.redis_password)
+        ):
+            return None
+        assert self.redis_host is not None
+        assert self.redis_port is not None
+        assert self.redis_password is not None
+        # Built by hand rather than through URL.create, which drops the
+        # password when there is no username, and Redis authenticates with a
+        # password alone.
+        password = quote(self.redis_password.get_secret_value(), safe="")
+        return f"redis://:{password}@{self.redis_host}:{self.redis_port}"
 
 
 def effective_startup_state(settings: Settings) -> TradingState:

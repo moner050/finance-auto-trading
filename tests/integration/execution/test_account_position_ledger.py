@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -10,6 +9,7 @@ from uuid import uuid7
 import pytest
 from alembic import command
 from alembic.config import Config
+from conftest import integration_database_url
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from autotrader.config.settings import Settings
@@ -30,9 +30,9 @@ NOW = datetime(2026, 8, 9, tzinfo=UTC)
 
 @pytest.mark.integration
 def test_account_isolation_secret_reference_and_signed_observed_position() -> None:
-    url = os.environ.get("DATABASE_URL")
+    url = integration_database_url()
     if url is None:
-        pytest.skip("DATABASE_URL is required for MySQL integration tests")
+        pytest.skip("a MySQL connection is required for integration tests")
     command.upgrade(Config(ROOT / "alembic.ini"), "head")
 
     async def verify() -> None:

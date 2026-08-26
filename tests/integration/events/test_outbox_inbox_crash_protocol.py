@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid7
@@ -9,6 +8,7 @@ from uuid import uuid7
 import pytest
 from alembic import command
 from alembic.config import Config
+from conftest import integration_database_url
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -55,9 +55,9 @@ def envelope(value: str) -> EventEnvelope[Payload]:
 
 @pytest.mark.integration
 def test_outbox_claim_and_inbox_payload_conflict_are_durable() -> None:
-    url = os.environ.get("DATABASE_URL")
+    url = integration_database_url()
     if url is None:
-        pytest.skip("DATABASE_URL is required for MySQL integration tests")
+        pytest.skip("a MySQL connection is required for integration tests")
     command.upgrade(Config(ROOT / "alembic.ini"), "head")
 
     async def verify() -> None:
@@ -128,9 +128,9 @@ def test_outbox_claim_and_inbox_payload_conflict_are_durable() -> None:
 
 @pytest.mark.integration
 def test_inbox_concurrent_duplicate_is_not_a_transaction_error() -> None:
-    url = os.environ.get("DATABASE_URL")
+    url = integration_database_url()
     if url is None:
-        pytest.skip("DATABASE_URL is required for MySQL integration tests")
+        pytest.skip("a MySQL connection is required for integration tests")
     command.upgrade(Config(ROOT / "alembic.ini"), "head")
 
     async def verify() -> None:
@@ -157,9 +157,9 @@ def test_inbox_concurrent_duplicate_is_not_a_transaction_error() -> None:
 
 @pytest.mark.integration
 def test_outbox_dispatcher_acks_only_after_published_commit() -> None:
-    url = os.environ.get("DATABASE_URL")
+    url = integration_database_url()
     if url is None:
-        pytest.skip("DATABASE_URL is required for MySQL integration tests")
+        pytest.skip("a MySQL connection is required for integration tests")
     command.upgrade(Config(ROOT / "alembic.ini"), "head")
 
     async def verify() -> None:

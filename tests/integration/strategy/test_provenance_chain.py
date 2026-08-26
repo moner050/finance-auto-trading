@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 
 import pytest
 from alembic import command
 from alembic.config import Config
+from conftest import integration_database_url
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -24,9 +24,9 @@ ROOT = Path(__file__).resolve().parents[3]
 
 @pytest.mark.integration
 def test_research_only_fake_strategy_is_seeded_and_never_live_approved() -> None:
-    url = os.environ.get("DATABASE_URL")
+    url = integration_database_url()
     if url is None:
-        pytest.skip("DATABASE_URL is required for MySQL integration tests")
+        pytest.skip("a MySQL connection is required for integration tests")
     command.upgrade(Config(ROOT / "alembic.ini"), "head")
 
     async def verify() -> None:

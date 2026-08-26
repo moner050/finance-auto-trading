@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -10,6 +9,7 @@ from uuid import uuid7
 import pytest
 from alembic import command
 from alembic.config import Config
+from conftest import integration_database_url
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -68,9 +68,9 @@ NOW = datetime(2026, 8, 9, tzinfo=UTC)
 
 @pytest.mark.integration
 def test_replayed_approval_creates_one_order_submit_event_and_outbox() -> None:
-    url = os.environ.get("DATABASE_URL")
+    url = integration_database_url()
     if url is None:
-        pytest.skip("DATABASE_URL is required for MySQL integration tests")
+        pytest.skip("a MySQL connection is required for integration tests")
     command.upgrade(Config(ROOT / "alembic.ini"), "head")
 
     async def verify() -> None:
@@ -116,9 +116,9 @@ def test_replayed_approval_creates_one_order_submit_event_and_outbox() -> None:
 def test_adopted_broker_open_order_is_idempotent_and_cannot_submit_new_exposure() -> (
     None
 ):
-    url = os.environ.get("DATABASE_URL")
+    url = integration_database_url()
     if url is None:
-        pytest.skip("DATABASE_URL is required for MySQL integration tests")
+        pytest.skip("a MySQL connection is required for integration tests")
     command.upgrade(Config(ROOT / "alembic.ini"), "head")
 
     async def verify() -> None:

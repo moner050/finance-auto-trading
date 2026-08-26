@@ -7,11 +7,11 @@ lease is the guarantee that matters most in the driver.
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import UTC, datetime, timedelta
 from uuid import uuid7
 
 import pytest
+from conftest import integration_database_url
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from autotrader.apps.trader.composition import LeaseSettings, MySqlSchedulerLease
@@ -23,9 +23,9 @@ TTL = timedelta(minutes=5)
 
 
 def _database_url() -> str:
-    url = os.environ.get("DATABASE_URL")
+    url = integration_database_url()
     if url is None:
-        pytest.skip("DATABASE_URL is required for MySQL integration tests")
+        pytest.skip("a MySQL connection is required for integration tests")
     return url
 
 

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 
 import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from conftest import integration_database_url
 from sqlalchemy import inspect
 
 from autotrader.config.settings import Settings
@@ -16,9 +16,9 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def database_url() -> str:
-    value = os.environ.get("DATABASE_URL")
+    value = integration_database_url()
     if value is None:
-        pytest.skip("DATABASE_URL is required for MySQL integration tests")
+        pytest.skip("a MySQL connection is required for integration tests")
     return value
 
 

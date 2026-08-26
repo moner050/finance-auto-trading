@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -10,6 +9,7 @@ from uuid import UUID, uuid7
 import pytest
 from alembic import command
 from alembic.config import Config
+from conftest import integration_database_url
 from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -60,9 +60,9 @@ def _is_deadlock(error: OperationalError) -> bool:
 
 @pytest.mark.integration
 def test_concurrent_duplicate_and_distinct_reservations_are_serialized() -> None:
-    url = os.environ.get("DATABASE_URL")
+    url = integration_database_url()
     if url is None:
-        pytest.skip("DATABASE_URL is required for MySQL concurrency verification")
+        pytest.skip("a MySQL connection is required for integration tests")
     command.upgrade(Config(ROOT / "alembic.ini"), "head")
 
     async def verify() -> None:

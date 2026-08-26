@@ -8,11 +8,11 @@ broker boundary.
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid7
 
 import pytest
+from conftest import integration_database_url
 from integration.risk.test_concurrent_reservation import _seed as _risk_seed
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -63,9 +63,9 @@ NOW = datetime(2026, 8, 9, tzinfo=UTC)
 
 
 def _database_url() -> str:
-    url = os.environ.get("DATABASE_URL")
+    url = integration_database_url()
     if url is None:
-        pytest.skip("DATABASE_URL is required for MySQL integration tests")
+        pytest.skip("a MySQL connection is required for integration tests")
     return url
 
 

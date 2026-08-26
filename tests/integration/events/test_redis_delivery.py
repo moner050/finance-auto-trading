@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import UTC, datetime
 from uuid import uuid7
 
 import pytest
+from conftest import integration_database_url, integration_redis_url
 from pydantic import BaseModel
 from redis import asyncio as redis
 from sqlalchemy import func, select
@@ -28,16 +28,16 @@ class Payload(BaseModel):
 
 
 def _redis_url() -> str:
-    value = os.environ.get("REDIS_URL")
+    value = integration_redis_url()
     if value is None:
-        pytest.skip("REDIS_URL is required for Redis integration tests")
+        pytest.skip("a Redis connection is required for integration tests")
     return value
 
 
 def _database_url() -> str:
-    value = os.environ.get("DATABASE_URL")
+    value = integration_database_url()
     if value is None:
-        pytest.skip("DATABASE_URL is required for MySQL/Redis integration tests")
+        pytest.skip("a MySQL connection is required for integration tests")
     return value
 
 

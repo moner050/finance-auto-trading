@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import os
-
 import pytest
+from conftest import integration_database_url, integration_redis_url
 from redis import asyncio as redis
 from sqlalchemy import text
 
@@ -17,11 +16,10 @@ MINIMUM_MYSQL = (8, 0, 16)
 MINIMUM_REDIS = (5, 0, 0)
 
 
-def required_environment(name: str) -> str:
-    value = os.environ.get(name)
-    if value is None:
-        pytest.skip(f"{name} is required for container integration tests")
-    return value
+def _required(url: str | None, service: str) -> str:
+    if url is None:
+        pytest.skip(f"a {service} connection is required for integration tests")
+    return url
 
 
 def _version(raw: str) -> tuple[int, ...]:
@@ -37,7 +35,9 @@ def _version(raw: str) -> tuple[int, ...]:
 @pytest.mark.integration
 async def test_mysql_session_runtime_policy() -> None:
     """The engine pins UTC, read-committed and strict mode on every session."""
-    engine = create_engine(Settings(database_url=required_environment("DATABASE_URL")))
+    engine = create_engine(
+        Settings(database_url=_required(integration_database_url(), "MySQL"))
+    )
     try:
         async with engine.connect() as connection:
             row = (
@@ -63,7 +63,9 @@ async def test_mysql_session_runtime_policy() -> None:
 @pytest.mark.integration
 async def test_redis_is_new_enough_for_the_stream_transport() -> None:
     """A server without streams answers PING and then fails every publish."""
-    client = redis.from_url(required_environment("REDIS_URL"), decode_responses=True)
+    client = redis.from_url(
+        _required(integration_redis_url(), "Redis"), decode_responses=True
+    )
     try:
         assert await client.ping() is True
         info = await client.info("server")

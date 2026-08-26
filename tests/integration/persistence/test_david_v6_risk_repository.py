@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import os
-
 import pytest
+from conftest import integration_database_url
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from autotrader.config.settings import Settings
@@ -16,9 +15,9 @@ from autotrader.strategies.david_v6.models import V6Market
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_v6_risk_repository_loads_only_exact_active_policy() -> None:
-    url = os.environ.get("DATABASE_URL")
+    url = integration_database_url()
     if url is None:
-        pytest.skip("DATABASE_URL is required for MySQL integration tests")
+        pytest.skip("a MySQL connection is required for integration tests")
     engine = create_engine(Settings(database_url=url))
     session_factory = async_sessionmaker(engine)
     try:
