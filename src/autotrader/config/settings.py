@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     # deployment already uses; the field keeps the readable spelling.
     redis_password: SecretStr | None = Field(default=None, alias="REDIS_PW")
     backoffice_public_url: str | None = None
+    backoffice_allowed_email: str | None = None
+    oauth_google_client_id: str | None = None
+    oauth_google_client_secret: SecretStr | None = None
     backoffice_master_key: SecretStr | None = None
     backoffice_master_key_version: int | None = None
     backoffice_previous_master_key: SecretStr | None = None
