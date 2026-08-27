@@ -56,7 +56,7 @@ from autotrader.integrations.brokers.paper_submitter import (
     ExecutionBars,
     resolve_paper_fills,
 )
-from autotrader.persistence.mysql.dispatch_store import ACCEPTED, MySqlDispatchStore
+from autotrader.persistence.mysql.dispatch_store import MySqlDispatchStore
 from autotrader.persistence.mysql.models.accounts import Account
 from autotrader.persistence.mysql.models.david_v6 import DavidV6DecisionRow
 from autotrader.persistence.mysql.models.intents import (
@@ -88,6 +88,9 @@ from autotrader.persistence.mysql.repositories.operations import (
     RuntimeControlRepository,
 )
 from autotrader.persistence.mysql.repositories.orders import MySqlOrderStore
+from autotrader.persistence.mysql.repositories.protection import (
+    ProtectionRepository,
+)
 from autotrader.persistence.mysql.repositories.reconciliation import (
     ReconciliationRepository,
 )
@@ -154,51 +157,15 @@ class MySqlProtectionGuard:
     async def unprotected(self, now: datetime) -> int:
         moment = require_utc(now)
         async with self._sessions() as session:
-            exposed = await self._exposed_instruments(session)
-            if not exposed:
-                return 0
-            protected = await self._protected_instruments(session, exposed)
-            missing = sorted(exposed - protected)
+            missing = await ProtectionRepository(session).unprotected_instruments(
+                account_id=self._account.account.id
+            )
             if not missing:
                 return 0
-            await self._raise_incidents(session, missing, moment)
+            await self._raise_incidents(session, list(missing), moment)
             await _block_new_exposure(session)
             await session.commit()
         return len(missing)
-
-    async def _exposed_instruments(self, session: AsyncSession) -> set[UUID]:
-        rows = await session.scalars(
-            select(Position.instrument_id).where(
-                Position.account_id == self._account.account.id,
-                Position.quantity != 0,
-            )
-        )
-        return set(rows.all())
-
-    async def _protected_instruments(
-        self, session: AsyncSession, exposed: set[UUID]
-    ) -> set[UUID]:
-        """Instruments with a protective order that has reached the broker and
-        has not been used up."""
-        rows = await session.scalars(
-            select(PersistedOrder.instrument_id)
-            .join(
-                PersistedOrderIntent,
-                PersistedOrderIntent.id == PersistedOrder.order_intent_id,
-            )
-            .join(
-                PersistedOrderCommand,
-                PersistedOrderCommand.order_id == PersistedOrder.id,
-            )
-            .where(
-                PersistedOrder.account_id == self._account.account.id,
-                PersistedOrder.instrument_id.in_(exposed),
-                PersistedOrderIntent.intent_type == IntentType.PROTECTIVE.value,
-                PersistedOrderCommand.result_state == ACCEPTED,
-                PersistedOrder.filled_quantity < PersistedOrder.requested_quantity,
-            )
-        )
-        return set(rows.all())
 
     async def _raise_incidents(
         self, session: AsyncSession, missing: list[UUID], now: datetime
