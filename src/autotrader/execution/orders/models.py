@@ -23,6 +23,22 @@ class OrderStatus(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
+TERMINAL_ORDER_STATUSES = frozenset(
+    {
+        OrderStatus.FILLED,
+        OrderStatus.CANCELED,
+        OrderStatus.REJECTED,
+        OrderStatus.EXPIRED,
+    }
+)
+# What a broker snapshot is expected to still show. UNKNOWN is left out because
+# it is not a claim that the order is working; it is the absence of one, and it
+# has its own blocking path.
+WORKING_ORDER_STATUSES = frozenset(
+    set(OrderStatus) - TERMINAL_ORDER_STATUSES - {OrderStatus.UNKNOWN}
+)
+
+
 class CommandType(StrEnum):
     SUBMIT = "SUBMIT"
     CANCEL = "CANCEL"
@@ -39,12 +55,7 @@ class BrokerOrderLinkState:
 
     @property
     def is_terminal(self) -> bool:
-        return self.status in {
-            OrderStatus.FILLED,
-            OrderStatus.CANCELED,
-            OrderStatus.REJECTED,
-            OrderStatus.EXPIRED,
-        }
+        return self.status in TERMINAL_ORDER_STATUSES
 
 
 @dataclass(frozen=True, slots=True)

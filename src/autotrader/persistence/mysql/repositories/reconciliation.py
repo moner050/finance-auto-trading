@@ -10,16 +10,32 @@ from sqlalchemy import func, insert, select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from autotrader.execution.orders.models import WORKING_ORDER_STATUSES
 from autotrader.execution.reconciliation.gates import ReconciliationRestartState
-from autotrader.execution.reconciliation.models import ReconciliationRun
+from autotrader.execution.reconciliation.models import (
+    HeldPosition,
+    InternalOpenOrder,
+    ReconciliationDiff,
+    ReconciliationRun,
+)
 from autotrader.persistence.mysql.models.accounts import Account
 from autotrader.persistence.mysql.models.operations import OpsIncident
-from autotrader.persistence.mysql.models.orders import PersistedOrder
+from autotrader.persistence.mysql.models.orders import (
+    PersistedBrokerOrderLink,
+    PersistedOrder,
+)
+from autotrader.persistence.mysql.models.positions import Position
 from autotrader.persistence.mysql.models.reconciliation import (
     PersistedReconciliationDiff,
     PersistedReconciliationRun,
 )
 from autotrader.shared.ids import new_uuid7
+
+# Derived from the enum rather than listed here, so a status added later
+# cannot quietly fall outside reconciliation.
+_WORKING_ORDER_STATUSES = tuple(
+    sorted(status.value for status in WORKING_ORDER_STATUSES)
+)
 
 
 class ReconciliationRepository:
@@ -67,6 +83,50 @@ class ReconciliationRepository:
             latest_run_complete=latest is not None and latest.complete,
             blocking_diff_count=int(blocking or 0),
             unknown_order_count=int(unknown or 0),
+        )
+
+    async def internal_positions(self, *, account_id: UUID) -> tuple[HeldPosition, ...]:
+        """What this system believes the account holds.
+
+        Flat instruments are left out rather than reported as zero, so that a
+        broker reporting nothing and this system holding nothing agree instead
+        of producing a difference in every instrument ever traded.
+        """
+        rows = await self._session.scalars(
+            select(Position)
+            .where(Position.account_id == account_id, Position.quantity != 0)
+            .order_by(Position.instrument_id)
+        )
+        return tuple(
+            HeldPosition(instrument_id=row.instrument_id, quantity=row.quantity)
+            for row in rows
+        )
+
+    async def internal_open_orders(
+        self, *, account_id: UUID
+    ) -> tuple[InternalOpenOrder, ...]:
+        """Orders this system believes are still working at the broker."""
+        rows = (
+            await self._session.execute(
+                select(PersistedOrder, PersistedBrokerOrderLink)
+                .join(
+                    PersistedBrokerOrderLink,
+                    PersistedBrokerOrderLink.order_id == PersistedOrder.id,
+                )
+                .where(
+                    PersistedOrder.account_id == account_id,
+                    PersistedOrder.status.in_(_WORKING_ORDER_STATUSES),
+                )
+                .order_by(PersistedBrokerOrderLink.broker_order_id)
+            )
+        ).all()
+        return tuple(
+            InternalOpenOrder(
+                order_id=order.id,
+                broker_order_id=link.broker_order_id,
+                broker_client_order_id=order.broker_client_order_id,
+            )
+            for order, link in rows
         )
 
     async def enabled_restart_states(self) -> tuple[ReconciliationRestartState, ...]:
@@ -137,6 +197,9 @@ class ReconciliationRepository:
         for diff in run.diffs:
             payload = {
                 "broker_order_id": diff.broker_order_id,
+                "instrument_id": str(diff.instrument_id)
+                if diff.instrument_id
+                else None,
                 "internal_order_id": str(diff.internal_order_id)
                 if diff.internal_order_id
                 else None,
@@ -150,11 +213,12 @@ class ReconciliationRepository:
                     id=new_uuid7(),
                     run_id=persisted_run.id,
                     internal_order_id=diff.internal_order_id,
+                    instrument_id=diff.instrument_id,
                     broker_order_id=diff.broker_order_id,
                     broker_execution_id=None,
                     diff_key=(
                         f"{diff.kind.value}:{diff.internal_order_id or ''}:"
-                        f"{diff.broker_order_id or ''}"
+                        f"{diff.broker_order_id or ''}:{diff.instrument_id or ''}"
                     ),
                     severity="BLOCKING" if diff.blocking else "INFO",
                     status="OPEN",
@@ -170,14 +234,23 @@ class ReconciliationRepository:
                         severity="BLOCKING",
                         status="OPEN",
                         reason_code=f"RECONCILIATION_{diff.kind.value}",
-                        scope_type=(
-                            "ORDER"
-                            if diff.internal_order_id is not None
-                            else "RECONCILIATION_RUN"
+                        scope_type=_scope_type(diff),
+                        scope_key=str(
+                            diff.internal_order_id
+                            or diff.instrument_id
+                            or persisted_run.id
                         ),
-                        scope_key=str(diff.internal_order_id or persisted_run.id),
                         created_at=run.completed_at,
                     )
                 )
         await self._session.flush()
         return replace(run, id=persisted_run.id)
+
+
+def _scope_type(diff: ReconciliationDiff) -> str:
+    """What an operator should go and look at."""
+    if diff.internal_order_id is not None:
+        return "ORDER"
+    if diff.instrument_id is not None:
+        return "INSTRUMENT"
+    return "RECONCILIATION_RUN"

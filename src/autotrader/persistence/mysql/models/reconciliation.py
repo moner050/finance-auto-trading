@@ -78,6 +78,12 @@ class PersistedReconciliationDiff(CoreBase):
             ["exec_reconciliation_run.id"],
             name="fk_exec_reconciliation_diff_run",
         ),
+        ForeignKeyConstraint(
+            ["instrument_id"],
+            ["core_instrument.id"],
+            name="fk_exec_reconciliation_diff_instrument",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint(
             "severity in ('INFO','WARNING','BLOCKING')",
             name="ck_exec_reconciliation_diff_severity",
@@ -93,6 +99,8 @@ class PersistedReconciliationDiff(CoreBase):
     id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True, default=new_uuid7)
     run_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
     internal_order_id: Mapped[UUID | None] = mapped_column(UuidBinary(), nullable=True)
+    # Set when the two sides disagree about a position rather than an order.
+    instrument_id: Mapped[UUID | None] = mapped_column(UuidBinary(), nullable=True)
     broker_order_id: Mapped[str | None] = mapped_column(
         String(128, collation="ascii_bin"), nullable=True
     )

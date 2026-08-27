@@ -241,6 +241,7 @@ _CREATE: tuple[str, ...] = (
     id BINARY(16) NOT NULL,
     run_id BINARY(16) NOT NULL,
     internal_order_id BINARY(16),
+    instrument_id BINARY(16),
     broker_order_id VARCHAR(128) COLLATE ascii_bin,
     broker_execution_id VARCHAR(128) COLLATE ascii_bin,
     diff_key VARCHAR(256) COLLATE ascii_bin NOT NULL,
@@ -253,6 +254,7 @@ _CREATE: tuple[str, ...] = (
     PRIMARY KEY (id),
     CONSTRAINT fk_exec_reconciliation_diff_internal_order FOREIGN KEY(internal_order_id) REFERENCES exec_order (id) ON DELETE RESTRICT,
     CONSTRAINT fk_exec_reconciliation_diff_run FOREIGN KEY(run_id) REFERENCES exec_reconciliation_run (id),
+    CONSTRAINT fk_exec_reconciliation_diff_instrument FOREIGN KEY(instrument_id) REFERENCES core_instrument (id) ON DELETE RESTRICT,
     CONSTRAINT ck_exec_reconciliation_diff_severity CHECK (severity in ('INFO','WARNING','BLOCKING')),
     CONSTRAINT ck_exec_reconciliation_diff_status CHECK (status in ('OPEN','RESOLVED')),
     CONSTRAINT uq_exec_reconciliation_diff_identity UNIQUE (run_id, diff_key)

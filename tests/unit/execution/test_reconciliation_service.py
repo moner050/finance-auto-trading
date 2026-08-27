@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -13,7 +13,9 @@ from autotrader.execution.reconciliation.models import (
     BrokerOpenOrderAdoption,
     BrokerOpenOrderAdoptionResult,
     BrokerSnapshot,
+    HeldPosition,
     InternalOpenOrder,
+    ReconciliationDiff,
     ReconciliationDiffKind,
     ReconciliationRun,
 )
@@ -40,10 +42,14 @@ def test_reconciliation_reports_missing_orders_and_never_treats_partial_as_clean
         complete=False,
         expires_at=now + timedelta(minutes=1),
         open_orders=(broker_only,),
+        positions=(),
     )
 
     diffs = ReconciliationService().compare(
-        now=now, snapshot=snapshot, internal_open_orders=(internal,)
+        now=now,
+        snapshot=snapshot,
+        internal_open_orders=(internal,),
+        internal_positions=(),
     )
 
     assert {diff.kind for diff in diffs} == {
@@ -71,11 +77,15 @@ def test_reconciliation_accepts_exact_broker_and_client_order_identity() -> None
                 canonical_terms_hash=b"a" * 32,
             ),
         ),
+        positions=(),
     )
 
     assert (
         ReconciliationService().compare(
-            now=now, snapshot=snapshot, internal_open_orders=(internal,)
+            now=now,
+            snapshot=snapshot,
+            internal_open_orders=(internal,),
+            internal_positions=(),
         )
         == ()
     )
@@ -89,10 +99,14 @@ def test_reconciliation_requires_a_fresh_snapshot() -> None:
         complete=True,
         expires_at=now,
         open_orders=(),
+        positions=(),
     )
 
     diffs = ReconciliationService().compare(
-        now=now, snapshot=snapshot, internal_open_orders=()
+        now=now,
+        snapshot=snapshot,
+        internal_open_orders=(),
+        internal_positions=(),
     )
 
     assert [diff.kind for diff in diffs] == [ReconciliationDiffKind.SNAPSHOT_STALE]
@@ -161,7 +175,7 @@ async def test_reconciliation_run_persists_incomplete_snapshot_as_unsuccessful()
     now = datetime.now(UTC)
     account_id = uuid4()
     reader = _SnapshotReader(
-        BrokerSnapshot(uuid4(), account_id, False, now + timedelta(minutes=1), ())
+        BrokerSnapshot(uuid4(), account_id, False, now + timedelta(minutes=1), (), ())
     )
     store = _RunStore()
 
@@ -171,11 +185,120 @@ async def test_reconciliation_run_persists_incomplete_snapshot_as_unsuccessful()
         reader=reader,
         store=store,
         internal_open_orders=(),
+        internal_positions=(),
     )
 
     assert not run.complete and not run.succeeded
     assert store.runs == [run]
     assert run.diffs[0].kind is ReconciliationDiffKind.SNAPSHOT_INCOMPLETE
+
+
+def _snapshot(
+    positions: tuple[HeldPosition, ...], now: datetime, account_id: UUID | None = None
+) -> BrokerSnapshot:
+    return BrokerSnapshot(
+        broker_id=uuid4(),
+        account_id=account_id or uuid4(),
+        complete=True,
+        expires_at=now + timedelta(minutes=1),
+        open_orders=(),
+        positions=positions,
+    )
+
+
+def _position_diffs(
+    broker: tuple[HeldPosition, ...], internal: tuple[HeldPosition, ...]
+) -> tuple[ReconciliationDiff, ...]:
+    now = datetime.now(UTC)
+    return ReconciliationService().compare(
+        now=now,
+        snapshot=_snapshot(broker, now),
+        internal_open_orders=(),
+        internal_positions=internal,
+    )
+
+
+def test_positions_that_agree_are_not_a_difference() -> None:
+    instrument_id = uuid4()
+    held = (HeldPosition(instrument_id=instrument_id, quantity=Decimal("3")),)
+
+    assert _position_diffs(held, held) == ()
+
+
+def test_a_position_the_broker_does_not_report_blocks() -> None:
+    instrument_id = uuid4()
+
+    diffs = _position_diffs(
+        (), (HeldPosition(instrument_id=instrument_id, quantity=Decimal("3")),)
+    )
+
+    assert [diff.kind for diff in diffs] == [
+        ReconciliationDiffKind.INTERNAL_POSITION_BROKER_MISSING
+    ]
+    assert diffs[0].blocking
+    assert diffs[0].instrument_id == instrument_id
+
+
+def test_a_position_only_the_broker_knows_about_blocks() -> None:
+    instrument_id = uuid4()
+
+    diffs = _position_diffs(
+        (HeldPosition(instrument_id=instrument_id, quantity=Decimal("3")),), ()
+    )
+
+    assert [diff.kind for diff in diffs] == [
+        ReconciliationDiffKind.BROKER_POSITION_INTERNAL_MISSING
+    ]
+    assert diffs[0].instrument_id == instrument_id
+
+
+def test_a_quantity_that_does_not_match_blocks() -> None:
+    instrument_id = uuid4()
+
+    diffs = _position_diffs(
+        (HeldPosition(instrument_id=instrument_id, quantity=Decimal("3")),),
+        (HeldPosition(instrument_id=instrument_id, quantity=Decimal("2")),),
+    )
+
+    # Every size calculated from here would be wrong, so this is not a warning.
+    assert [diff.kind for diff in diffs] == [
+        ReconciliationDiffKind.POSITION_QUANTITY_MISMATCH
+    ]
+    assert diffs[0].blocking
+    assert diffs[0].instrument_id == instrument_id
+
+
+def test_a_side_that_disagrees_is_a_mismatch_not_a_match() -> None:
+    instrument_id = uuid4()
+
+    diffs = _position_diffs(
+        (HeldPosition(instrument_id=instrument_id, quantity=Decimal("3")),),
+        (HeldPosition(instrument_id=instrument_id, quantity=Decimal("-3")),),
+    )
+
+    assert [diff.kind for diff in diffs] == [
+        ReconciliationDiffKind.POSITION_QUANTITY_MISMATCH
+    ]
+
+
+def test_a_flat_instrument_is_absent_rather_than_zero() -> None:
+    # Otherwise "holds nothing" and "was never looked at" become the same row.
+    with pytest.raises(ValueError, match="cannot be zero"):
+        HeldPosition(instrument_id=uuid4(), quantity=Decimal(0))
+
+
+def test_a_snapshot_reports_each_instrument_once() -> None:
+    instrument_id = uuid4()
+    now = datetime.now(UTC)
+
+    with pytest.raises(ValueError, match="each instrument once"):
+        _snapshot(
+            (
+                HeldPosition(instrument_id=instrument_id, quantity=Decimal("1")),
+                HeldPosition(instrument_id=instrument_id, quantity=Decimal("2")),
+            ),
+            now,
+        )
 
 
 class _AdoptionStore:

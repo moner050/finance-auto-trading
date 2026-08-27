@@ -6,7 +6,11 @@ from enum import StrEnum
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from autotrader.execution.orders.models import BrokerOrderCommand
-from autotrader.execution.reconciliation.models import BrokerOpenOrder, BrokerSnapshot
+from autotrader.execution.reconciliation.models import (
+    BrokerOpenOrder,
+    BrokerSnapshot,
+    HeldPosition,
+)
 
 
 class FakeBrokerScenario(StrEnum):
@@ -59,6 +63,7 @@ class FakeBroker:
     def __init__(self, *, scenario: FakeBrokerScenario) -> None:
         self._scenario = scenario
         self._orders: dict[str, FakeBrokerOrder] = {}
+        self._positions: dict[UUID, tuple[HeldPosition, ...]] = {}
         self._submit_count = 0
         self._cancel_count = 0
         self._replace_count = 0
@@ -202,7 +207,12 @@ class FakeBroker:
                     key=lambda order: order.broker_order_id,
                 )
             ),
+            positions=self._positions.get(account_id, ()),
         )
+
+    def hold(self, account_id: UUID, positions: tuple[HeldPosition, ...]) -> None:
+        """What this broker will report the account holds."""
+        self._positions[account_id] = positions
 
 
 _EMISSIONS: dict[FakeBrokerScenario, tuple[FakeBrokerEmission, ...]] = {

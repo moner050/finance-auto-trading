@@ -15,6 +15,9 @@ class ReconciliationDiffKind(StrEnum):
     SNAPSHOT_STALE = "SNAPSHOT_STALE"
     INTERNAL_OPEN_BROKER_MISSING = "INTERNAL_OPEN_BROKER_MISSING"
     BROKER_OPEN_INTERNAL_MISSING = "BROKER_OPEN_INTERNAL_MISSING"
+    INTERNAL_POSITION_BROKER_MISSING = "INTERNAL_POSITION_BROKER_MISSING"
+    BROKER_POSITION_INTERNAL_MISSING = "BROKER_POSITION_INTERNAL_MISSING"
+    POSITION_QUANTITY_MISMATCH = "POSITION_QUANTITY_MISMATCH"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,16 +39,42 @@ class BrokerOpenOrder:
 
 
 @dataclass(frozen=True, slots=True)
+class HeldPosition:
+    """What one side says is held in one instrument.
+
+    A quantity of zero is not a position, and neither side may report one:
+    a flat instrument is absent from the list, so "held nothing" and "did not
+    look" stay different answers.
+    """
+
+    instrument_id: UUID
+    quantity: Decimal
+
+    def __post_init__(self) -> None:
+        quantity = require_decimal(self.quantity)
+        if quantity == 0:
+            raise ValueError("a held position cannot be zero")
+        object.__setattr__(self, "quantity", quantity)
+
+
+@dataclass(frozen=True, slots=True)
 class BrokerSnapshot:
     broker_id: UUID
     account_id: UUID
     complete: bool
     expires_at: datetime
     open_orders: tuple[BrokerOpenOrder, ...]
+    # Not defaulted on purpose. An empty tuple means the broker reported a
+    # flat account, and a default would let a reader that never asked say the
+    # same thing.
+    positions: tuple[HeldPosition, ...]
 
     def __post_init__(self) -> None:
         if self.expires_at.tzinfo is None:
             raise ValueError("expires_at must be timezone-aware")
+        instruments = tuple(position.instrument_id for position in self.positions)
+        if len(set(instruments)) != len(instruments):
+            raise ValueError("a snapshot reports each instrument once")
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +83,7 @@ class ReconciliationDiff:
     blocking: bool
     internal_order_id: UUID | None
     broker_order_id: str | None
+    instrument_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
