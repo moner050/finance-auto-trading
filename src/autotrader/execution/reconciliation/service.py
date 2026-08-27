@@ -17,7 +17,16 @@ from autotrader.shared.ids import new_uuid7
 
 
 class BrokerSnapshotReader(Protocol):
-    async def read_snapshot(self, *, account_id: object) -> BrokerSnapshot: ...
+    async def read_snapshot(
+        self, *, account_id: object, now: datetime
+    ) -> BrokerSnapshot:
+        """What the broker says, and the moment the answer is about.
+
+        Freshness is a property of an instant, and the snapshot carries an
+        expiry that the comparison checks, so the reader cannot be left to
+        pick its own idea of now.
+        """
+        ...
 
 
 class ReconciliationRunStore(Protocol):
@@ -99,7 +108,7 @@ class ReconciliationService:
     ) -> ReconciliationRun:
         if now.tzinfo is None:
             raise ValueError("now must be timezone-aware")
-        snapshot = await reader.read_snapshot(account_id=account_id)
+        snapshot = await reader.read_snapshot(account_id=account_id, now=now)
         if snapshot.account_id != account_id:
             raise ValueError("broker snapshot account does not match requested account")
         diffs = self.compare(

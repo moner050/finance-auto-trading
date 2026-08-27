@@ -16,6 +16,7 @@ from autotrader.apps.trader.loop import (
     NO_NEW_BAR,
     NOT_LEADER,
     UNPROTECTED,
+    UNRECONCILED,
     LoopPorts,
     SystemClock,
     run_forever,
@@ -59,6 +60,19 @@ class _Source:
         return self._context
 
 
+class _Reconciliation:
+    """How many ways the broker disagrees about this account."""
+
+    def __init__(self, blocking: int = 0) -> None:
+        self._blocking = blocking
+        self.calls = 0
+
+    async def reconcile(self, now: datetime) -> int:
+        del now
+        self.calls += 1
+        return self._blocking
+
+
 class _Protection:
     """How many open positions have no stop behind them."""
 
@@ -81,10 +95,12 @@ def _ports(
     recorder: _Recorder | None = None,
     execution: _Execution | None = None,
     protection: _Protection | None = None,
+    reconciliation: _Reconciliation | None = None,
 ) -> LoopPorts:
     return LoopPorts(
         lease=lease,
         settlement=settlement,
+        reconciliation=reconciliation or _Reconciliation(),
         protection=protection or _Protection(),
         source=source,
         control=control or _Control(True),
@@ -328,3 +344,45 @@ async def test_without_the_lease_nothing_is_checked_either() -> None:
     assert result.reason == NOT_LEADER
     # Another instance owns this account, and owns the question too.
     assert protection.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_a_broker_that_disagrees_stops_the_pass_before_anything_else() -> None:
+    """A stop sized from a position we may not really have protects nothing,
+    so the protection check does not even run."""
+    protection = _Protection(1)
+    source = _Source(_setup_context())
+    result = await run_pass(
+        now=NOW,
+        ports=_ports(
+            lease=_Lease(True),
+            settlement=_Settlement(1),
+            source=source,
+            protection=protection,
+            reconciliation=_Reconciliation(2),
+        ),
+    )
+
+    assert result.reason == UNRECONCILED
+    assert result.settled == 1
+    assert protection.calls == 0
+    assert source.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_runs_after_settling_and_before_protection() -> None:
+    reconciliation = _Reconciliation()
+    protection = _Protection()
+    settlement = _Settlement(1)
+    await run_pass(
+        now=NOW,
+        ports=_ports(
+            lease=_Lease(True),
+            settlement=settlement,
+            source=_Source(_setup_context()),
+            protection=protection,
+            reconciliation=reconciliation,
+        ),
+    )
+
+    assert (settlement.calls, reconciliation.calls, protection.calls) == (1, 1, 1)

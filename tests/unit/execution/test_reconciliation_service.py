@@ -321,7 +321,10 @@ class _SnapshotReader:
     def __init__(self, snapshot: BrokerSnapshot) -> None:
         self._snapshot = snapshot
 
-    async def read_snapshot(self, *, account_id: object) -> BrokerSnapshot:
+    async def read_snapshot(
+        self, *, account_id: object, now: datetime
+    ) -> BrokerSnapshot:
+        del account_id, now
         return self._snapshot
 
 

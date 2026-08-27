@@ -37,7 +37,9 @@ from autotrader.apps.trader.composition import (
     MySqlDecisionRecorder,
     MySqlFillSettlement,
     MySqlPaperExecution,
+    MySqlPaperSnapshotReader,
     MySqlProtectionGuard,
+    MySqlReconciler,
     MySqlSchedulerLease,
     MySqlTradingControl,
 )
@@ -45,6 +47,7 @@ from autotrader.apps.trader.loop import (
     NO_NEW_BAR,
     NOT_LEADER,
     UNPROTECTED,
+    UNRECONCILED,
     LoopPorts,
     run_pass,
 )
@@ -177,6 +180,14 @@ def _ports(
             bars=bars,
             account=_account(ids),
             broker=submitter,
+        ),
+        reconciliation=MySqlReconciler(
+            sessions=sessions,  # type: ignore[arg-type]
+            account=_account(ids),
+            reader=MySqlPaperSnapshotReader(
+                sessions=sessions,  # type: ignore[arg-type]
+                account=_account(ids),
+            ),
         ),
         protection=MySqlProtectionGuard(
             sessions=sessions,  # type: ignore[arg-type]
@@ -525,5 +536,56 @@ def test_a_position_whose_stop_never_reached_the_broker_stops_the_loop() -> None
             assert control is not None
             assert control.kill_switch_level == "BLOCK_NEW_EXPOSURE"
             assert control.armed is True
+
+    _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_a_ledger_the_broker_disagrees_with_stops_the_loop() -> None:
+    """The paper broker's receipts and the position ledger come from the same
+    fill along different paths. If they disagree, one of those paths is
+    broken, and every size calculated from here would be wrong."""
+
+    async def scenario(sessions: async_sessionmaker[object]) -> None:
+        ids = await _risk_seed(sessions)
+        await _arm(sessions, armed=True)
+        manifest = await _register_strategy(sessions, uuid7())
+        bars = _Bars()
+        ports = _ports(
+            sessions,
+            context=_context(manifest, ids.instrument_id),  # type: ignore[attr-defined]
+            ids=ids,
+            bars=bars,
+            lease_name=f"acceptance:{uuid7().hex[:12]}",
+        )
+
+        assert (await run_pass(now=NOW, ports=ports)).reason == SUBMITTED
+        bars.closed = True
+        assert (await run_pass(now=NOW + HLIT_TIMEFRAME, ports=ports)).settled == 1
+
+        # Something moved the ledger without a fill behind it.
+        async with sessions() as session:  # type: ignore[operator]
+            position = await session.scalar(select(Position))
+            assert position is not None
+            position.quantity = position.quantity + Decimal("1")
+            await session.commit()
+
+        result = await run_pass(now=NOW + 2 * HLIT_TIMEFRAME, ports=ports)
+
+        assert result.reason == UNRECONCILED
+        assert result.outcome is None
+        async with sessions() as session:  # type: ignore[operator]
+            incident = await session.scalar(
+                select(OpsIncident).where(
+                    OpsIncident.reason_code
+                    == "RECONCILIATION_POSITION_QUANTITY_MISMATCH"
+                )
+            )
+            assert incident is not None
+            assert incident.scope_key == str(ids.instrument_id)
+            control = await session.scalar(select(OpsTradingControl))
+            assert control is not None
+            assert control.kill_switch_level == "BLOCK_NEW_EXPOSURE"
 
     _drive(scenario)

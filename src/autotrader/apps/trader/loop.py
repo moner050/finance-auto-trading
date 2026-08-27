@@ -26,6 +26,7 @@ from autotrader.shared.time import require_utc
 NOT_LEADER = "NOT_LEADER"
 NO_NEW_BAR = "NO_NEW_BAR"
 UNPROTECTED = "UNPROTECTED"
+UNRECONCILED = "UNRECONCILED"
 
 
 class SchedulerLease(Protocol):
@@ -37,6 +38,12 @@ class SchedulerLease(Protocol):
 class FillSettlement(Protocol):
     async def settle(self, now: datetime) -> int:
         """Resolve orders whose fill bar has closed, returning how many."""
+        ...
+
+
+class Reconciler(Protocol):
+    async def reconcile(self, now: datetime) -> int:
+        """How many ways the broker disagrees about this account."""
         ...
 
 
@@ -69,6 +76,7 @@ class LoopPass:
 class LoopPorts:
     lease: SchedulerLease
     settlement: FillSettlement
+    reconciliation: Reconciler
     protection: ProtectionGuard
     source: ContextSource
     control: TradingControl
@@ -87,6 +95,12 @@ async def run_pass(*, now: datetime, ports: LoopPorts) -> LoopPass:
 
     # Settle first so the evaluation sees positions as they actually stand.
     settled = await ports.settlement.settle(moment)
+
+    # Ask the broker what it holds before trusting our own answer. Checking
+    # protection first would check it against numbers that may be wrong, and
+    # a stop sized from a position we do not really have protects nothing.
+    if await ports.reconciliation.reconcile(moment):
+        return LoopPass(reason=UNRECONCILED, settled=settled, outcome=None)
 
     # Then check what is already held before deciding anything new. An
     # unprotected position is not a reason to trade more carefully; it is a
@@ -143,12 +157,14 @@ __all__ = (
     "NOT_LEADER",
     "NO_NEW_BAR",
     "UNPROTECTED",
+    "UNRECONCILED",
     "Clock",
     "ContextSource",
     "FillSettlement",
     "LoopPass",
     "LoopPorts",
     "ProtectionGuard",
+    "Reconciler",
     "SchedulerLease",
     "SystemClock",
     "run_forever",

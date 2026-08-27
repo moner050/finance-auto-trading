@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from autotrader.domain.enums import IntentType, OrderStyle, Side
@@ -34,6 +35,15 @@ from autotrader.execution.orders.service import (
     OrderService,
     OrderSubmissionContext,
 )
+from autotrader.execution.reconciliation.models import (
+    BrokerOpenOrder,
+    BrokerSnapshot,
+    HeldPosition,
+)
+from autotrader.execution.reconciliation.service import (
+    BrokerSnapshotReader,
+    ReconciliationService,
+)
 from autotrader.integrations.brokers.internal_paper import (
     InternalPaperBroker,
     PaperOrderReceipt,
@@ -47,6 +57,7 @@ from autotrader.integrations.brokers.paper_submitter import (
     resolve_paper_fills,
 )
 from autotrader.persistence.mysql.dispatch_store import ACCEPTED, MySqlDispatchStore
+from autotrader.persistence.mysql.models.accounts import Account
 from autotrader.persistence.mysql.models.david_v6 import DavidV6DecisionRow
 from autotrader.persistence.mysql.models.intents import (
     PersistedOrderIntent,
@@ -62,6 +73,7 @@ from autotrader.persistence.mysql.models.orders import (
     PersistedOrder,
     PersistedOrderCommand,
 )
+from autotrader.persistence.mysql.models.paper import PaperOrderRow
 from autotrader.persistence.mysql.models.positions import Position
 from autotrader.persistence.mysql.models.strategy import (
     StrategyFeatureSchema,
@@ -76,6 +88,9 @@ from autotrader.persistence.mysql.repositories.operations import (
     RuntimeControlRepository,
 )
 from autotrader.persistence.mysql.repositories.orders import MySqlOrderStore
+from autotrader.persistence.mysql.repositories.reconciliation import (
+    ReconciliationRepository,
+)
 from autotrader.persistence.mysql.repositories.risk import MySqlRiskReservationUow
 from autotrader.risk.models import RiskDecision, RiskOutcome
 from autotrader.risk.service import (
@@ -147,7 +162,7 @@ class MySqlProtectionGuard:
             if not missing:
                 return 0
             await self._raise_incidents(session, missing, moment)
-            await self._block_new_exposure(session)
+            await _block_new_exposure(session)
             await session.commit()
         return len(missing)
 
@@ -213,12 +228,166 @@ class MySqlProtectionGuard:
                 )
             )
 
-    async def _block_new_exposure(self, session: AsyncSession) -> None:
-        controls = (await session.scalars(select(OpsTradingControl))).all()
-        for control in controls:
-            if control.kill_switch_level == NO_KILL_SWITCH:
-                control.kill_switch_level = BLOCK_NEW_EXPOSURE
-                control.row_version += 1
+
+async def _block_new_exposure(session: AsyncSession) -> None:
+    """Stop opening exposure, and only that.
+
+    A full halt would also stop a protective order from being placed or
+    filled, which is the opposite of what an account in trouble needs.
+    """
+    controls = (await session.scalars(select(OpsTradingControl))).all()
+    for control in controls:
+        if control.kill_switch_level == NO_KILL_SWITCH:
+            control.kill_switch_level = BLOCK_NEW_EXPOSURE
+            control.row_version += 1
+
+
+SNAPSHOT_WINDOW = timedelta(minutes=1)
+
+
+class MySqlPaperSnapshotReader:
+    """What the paper broker says the account holds.
+
+    Its receipts are written by the broker; the position ledger is written by
+    the fill store from broker execution events. They come from the same fill
+    but along different paths, so a disagreement between them is a defect in
+    one of those paths rather than a difference of opinion about the market.
+    """
+
+    def __init__(
+        self,
+        *,
+        sessions: async_sessionmaker[AsyncSession],
+        account: ExecutionAccount,
+    ) -> None:
+        self._sessions = sessions
+        self._account = account
+
+    async def read_snapshot(
+        self, *, account_id: object, now: datetime
+    ) -> BrokerSnapshot:
+        moment = require_utc(now)
+        if account_id != self._account.account.id:
+            raise ValueError("this reader answers for one account only")
+        async with self._sessions() as session:
+            broker_id = await session.scalar(
+                select(Account.broker_id).where(Account.id == self._account.account.id)
+            )
+            if broker_id is None:
+                raise LookupError("the account is not bound to a broker")
+            filled = (
+                await session.execute(
+                    select(
+                        PersistedOrder.instrument_id,
+                        PaperOrderRow.side,
+                        func.sum(PaperOrderRow.filled_quantity),
+                    )
+                    .join(
+                        PersistedOrder,
+                        PersistedOrder.id == PaperOrderRow.order_id,
+                    )
+                    .where(
+                        PersistedOrder.account_id == self._account.account.id,
+                        PaperOrderRow.filled_quantity.is_not(None),
+                    )
+                    .group_by(PersistedOrder.instrument_id, PaperOrderRow.side)
+                )
+            ).all()
+            # A staged command with no receipt is an order this broker is
+            # still holding. Reporting only fills would make every working
+            # order look like one the broker had never heard of.
+            staged = (
+                await session.execute(
+                    select(
+                        PaperOrderRow.command_id,
+                        PersistedOrder.broker_client_order_id,
+                        PaperOrderRow.command_digest,
+                    )
+                    .join(
+                        PersistedOrder,
+                        PersistedOrder.id == PaperOrderRow.order_id,
+                    )
+                    .where(
+                        PersistedOrder.account_id == self._account.account.id,
+                        PaperOrderRow.status.is_(None),
+                    )
+                    .order_by(PaperOrderRow.command_id)
+                )
+            ).all()
+        return BrokerSnapshot(
+            broker_id=broker_id,
+            account_id=self._account.account.id,
+            complete=True,
+            expires_at=moment + SNAPSHOT_WINDOW,
+            open_orders=tuple(
+                BrokerOpenOrder(
+                    broker_order_id=paper_broker_order_id(command_id),
+                    broker_client_order_id=client_order_id,
+                    canonical_terms_hash=digest,
+                )
+                for command_id, client_order_id, digest in staged
+            ),
+            positions=_net_positions([(row[0], row[1], row[2]) for row in filled]),
+        )
+
+
+def _net_positions(
+    rows: Sequence[tuple[UUID, str, Decimal | None]],
+) -> tuple[HeldPosition, ...]:
+    """Buys less sells, per instrument, leaving out anything that nets flat."""
+    net: dict[UUID, Decimal] = {}
+    for instrument_id, side, filled in rows:
+        if filled is None:
+            continue
+        signed = filled if Side(side) is Side.BUY else -filled
+        net[instrument_id] = net.get(instrument_id, Decimal(0)) + signed
+    return tuple(
+        HeldPosition(instrument_id=instrument_id, quantity=quantity)
+        for instrument_id, quantity in sorted(
+            net.items(), key=lambda item: str(item[0])
+        )
+        if quantity != 0
+    )
+
+
+class MySqlReconciler:
+    """Compare the account against the broker before deciding anything new."""
+
+    def __init__(
+        self,
+        *,
+        sessions: async_sessionmaker[AsyncSession],
+        account: ExecutionAccount,
+        reader: BrokerSnapshotReader,
+    ) -> None:
+        self._sessions = sessions
+        self._account = account
+        self._reader = reader
+
+    async def reconcile(self, now: datetime) -> int:
+        moment = require_utc(now)
+        account_id = self._account.account.id
+        async with self._sessions() as session:
+            repository = ReconciliationRepository(session)
+            run = await ReconciliationService().run(
+                now=moment,
+                account_id=account_id,
+                reader=self._reader,
+                store=repository,
+                internal_open_orders=await repository.internal_open_orders(
+                    account_id=account_id
+                ),
+                internal_positions=await repository.internal_positions(
+                    account_id=account_id
+                ),
+            )
+            blocking = sum(1 for diff in run.diffs if diff.blocking)
+            if blocking:
+                # persist_run already raised the incidents. What is left is to
+                # stop opening exposure against numbers we cannot trust.
+                await _block_new_exposure(session)
+            await session.commit()
+        return blocking
 
 
 class MySqlDecisionRecorder:
