@@ -49,11 +49,29 @@ from autotrader.apps.backoffice.second_password import (
     MySqlSecondPasswords,
     check_password,
 )
+from autotrader.apps.backoffice.secret_commands import (
+    MySqlSecretCommands,
+    SecretAction,
+    SecretFacts,
+    new_secret_command,
+)
+from autotrader.apps.backoffice.secret_commands import (
+    approval_for as secret_approval_for,
+)
+from autotrader.apps.backoffice.secrets import (
+    OAUTH,
+    PROVIDER_CREDENTIAL,
+    MySqlSecretStore,
+    SecretReferenceError,
+    SecretScope,
+)
 from autotrader.security.secret_crypto import MasterKeyRing
 from autotrader.shared.ids import new_uuid7
 
 TEMPLATES = Path(__file__).resolve().parent / "templates"
 LOGIN_PATH = "/auth/login"
+# One message for a wrong password, wherever it is typed.
+PASSWORD_MISMATCH = "2차 비밀번호가 일치하지 않습니다."
 
 
 class OperatorRequired(Exception):
@@ -91,6 +109,14 @@ def create_app(
     controls = MySqlSafetyControls(sessions)
     passwords = MySqlSecondPasswords(sessions)
     account_reader = None if keys is None else AccountsReadModel(sessions, keys)
+    secret_store = None if keys is None else MySqlSecretStore(sessions, keys)
+    secret_commands = (
+        None
+        if secret_store is None
+        else MySqlSecretCommands(
+            sessions=sessions, store=secret_store, approvals=approvals
+        )
+    )
     exposure = MySqlExposureControls(
         sessions=sessions, approvals=approvals, account_id=account_id
     )
@@ -177,6 +203,133 @@ def create_app(
             name="accounts.html",
             context={"session": session, "view": await account_reader.load()},
         )
+
+    async def secrets_page(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+    ) -> Response:
+        return await _render_secrets(request, session, templates, secret_store)
+
+    async def register_secret(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        csrf_token: str = Form(...),
+        logical_name: str = Form(...),
+        provider: str = Form(...),
+        environment: str = Form(""),
+        plaintext: str = Form(...),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        if secret_store is None:
+            raise HTTPException(status_code=503, detail="secrets are unavailable")
+        try:
+            await secret_store.store(
+                logical_name=logical_name.strip(),
+                scope=SecretScope(
+                    category=OAUTH if provider == "GOOGLE" else PROVIDER_CREDENTIAL,
+                    provider_code=provider,
+                    environment=environment or None,
+                ),
+                plaintext=plaintext,
+                now=datetime.now(UTC),
+                # Stored, not used. Putting it into use is a separate decision
+                # and takes the second password.
+                activate=False,
+            )
+        except (ValueError, SecretReferenceError) as error:
+            return await _render_secrets(
+                request, session, templates, secret_store, error=str(error)
+            )
+        finally:
+            # The plaintext goes no further than this call, and nothing that
+            # renders the page can reach it.
+            del plaintext
+        return await _render_secrets(
+            request,
+            session,
+            templates,
+            secret_store,
+            registered=logical_name.strip(),
+        )
+
+    async def approve_secret(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        csrf_token: str = Form(...),
+        action: str = Form(...),
+        logical_name: str = Form(...),
+        target_version: int | None = Form(None),
+        second_password: str | None = Form(None),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        commands = _require_secret_commands(secret_commands)
+        facts = await commands.facts(
+            action=SecretAction(action),
+            logical_name=logical_name,
+            target_version=target_version,
+        )
+        if second_password is None:
+            # First press: show what will change, so the password is typed
+            # against exactly that.
+            return await _render_secrets(
+                request, session, templates, secret_store, facts=facts
+            )
+        session_id = _session_id(request)
+        source_ip = _source_ip(request)
+        await approvals.require_attempts_left(
+            session_id=session_id, source_ip=source_ip
+        )
+        verifier = await passwords.active()
+        if not check_password(verifier, second_password):
+            await approvals.record_failure(session_id=session_id, source_ip=source_ip)
+            return await _render_secrets(
+                request,
+                session,
+                templates,
+                secret_store,
+                facts=facts,
+                error=PASSWORD_MISMATCH,
+            )
+        await approvals.clear_failures(session_id=session_id, source_ip=source_ip)
+        approval_id = await approvals.issue(
+            secret_approval_for(
+                session_id=session_id, operator=session.operator, facts=facts
+            )
+        )
+        return await _render_secrets(
+            request,
+            session,
+            templates,
+            secret_store,
+            facts=facts,
+            approval_id=approval_id,
+        )
+
+    async def apply_secret(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        csrf_token: str = Form(...),
+        action: str = Form(...),
+        logical_name: str = Form(...),
+        approval_id: str = Form(...),
+        target_version: int | None = Form(None),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        commands = _require_secret_commands(secret_commands)
+        await commands.apply(
+            new_secret_command(
+                action=SecretAction(action),
+                logical_name=logical_name,
+                target_version=target_version,
+                operator=session.operator,
+                source_ip=_source_ip(request),
+                correlation_id=request.headers.get("x-request-id", str(new_uuid7())),
+                approval_id=approval_id,
+                requested_at=datetime.now(UTC),
+            ),
+            session_id=_session_id(request),
+        )
+        return await _render_secrets(request, session, templates, secret_store)
 
     async def arming_panel(
         request: Request,
@@ -269,6 +422,24 @@ def create_app(
         "/accounts", accounts, methods=["GET"], response_class=HTMLResponse
     )
     app.add_api_route(
+        "/secrets", secrets_page, methods=["GET"], response_class=HTMLResponse
+    )
+    app.add_api_route(
+        "/secrets/register",
+        register_secret,
+        methods=["POST"],
+        response_class=HTMLResponse,
+    )
+    app.add_api_route(
+        "/secrets/approve",
+        approve_secret,
+        methods=["POST"],
+        response_class=HTMLResponse,
+    )
+    app.add_api_route(
+        "/secrets/apply", apply_secret, methods=["POST"], response_class=HTMLResponse
+    )
+    app.add_api_route(
         "/controls/arm", arming_panel, methods=["GET"], response_class=HTMLResponse
     )
     app.add_api_route(
@@ -278,6 +449,41 @@ def create_app(
         "/controls/enable", enable, methods=["POST"], response_class=HTMLResponse
     )
     return app
+
+
+async def _render_secrets(
+    request: Request,
+    session: Session,
+    templates: Jinja2Templates,
+    store: MySqlSecretStore | None,
+    *,
+    registered: str | None = None,
+    error: str | None = None,
+    facts: SecretFacts | None = None,
+    approval_id: str | None = None,
+) -> Response:
+    if store is None:
+        raise HTTPException(status_code=503, detail="secrets are unavailable")
+    return templates.TemplateResponse(
+        request=request,
+        name="secrets.html",
+        context={
+            "session": session,
+            "versions": await store.versions(),
+            "registered": registered,
+            "error": error,
+            "facts": facts,
+            "approval_id": approval_id,
+        },
+    )
+
+
+def _require_secret_commands(
+    commands: MySqlSecretCommands | None,
+) -> MySqlSecretCommands:
+    if commands is None:
+        raise HTTPException(status_code=503, detail="secrets are unavailable")
+    return commands
 
 
 def _dangerous(action: str) -> DangerousAction:

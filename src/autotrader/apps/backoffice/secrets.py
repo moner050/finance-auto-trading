@@ -144,6 +144,21 @@ def secret_aad(
     return "|".join(parts).encode("utf-8")
 
 
+@dataclass(frozen=True, slots=True)
+class SecretVersionView:
+    """What may be shown about a stored secret, which is everything but it."""
+
+    logical_name: str
+    category: str
+    provider_code: str | None
+    environment: str | None
+    version: int
+    fingerprint: str
+    master_key_version: int
+    created_at: datetime
+    active: bool
+
+
 class MySqlSecretStore:
     def __init__(
         self, sessions: async_sessionmaker[AsyncSession], keys: MasterKeyRing
@@ -288,6 +303,86 @@ class MySqlSecretStore:
             raise SecretNotFoundError(f"no active secret named {logical_name}")
         return row.fingerprint
 
+    async def versions(self) -> tuple[SecretVersionView, ...]:
+        """Every version ever written, and which one is in use.
+
+        Retired versions stay listed. What was active when is the question
+        this table exists to answer, and a listing that hid the old rows would
+        make a rotation look like an edit.
+        """
+        async with self._sessions() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        BackofficeSecretVersionRow,
+                        BackofficeSecretActivationRow.active_marker,
+                    )
+                    .outerjoin(
+                        BackofficeSecretActivationRow,
+                        BackofficeSecretActivationRow.secret_version_id
+                        == BackofficeSecretVersionRow.id,
+                    )
+                    .order_by(
+                        BackofficeSecretVersionRow.logical_name,
+                        BackofficeSecretVersionRow.version.desc(),
+                    )
+                )
+            ).all()
+        return tuple(
+            SecretVersionView(
+                logical_name=row.logical_name,
+                category=row.category,
+                provider_code=row.provider_code,
+                environment=row.environment,
+                version=row.version,
+                fingerprint=row.fingerprint.hex(),
+                master_key_version=row.master_key_version,
+                created_at=row.created_at,
+                active=marker == "ACTIVE",
+            )
+            for row, marker in rows
+        )
+
+    async def activate(self, *, logical_name: str, version: int, now: datetime) -> None:
+        """Put one stored version into use, retiring whatever it replaces."""
+        moment = require_utc(now)
+        async with self._sessions() as session:
+            stored = await session.scalar(
+                select(BackofficeSecretVersionRow)
+                .where(
+                    BackofficeSecretVersionRow.logical_name == logical_name,
+                    BackofficeSecretVersionRow.version == version,
+                )
+                .with_for_update()
+            )
+            if stored is None:
+                raise SecretNotFoundError(f"{logical_name} has no version {version}")
+            await self._activate(session, stored, moment)
+            await session.commit()
+
+    async def retire(self, *, logical_name: str, now: datetime) -> None:
+        """Take the active version out of use, leaving none.
+
+        Deliberately not a delete. The version stays readable so an operator
+        can see what was in use and when it stopped being so, and anything
+        that resolves the name now gets a refusal rather than a stale value.
+        """
+        moment = require_utc(now)
+        async with self._sessions() as session:
+            active = await session.scalar(
+                select(BackofficeSecretActivationRow)
+                .where(
+                    BackofficeSecretActivationRow.logical_name == logical_name,
+                    BackofficeSecretActivationRow.active_marker == "ACTIVE",
+                )
+                .with_for_update()
+            )
+            if active is None:
+                raise SecretNotFoundError(f"no active secret named {logical_name}")
+            active.deactivated_at = moment
+            active.active_marker = None
+            await session.commit()
+
     async def _next_version(self, session: AsyncSession, logical_name: str) -> int:
         current = await session.scalar(
             select(BackofficeSecretVersionRow.version)
@@ -345,6 +440,7 @@ __all__ = (
     "SecretNotFoundError",
     "SecretReferenceError",
     "SecretScope",
+    "SecretVersionView",
     "parse_reference",
     "secret_aad",
 )
