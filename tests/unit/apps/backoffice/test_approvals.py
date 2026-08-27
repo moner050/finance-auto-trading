@@ -7,7 +7,7 @@ import pytest
 from autotrader.apps.backoffice.bootstrap import (
     MINIMUM_LENGTH,
     BootstrapRefusedError,
-    read_password,
+    read_input,
     require_acceptable,
 )
 from autotrader.apps.backoffice.second_password import (
@@ -87,14 +87,35 @@ def test_a_long_password_needs_no_symbols_or_capitals() -> None:
     assert require_acceptable(phrase) == phrase
 
 
-def test_the_two_entries_must_match() -> None:
-    entries = iter(["correct horse battery staple", "something else entirely"])
+def test_the_two_password_entries_must_match() -> None:
+    entries = iter(
+        ["a-client-id", "a-client-secret", "correct horse battery staple", "typo"]
+    )
 
     with pytest.raises(BootstrapRefusedError, match="did not match"):
-        read_password(lambda _: next(entries))
+        read_input(lambda _: next(entries))
 
 
-def test_a_matching_pair_is_accepted() -> None:
+def test_a_complete_entry_is_collected() -> None:
     phrase = "correct horse battery staple"
+    entries = iter(["a-client-id", "a-client-secret", phrase, phrase])
 
-    assert read_password(lambda _: phrase) == phrase
+    collected = read_input(lambda _: next(entries))
+
+    assert collected.client_id == "a-client-id"
+    assert collected.client_secret == "a-client-secret"
+    assert collected.second_password == phrase
+
+
+def test_a_blank_client_id_is_refused() -> None:
+    entries = iter(["   ", "a-client-secret", "x" * 20, "x" * 20])
+
+    with pytest.raises(BootstrapRefusedError, match="client id"):
+        read_input(lambda _: next(entries))
+
+
+def test_a_blank_client_secret_is_refused() -> None:
+    entries = iter(["a-client-id", "  ", "x" * 20, "x" * 20])
+
+    with pytest.raises(BootstrapRefusedError, match="client secret"):
+        read_input(lambda _: next(entries))

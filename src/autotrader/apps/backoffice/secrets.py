@@ -165,41 +165,67 @@ class MySqlSecretStore:
         Existing versions are never edited. Rotation is a new row and a moved
         activation, so the history of what was in use stays readable.
         """
+        async with self._sessions() as session:
+            stored = await self.store_in(
+                session,
+                logical_name=logical_name,
+                scope=scope,
+                plaintext=plaintext,
+                now=now,
+                activate=activate,
+            )
+            await session.commit()
+            return stored
+
+    async def store_in(
+        self,
+        session: AsyncSession,
+        *,
+        logical_name: str,
+        scope: SecretScope,
+        plaintext: str,
+        now: datetime,
+        activate: bool = True,
+    ) -> UUID:
+        """The same write, in the caller's transaction.
+
+        Bootstrap needs two secrets, a password verifier and the authority row
+        to become true together, and a store that always committed on its own
+        could leave half of that standing.
+        """
         _require_name(logical_name)
         moment = require_utc(now)
-        async with self._sessions() as session:
-            version = await self._next_version(session, logical_name)
-            envelope = self._keys.encrypt(
-                plaintext=plaintext.encode("utf-8"),
-                aad=secret_aad(
-                    logical_name=logical_name,
-                    version=version,
-                    scope=scope,
-                    schema_version=AAD_SCHEMA_VERSION,
-                ),
-            )
-            stored = BackofficeSecretVersionRow(
-                id=new_uuid7(),
+        version = await self._next_version(session, logical_name)
+        envelope = self._keys.encrypt(
+            plaintext=plaintext.encode("utf-8"),
+            aad=secret_aad(
                 logical_name=logical_name,
-                category=scope.category,
-                provider_code=scope.provider_code,
-                environment=scope.environment,
                 version=version,
-                ciphertext=envelope.ciphertext,
-                nonce=envelope.nonce,
-                aad_schema_version=AAD_SCHEMA_VERSION,
-                master_key_version=envelope.master_key_version,
-                fingerprint=envelope.fingerprint,
-                created_at=moment,
-            )
-            session.add(stored)
-            await session.flush()
-            if activate:
-                await self._activate(session, stored, moment)
-            # Retiring the old activation and starting the new one are one
-            # transaction. Between them the secret would resolve to nothing.
-            await session.commit()
-            return stored.id
+                scope=scope,
+                schema_version=AAD_SCHEMA_VERSION,
+            ),
+        )
+        stored = BackofficeSecretVersionRow(
+            id=new_uuid7(),
+            logical_name=logical_name,
+            category=scope.category,
+            provider_code=scope.provider_code,
+            environment=scope.environment,
+            version=version,
+            ciphertext=envelope.ciphertext,
+            nonce=envelope.nonce,
+            aad_schema_version=AAD_SCHEMA_VERSION,
+            master_key_version=envelope.master_key_version,
+            fingerprint=envelope.fingerprint,
+            created_at=moment,
+        )
+        session.add(stored)
+        await session.flush()
+        if activate:
+            # Retiring the old activation and starting the new one happen
+            # together. Between them the secret would resolve to nothing.
+            await self._activate(session, stored, moment)
+        return stored.id
 
     async def resolve(self, reference: str) -> Secret:
         logical_name = parse_reference(reference)

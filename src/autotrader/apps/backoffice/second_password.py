@@ -130,33 +130,39 @@ class MySqlSecondPasswords:
             return row
 
     async def establish(self, password: str, *, now: datetime) -> int:
-        """Set the password, retiring whatever it replaces.
+        """Set the password, retiring whatever it replaces."""
+        async with self._sessions() as session:
+            row = await self.establish_in(session, password, now=now)
+            await session.commit()
+            return row.version
 
-        Both rows move in one transaction. A schema that allows only one
-        active marker would otherwise reject the new row or, worse, leave
-        none active at all.
+    async def establish_in(
+        self, session: AsyncSession, password: str, *, now: datetime
+    ) -> BackofficeSecondPasswordVersionRow:
+        """The same write, in the caller's transaction.
+
+        Both rows move together. A schema that allows only one active marker
+        would otherwise reject the new row or, worse, leave none active at all.
         """
         moment = require_utc(now)
         verifier = hash_second_password(password)
-        async with self._sessions() as session:
-            current = await self._active_in(session, lock=True)
-            version = 1 if current is None else current.version + 1
-            if current is not None:
-                current.retired_at = moment
-                current.active_marker = None
-                await session.flush()
-            session.add(
-                BackofficeSecondPasswordVersionRow(
-                    id=new_uuid7(),
-                    version=version,
-                    verifier=verifier,
-                    created_at=moment,
-                    retired_at=None,
-                    active_marker="ACTIVE",
-                )
-            )
-            await session.commit()
-        return version
+        current = await self._active_in(session, lock=True)
+        version = 1 if current is None else current.version + 1
+        if current is not None:
+            current.retired_at = moment
+            current.active_marker = None
+            await session.flush()
+        row = BackofficeSecondPasswordVersionRow(
+            id=new_uuid7(),
+            version=version,
+            verifier=verifier,
+            created_at=moment,
+            retired_at=None,
+            active_marker="ACTIVE",
+        )
+        session.add(row)
+        await session.flush()
+        return row
 
     async def _active_in(
         self, session: AsyncSession, *, lock: bool = False
