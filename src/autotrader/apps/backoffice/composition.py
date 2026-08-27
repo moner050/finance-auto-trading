@@ -23,6 +23,7 @@ from autotrader.apps.backoffice.auth import (
     normalize_email,
 )
 from autotrader.apps.backoffice.google import GoogleIdentityProvider
+from autotrader.apps.backoffice.second_password import ApprovalClient, ApprovalStore
 from autotrader.apps.backoffice.sessions import RedisSessionClient, RedisSessionStore
 from autotrader.config.settings import Settings
 
@@ -103,15 +104,15 @@ def build_backoffice(
     transport: HttpxTransport | None = None,
 ) -> FastAPI:
     config = backoffice_config(settings)
+    # One client for both. Sessions and approvals share a fate on purpose:
+    # if Redis is gone nobody is signed in, and section 9 says the local
+    # safety CLI is the independent emergency path, not a second web door.
+    client = redis.from_url(config.redis_url, decode_responses=True)
     return create_app(
         config=config,
         sessions=sessions,
-        store=RedisSessionStore(
-            cast(
-                RedisSessionClient,
-                redis.from_url(config.redis_url, decode_responses=True),
-            )
-        ),
+        store=RedisSessionStore(cast(RedisSessionClient, client)),
+        approvals=ApprovalStore(cast(ApprovalClient, client)),
         provider=GoogleIdentityProvider(
             config=config, transport=transport or HttpxTransport()
         ),

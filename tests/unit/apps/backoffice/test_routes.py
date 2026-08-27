@@ -26,9 +26,23 @@ from autotrader.apps.backoffice.auth import (
     VerifiedIdentity,
     new_session_id,
 )
+from autotrader.apps.backoffice.second_password import (
+    ApprovalClient,
+    ApprovalStore,
+)
 
 ALLOWED = "operator@example.com"
 CSRF = "a-form-token"
+
+
+def _approvals() -> ApprovalStore:
+    """Redis-backed in the real thing; these tests never reach it."""
+    return ApprovalStore(cast("ApprovalClient", _NoRedis()))
+
+
+class _NoRedis:
+    def __getattr__(self, name: str) -> object:
+        raise AssertionError(f"approvals were consulted: {name}")
 
 
 class _NoDatabase:
@@ -93,6 +107,7 @@ def _app(store: _Store, provider: _Provider) -> FastAPI:
         config=_config(),
         sessions=cast("async_sessionmaker[AsyncSession]", _NoDatabase()),
         store=store,
+        approvals=_approvals(),
         provider=provider,
         account_id=uuid7(),
     )
@@ -232,6 +247,7 @@ def test_the_application_refuses_to_build_without_a_session_store() -> None:
             config=_config(),
             sessions=cast("async_sessionmaker[AsyncSession]", _NoDatabase()),
             store=cast("_Store", None),
+            approvals=_approvals(),
             provider=_allowed(),
             account_id=uuid7(),
         )
@@ -243,6 +259,7 @@ def test_the_application_refuses_to_build_without_an_identity_provider() -> None
             config=_config(),
             sessions=cast("async_sessionmaker[AsyncSession]", _NoDatabase()),
             store=_Store(),
+            approvals=_approvals(),
             provider=cast("_Provider", None),
             account_id=uuid7(),
         )

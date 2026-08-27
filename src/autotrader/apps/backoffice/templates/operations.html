@@ -34,8 +34,11 @@
       <button class="stop" type="submit" name="action" value="HALT">HALT</button>
       <button class="stop" type="submit" name="action" value="EMERGENCY">EMERGENCY</button>
       <button class="quiet" type="submit" name="action" value="DISARM">DISARM</button>
-      <span class="note">모두 즉시 무장을 해제합니다. 되돌리는 조작은 여기에 없습니다.</span>
+      <span class="note">모두 즉시 무장을 해제합니다.</span>
     </form>
+
+    <p><a href="/controls/arm">거래 재개 →</a>
+      <span class="note">2차 비밀번호가 필요합니다.</span></p>
 
     <h2>제어</h2>
     {% if view.controls %}

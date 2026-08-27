@@ -35,7 +35,18 @@ from autotrader.apps.backoffice.commands import (
     SafetyAction,
     new_command,
 )
+from autotrader.apps.backoffice.exposure import (
+    DangerousAction,
+    MySqlExposureControls,
+    approval_for,
+    new_exposure_command,
+)
 from autotrader.apps.backoffice.read_model import OperationsReadModel, OperationsView
+from autotrader.apps.backoffice.second_password import (
+    ApprovalStore,
+    MySqlSecondPasswords,
+    check_password,
+)
 from autotrader.shared.ids import new_uuid7
 
 TEMPLATES = Path(__file__).resolve().parent / "templates"
@@ -52,6 +63,7 @@ def create_app(
     sessions: async_sessionmaker[AsyncSession],
     store: SessionStore,
     provider: IdentityProvider,
+    approvals: ApprovalStore,
     account_id: UUID,
 ) -> FastAPI:
     """Build the application, or raise rather than serve anonymously."""
@@ -61,6 +73,7 @@ def create_app(
         ("store", store),
         ("provider", provider),
         ("sessions", sessions),
+        ("approvals", approvals),
     ):
         # Checked at build time rather than at first request. A server that
         # accepts a connection and only then finds it has no session store has
@@ -72,6 +85,10 @@ def create_app(
     app.state.session_store = store
     templates = Jinja2Templates(directory=str(TEMPLATES))
     controls = MySqlSafetyControls(sessions)
+    passwords = MySqlSecondPasswords(sessions)
+    exposure = MySqlExposureControls(
+        sessions=sessions, approvals=approvals, account_id=account_id
+    )
 
     async def _sign_in(request: Request, error: Exception) -> Response:
         del request, error
@@ -141,6 +158,81 @@ def create_app(
         # the handler believes it just did.
         return await _render(request, session, templates, sessions, account_id)
 
+    async def arming_panel(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+    ) -> Response:
+        return templates.TemplateResponse(
+            request=request,
+            name="arming.html",
+            context={
+                "session": session,
+                "facts": await exposure.facts(),
+                "error": request.query_params.get("error"),
+            },
+        )
+
+    async def approve(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        action: str = Form(...),
+        csrf_token: str = Form(...),
+        second_password: str = Form(...),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        requested = _dangerous(action)
+        session_id = _session_id(request)
+        source_ip = request.client.host if request.client else None
+        await approvals.require_attempts_left(
+            session_id=session_id, source_ip=source_ip
+        )
+        verifier = await passwords.active()
+        if not check_password(verifier, second_password):
+            await approvals.record_failure(session_id=session_id, source_ip=source_ip)
+            return RedirectResponse("/controls/arm?error=password", status_code=303)
+        await approvals.clear_failures(session_id=session_id, source_ip=source_ip)
+        facts = await exposure.facts()
+        approval_id = await approvals.issue(
+            approval_for(
+                session_id=session_id,
+                operator=session.operator,
+                action=requested,
+                facts=facts,
+            )
+        )
+        return templates.TemplateResponse(
+            request=request,
+            name="arming.html",
+            context={
+                "session": session,
+                "facts": facts,
+                "approval_id": approval_id,
+                "action": requested.value,
+                "error": None,
+            },
+        )
+
+    async def enable(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        action: str = Form(...),
+        csrf_token: str = Form(...),
+        approval_id: str = Form(...),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        await exposure.apply(
+            new_exposure_command(
+                action=_dangerous(action),
+                operator=session.operator,
+                source_ip=request.client.host if request.client else None,
+                correlation_id=request.headers.get("x-request-id", str(new_uuid7())),
+                approval_id=approval_id,
+                requested_at=datetime.now(UTC),
+            ),
+            session_id=_session_id(request),
+        )
+        return await _render(request, session, templates, sessions, account_id)
+
     # Registered rather than decorated: a decorated closure reads as dead
     # code to a type checker, and silencing that on every route is a habit
     # worth not starting.
@@ -153,7 +245,30 @@ def create_app(
     app.add_api_route(
         "/controls", control, methods=["POST"], response_class=HTMLResponse
     )
+    app.add_api_route(
+        "/controls/arm", arming_panel, methods=["GET"], response_class=HTMLResponse
+    )
+    app.add_api_route(
+        "/controls/approve", approve, methods=["POST"], response_class=HTMLResponse
+    )
+    app.add_api_route(
+        "/controls/enable", enable, methods=["POST"], response_class=HTMLResponse
+    )
     return app
+
+
+def _dangerous(action: str) -> DangerousAction:
+    try:
+        return DangerousAction(action)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="unknown action") from error
+
+
+def _session_id(request: Request) -> str:
+    session_id = request.cookies.get(SESSION_COOKIE)
+    if session_id is None:
+        raise OperatorRequired
+    return session_id
 
 
 async def _render(

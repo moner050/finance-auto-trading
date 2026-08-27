@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <title>거래 재개</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 46rem; }
+      h1 { font-size: 1.3rem; }
+      table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+      th, td { border-bottom: 1px solid #ddd; padding: .4rem .6rem; text-align: left; }
+      th { width: 12rem; color: #555; font-weight: 500; }
+      .code { font-family: ui-monospace, monospace; font-size: .85rem; }
+      .danger { color: #b00020; }
+      .panel { border: 1px solid #ccc; padding: 1rem 1.25rem; }
+      button { padding: .55rem 1rem; font-size: 1rem; cursor: pointer; }
+      .go { background: #00701a; color: #fff; border: 1px solid #005414; font-weight: 600; }
+      .note { color: #777; font-size: .85rem; }
+      input[type=password] { padding: .4rem; font-size: 1rem; width: 18rem; }
+    </style>
+  </head>
+  <body>
+    <h1>거래 재개 <span class="code">{{ session.operator.email }}</span></h1>
+    <p><a href="/">← 운영 화면</a></p>
+
+    <div class="panel">
+      <p>아래 상태를 그대로 확인하고 진행합니다. 승인 후 이 값 중 하나라도
+        달라지면 승인은 무효가 됩니다.</p>
+      <table>
+        <tr><th>계정</th><td class="code">{{ facts.account_alias }}</td></tr>
+        <tr><th>브로커</th><td class="code">{{ facts.broker_code }}</td></tr>
+        <tr><th>환경</th><td class="code">{{ facts.environment }}</td></tr>
+        <tr><th>리스크 정책</th><td class="code">{{ facts.policy_version or '없음' }}</td></tr>
+        <tr><th>현재 무장</th><td>{{ '예' if facts.armed else '아니오' }}</td></tr>
+        <tr><th>킬 스위치</th><td class="code">{{ facts.kill_switch_level }}</td></tr>
+      </table>
+
+      {% if error %}
+      <p class="danger">2차 비밀번호가 일치하지 않습니다.</p>
+      {% endif %}
+
+      {% if approval_id %}
+      <form method="post" action="/controls/enable">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
+        <input type="hidden" name="approval_id" value="{{ approval_id }}" />
+        <input type="hidden" name="action" value="{{ action }}" />
+        <button class="go" type="submit">{{ action }} 실행</button>
+        <span class="note">승인은 60초 후 만료되며 한 번만 사용됩니다.</span>
+      </form>
+      {% else %}
+      <form method="post" action="/controls/approve">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
+        <p>
+          <label>2차 비밀번호
+            <input type="password" name="second_password" autocomplete="off" required />
+          </label>
+        </p>
+        {% if facts.kill_switch_level != 'NONE' %}
+        <button type="submit" name="action" value="CLEAR_HALT">킬 스위치 해제 승인</button>
+        <span class="note">무장 상태는 바뀌지 않습니다. 해제 후 다시 무장해야 합니다.</span>
+        {% else %}
+        <button type="submit" name="action" value="ARM">무장 승인</button>
+        {% endif %}
+      </form>
+      {% endif %}
+    </div>
+  </body>
+</html>

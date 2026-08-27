@@ -95,7 +95,7 @@ class ControlOutcome:
     """What the command did, read back from what was committed."""
 
     command_id: UUID
-    action: SafetyAction
+    action: str
     armed: bool
     kill_switch_level: str
     repeated: bool
@@ -139,11 +139,11 @@ class MySqlSafetyControls:
                 # success would tell an operator the system is stopped when
                 # nothing was ever running under this name.
                 raise NothingToControlError("there are no controls to act on")
-            before = _state(controls)
+            before = control_state(controls)
             for control in controls:
                 _apply_to(control, command.action)
                 control.row_version += 1
-            after = _state(controls)
+            after = control_state(controls)
             session.add(
                 OpsAuditLog(
                     id=new_uuid7(),
@@ -163,7 +163,7 @@ class MySqlSafetyControls:
             await session.commit()
         return ControlOutcome(
             command_id=command.id,
-            action=command.action,
+            action=command.action.value,
             armed=after.armed,
             kill_switch_level=after.kill_switch_level,
             repeated=False,
@@ -179,7 +179,7 @@ def _apply_to(control: OpsTradingControl, action: SafetyAction) -> None:
         control.kill_switch_level = level
 
 
-def _state(controls: list[OpsTradingControl]) -> ControlState:
+def control_state(controls: list[OpsTradingControl]) -> ControlState:
     return ControlState(
         armed=all(control.armed for control in controls),
         kill_switch_level=_strongest(controls),
@@ -232,7 +232,7 @@ async def _existing_outcome(
     state = cast("dict[str, object]", details["after"])
     return ControlOutcome(
         command_id=command.id,
-        action=command.action,
+        action=command.action.value,
         armed=bool(state["armed"]),
         kill_switch_level=str(state["kill_switch_level"]),
         repeated=True,
@@ -249,5 +249,6 @@ __all__ = (
     "NothingToControlError",
     "SafetyAction",
     "SafetyCommand",
+    "control_state",
     "new_command",
 )

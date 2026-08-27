@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from typing import cast
 from uuid import UUID, uuid7
 
 import httpx
@@ -39,6 +40,10 @@ from autotrader.apps.backoffice.auth import (
     VerifiedIdentity,
     new_session_id,
 )
+from autotrader.apps.backoffice.second_password import (
+    ApprovalClient,
+    ApprovalStore,
+)
 from autotrader.apps.trader.loop import run_pass
 from autotrader.apps.trader.market_data import HLIT_TIMEFRAME
 from autotrader.apps.trader.tick import DISARMED, SUBMITTED
@@ -52,6 +57,18 @@ from autotrader.persistence.mysql.models.operations import (
 
 ALLOWED = "operator@example.com"
 CSRF = "a-form-token"
+
+
+def _approvals() -> ApprovalStore:
+    """Redis-backed in the real thing; these tests never reach it."""
+    return ApprovalStore(cast("ApprovalClient", _NoRedis()))
+
+
+class _NoRedis:
+    def __getattr__(self, name: str) -> object:
+        raise AssertionError(f"approvals were consulted: {name}")
+
+
 BASE_URL = "https://backoffice.example.com"
 
 # Anything shaped like a credential has no business in a rendered page.
@@ -108,6 +125,7 @@ def _backoffice(
         ),
         sessions=sessions,
         store=store,
+        approvals=_approvals(),
         provider=_Provider(),
         account_id=account_id,
     )
