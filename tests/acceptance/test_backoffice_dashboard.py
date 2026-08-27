@@ -1,0 +1,251 @@
+"""What an operator sees after the loop has run.
+
+The projection tests prove the queries answer correctly. This proves the
+answer reaches a page, that the page is reachable only with a session, and
+that what lands in the HTML is what the loop actually did rather than a
+hopeful summary of it.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import re
+from uuid import UUID, uuid7
+
+import httpx
+import pytest
+from acceptance.test_trading_loop import (
+    _arm,
+    _Bars,
+    _context,
+    _ports,
+    _register_strategy,
+)
+from conftest import integration_database_url
+from fastapi import FastAPI
+from integration.apps.test_trader_tick import NOW
+from integration.risk.test_concurrent_reservation import _seed as _risk_seed
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from autotrader.apps.backoffice.app import LOGIN_PATH, create_app
+from autotrader.apps.backoffice.auth import (
+    SESSION_COOKIE,
+    BackofficeConfig,
+    LoginAttempt,
+    Operator,
+    VerifiedIdentity,
+    new_session_id,
+)
+from autotrader.apps.trader.loop import run_pass
+from autotrader.apps.trader.market_data import HLIT_TIMEFRAME
+from autotrader.config.settings import Settings
+from autotrader.persistence.mysql.engine import create_engine
+from autotrader.persistence.mysql.models.core import CoreInstrument
+from autotrader.persistence.mysql.models.operations import OpsTradingControl
+
+ALLOWED = "operator@example.com"
+BASE_URL = "https://backoffice.example.com"
+
+# Anything shaped like a credential has no business in a rendered page.
+_FORBIDDEN = re.compile(
+    r"client_secret|refresh_token|access_token|BEGIN [A-Z ]*PRIVATE KEY",
+    re.IGNORECASE,
+)
+
+
+class _Store:
+    def __init__(self) -> None:
+        self.sessions: dict[str, Operator] = {}
+
+    async def begin_login(self, attempt: LoginAttempt) -> None:
+        raise AssertionError("this scenario never signs in")
+
+    async def take_login(self, state: str) -> LoginAttempt | None:
+        raise AssertionError("this scenario never signs in")
+
+    async def create_session(self, operator: Operator) -> str:
+        session_id = new_session_id()
+        self.sessions[session_id] = operator
+        return session_id
+
+    async def operator_for(self, session_id: str) -> Operator | None:
+        return self.sessions.get(session_id)
+
+    async def end_session(self, session_id: str) -> None:
+        self.sessions.pop(session_id, None)
+
+
+class _Provider:
+    def authorization_url(self, attempt: LoginAttempt) -> str:
+        return f"{BASE_URL}/never?state={attempt.state}"
+
+    async def verify(self, *, code: str, attempt: LoginAttempt) -> VerifiedIdentity:
+        del code, attempt
+        return VerifiedIdentity(email=ALLOWED, email_verified=True)
+
+
+def _backoffice(
+    sessions: async_sessionmaker[AsyncSession], store: _Store, account_id: UUID
+) -> FastAPI:
+    return create_app(
+        config=BackofficeConfig(
+            public_url=BASE_URL,
+            allowed_email=ALLOWED,
+            client_id="client",
+            client_secret="a-secret-that-must-never-render",
+            redis_url="redis://localhost:6379/0",
+        ),
+        sessions=sessions,
+        store=store,
+        provider=_Provider(),
+        account_id=account_id,
+    )
+
+
+def _drive(scenario: object) -> None:
+    url = integration_database_url()
+    if url is None:
+        pytest.skip("a MySQL connection is required for acceptance tests")
+
+    async def run() -> None:
+        engine = create_engine(Settings(database_url=url))
+        sessions = async_sessionmaker(bind=engine, expire_on_commit=False)
+        try:
+            await scenario(sessions)  # type: ignore[operator]
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+async def _run_one_entry(
+    sessions: async_sessionmaker[AsyncSession], ids: object
+) -> None:
+    """Take one bar through the loop so there is something to look at."""
+    manifest = await _register_strategy(sessions, uuid7())
+    bars = _Bars()
+    ports = _ports(
+        sessions,
+        context=_context(manifest, ids.instrument_id),  # type: ignore[attr-defined]
+        ids=ids,
+        bars=bars,
+        lease_name=f"backoffice:{uuid7().hex[:12]}",
+    )
+    await run_pass(now=NOW, ports=ports)
+    bars.closed = True
+    await run_pass(now=NOW + HLIT_TIMEFRAME, ports=ports)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_an_operator_sees_the_position_the_loop_opened() -> None:
+    async def scenario(sessions: async_sessionmaker[AsyncSession]) -> None:
+        ids = await _risk_seed(sessions)
+        await _arm(sessions, armed=True)
+        await _run_one_entry(sessions, ids)
+        async with sessions() as session:
+            code = await session.scalar(
+                select(CoreInstrument.code).where(
+                    CoreInstrument.id == ids.instrument_id  # type: ignore[attr-defined]
+                )
+            )
+
+        store = _Store()
+        app = _backoffice(sessions, store, ids.account_id)  # type: ignore[attr-defined]
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url=BASE_URL
+        ) as client:
+            client.cookies.set(
+                SESSION_COOKIE, await store.create_session(Operator(email=ALLOWED))
+            )
+            response = await client.get("/")
+
+        assert response.status_code == 200
+        body = response.text
+        assert code is not None and code in body
+        # The stop the loop placed shows as protection rather than as absence.
+        assert "손절 있음" in body
+        assert ALLOWED in body
+
+    _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_the_screen_says_stopped_when_a_kill_switch_is_down() -> None:
+    async def scenario(sessions: async_sessionmaker[AsyncSession]) -> None:
+        ids = await _risk_seed(sessions)
+        await _arm(sessions, armed=True)
+        await _run_one_entry(sessions, ids)
+        async with sessions() as session:
+            control = await session.scalar(select(OpsTradingControl))
+            assert control is not None
+            control.kill_switch_level = "BLOCK_NEW_EXPOSURE"
+            await session.commit()
+
+        store = _Store()
+        app = _backoffice(sessions, store, ids.account_id)  # type: ignore[attr-defined]
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url=BASE_URL
+        ) as client:
+            client.cookies.set(
+                SESSION_COOKIE, await store.create_session(Operator(email=ALLOWED))
+            )
+            response = await client.get("/")
+
+        # The armed flag is still true. The loop refuses anyway, and reading
+        # "running" off this page would be reading the wrong thing.
+        assert "DISARMED" in response.text
+        assert "BLOCK_NEW_EXPOSURE" in response.text
+
+    _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_the_rendered_page_carries_nothing_that_looks_like_a_credential() -> None:
+    async def scenario(sessions: async_sessionmaker[AsyncSession]) -> None:
+        ids = await _risk_seed(sessions)
+        await _arm(sessions, armed=True)
+        await _run_one_entry(sessions, ids)
+
+        store = _Store()
+        app = _backoffice(sessions, store, ids.account_id)  # type: ignore[attr-defined]
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url=BASE_URL
+        ) as client:
+            client.cookies.set(
+                SESSION_COOKIE, await store.create_session(Operator(email=ALLOWED))
+            )
+            response = await client.get("/")
+
+        assert _FORBIDDEN.search(response.text) is None
+        # The application's own client secret was in reach of the template.
+        assert "a-secret-that-must-never-render" not in response.text
+
+    _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_the_same_page_without_a_session_shows_nothing_at_all() -> None:
+    async def scenario(sessions: async_sessionmaker[AsyncSession]) -> None:
+        ids = await _risk_seed(sessions)
+        await _arm(sessions, armed=True)
+        await _run_one_entry(sessions, ids)
+
+        app = _backoffice(sessions, _Store(), ids.account_id)  # type: ignore[attr-defined]
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url=BASE_URL,
+            follow_redirects=False,
+        ) as client:
+            response = await client.get("/")
+
+        assert response.status_code == 303
+        assert response.headers["location"] == LOGIN_PATH
+        # Not a redacted page. No page.
+        assert response.text == ""
+
+    _drive(scenario)
