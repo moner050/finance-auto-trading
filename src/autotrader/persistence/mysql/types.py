@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import BINARY, DateTime
+from sqlalchemy.dialects.mysql import DATETIME
 from sqlalchemy.types import TypeDecorator
 
 
@@ -33,7 +34,19 @@ class UuidBinary(TypeDecorator[UUID]):
 
 
 class UtcDateTime(TypeDecorator[datetime]):
-    impl = DateTime(timezone=False)
+    """UTC, stored to the microsecond.
+
+    Twelve check constraints in this schema read `deactivated_at >
+    activated_at` or `completed_at >= started_at`. A plain MySQL DATETIME
+    holds whole seconds and *rounds* what it is given, so two events in one
+    second either collapse together or swap places — a rotation performed in
+    the right order can be refused for happening before the thing it
+    followed. The constraints are worth keeping, so the column is given the
+    resolution they assume rather than the constraints being loosened to
+    match a column that cannot hold it.
+    """
+
+    impl = DateTime(timezone=False).with_variant(DATETIME(fsp=6), "mysql")
     cache_ok = True
 
     def process_bind_param(

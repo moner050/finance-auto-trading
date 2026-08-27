@@ -142,10 +142,10 @@ class SystemClock:
     def now(self) -> datetime:
         """Truncated to a whole second.
 
-        The stored timestamp columns carry no fractional seconds, so MySQL
-        rounds anything finer on the way in. A value that comes back larger
-        than the one compared against it in memory turns a valid provenance
-        check into a failure, and no decision here needs sub-second precision.
+        The stored columns keep microseconds, so this is no longer needed to
+        survive a round trip. It stays because a pass is a bar boundary: two
+        readings inside one second describe the same tick, and giving them
+        different timestamps would invent an ordering the market did not have.
         """
         return datetime.now(UTC).replace(microsecond=0)
 
