@@ -17,7 +17,12 @@ import secrets
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Protocol
-from urllib.parse import urlsplit
+
+from autotrader.shared.origins import (
+    InvalidOriginError,
+    is_loopback,
+    require_public_origin,
+)
 
 SESSION_COOKIE = "autotrader_backoffice"
 SESSION_PATH = "/"
@@ -65,20 +70,21 @@ class BackofficeConfig:
             value = getattr(self, name)
             if type(value) is not str or not value.strip():
                 raise IdentityUnavailableError(f"{name} is required")
-        scheme = urlsplit(self.public_url).scheme
-        host = urlsplit(self.public_url).hostname or ""
-        # The OIDC redirect carries an authorization code. Over plain HTTP it
-        # is readable by anything on the path, so only loopback, where there
-        # is no path, is allowed to skip TLS.
-        if scheme != "https" and host not in {"127.0.0.1", "localhost", "::1"}:
-            raise IdentityUnavailableError("public_url must be HTTPS off loopback")
+        try:
+            require_public_origin(self.public_url, name="public_url")
+        except InvalidOriginError as error:
+            raise IdentityUnavailableError(str(error)) from error
         if normalize_email(self.allowed_email) != self.allowed_email:
             raise IdentityUnavailableError("allowed_email must be normalized")
 
     @property
     def secure_cookie(self) -> bool:
-        """Loopback development is the only place the cookie may travel bare."""
-        return urlsplit(self.public_url).scheme == "https"
+        """Loopback is the only place the cookie may travel bare.
+
+        A Secure cookie is never sent back over plain HTTP, so claiming it
+        there would break the session rather than protect it.
+        """
+        return not is_loopback(self.public_url)
 
     @property
     def redirect_uri(self) -> str:

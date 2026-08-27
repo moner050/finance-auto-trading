@@ -49,7 +49,7 @@ def test_a_missing_piece_of_configuration_refuses_to_build(field: str) -> None:
 
 def test_a_plain_http_public_url_off_loopback_is_refused() -> None:
     # The OIDC redirect carries an authorization code in the URL.
-    with pytest.raises(IdentityUnavailableError, match="HTTPS off loopback"):
+    with pytest.raises(IdentityUnavailableError, match="HTTPS, or HTTP on loopback"):
         _config(public_url="http://backoffice.example.com")
 
 

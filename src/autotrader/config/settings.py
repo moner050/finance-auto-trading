@@ -3,18 +3,19 @@ from __future__ import annotations
 from base64 import b64decode
 from binascii import Error as BinasciiError
 from enum import StrEnum
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 
 from pydantic import (
     Field,
     HttpUrl,
     SecretStr,
     TypeAdapter,
-    ValidationError,
     model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
+
+from autotrader.shared.origins import InvalidOriginError, require_public_origin
 
 _HTTP_URL_ADAPTER = TypeAdapter(HttpUrl)
 
@@ -160,24 +161,9 @@ class Settings(BaseSettings):
         assert master_key is not None
         assert master_key_version is not None
         try:
-            _HTTP_URL_ADAPTER.validate_python(public_url)
-            parsed_url = urlsplit(public_url)
-            _ = parsed_url.port
-        except (ValidationError, ValueError) as exc:
-            raise ValueError("BACKOFFICE_PUBLIC_URL must be an HTTPS origin") from exc
-        if (
-            "\\" in public_url
-            or any(character.isspace() for character in public_url)
-            or parsed_url.netloc.endswith(":")
-            or parsed_url.scheme != "https"
-            or parsed_url.hostname is None
-            or parsed_url.username is not None
-            or parsed_url.password is not None
-            or parsed_url.path not in ("", "/")
-            or parsed_url.query
-            or parsed_url.fragment
-        ):
-            raise ValueError("BACKOFFICE_PUBLIC_URL must be an HTTPS origin")
+            require_public_origin(public_url, name="BACKOFFICE_PUBLIC_URL")
+        except InvalidOriginError as exc:
+            raise ValueError(str(exc)) from exc
         if master_key_version <= 0:
             raise ValueError("BACKOFFICE_MASTER_KEY_VERSION must be positive")
 

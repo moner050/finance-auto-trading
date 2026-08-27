@@ -346,7 +346,7 @@ async def test_a_rotated_signing_key_is_fetched_once_more() -> None:
 def test_a_plain_http_redirect_uri_cannot_be_configured_at_all() -> None:
     # The redirect carries an authorization code, and the config refuses the
     # public URL it would be derived from, so the provider never sees one.
-    with pytest.raises(IdentityUnavailableError, match="HTTPS off loopback"):
+    with pytest.raises(IdentityUnavailableError, match="HTTPS, or HTTP on loopback"):
         _config(public_url="http://backoffice.example.com")
 
 
