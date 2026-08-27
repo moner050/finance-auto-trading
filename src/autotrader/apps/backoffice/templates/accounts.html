@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <title>계정과 자격증명</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; }
+      h1 { font-size: 1.3rem; }
+      h2 { font-size: 1rem; margin-top: 2rem; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border-bottom: 1px solid #ddd; padding: .4rem .6rem; text-align: left; }
+      .code { font-family: ui-monospace, monospace; font-size: .85rem; color: #555; }
+      .ok { color: #00701a; }
+      .missing { color: #b00020; }
+      .empty { color: #777; }
+      .note { color: #777; font-size: .85rem; }
+    </style>
+  </head>
+  <body>
+    <h1>계정과 자격증명 <span class="code">{{ session.operator.email }}</span></h1>
+    <p><a href="/">← 운영 화면</a></p>
+
+    <h2>계정</h2>
+    {% if view.accounts %}
+    <table>
+      <tr><th>브로커</th><th>별칭</th><th>환경</th><th>사용</th><th>자격증명 참조</th></tr>
+      {% for account in view.accounts %}
+      <tr>
+        <td class="code">{{ account.broker_code }}</td>
+        <td>{{ account.account_alias }}</td>
+        <td class="code">{{ account.environment }}</td>
+        <td class="{{ 'ok' if account.enabled else 'missing' }}">
+          {{ '예' if account.enabled else '아니오' }}
+        </td>
+        <td class="code">{{ account.secret_reference }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="empty">등록된 계정이 없습니다.</p>
+    {% endif %}
+
+    <h2>활성 리스크 정책</h2>
+    <p class="code">{{ view.active_policy_version or '없음' }}</p>
+
+    <h2>자격증명</h2>
+    <p class="note">값은 표시하지 않습니다. 저장 여부와 지문 앞부분만 보여줍니다.</p>
+    {% for provider in view.credentials %}
+    <h3>
+      {{ provider.provider }} {{ provider.environment }}
+      <span class="{{ 'ok' if provider.complete else 'missing' }}">
+        {{ '완비' if provider.complete else '미완' }}
+        ({{ provider.stored_count }}/{{ provider.values | length }})
+      </span>
+    </h3>
+    <table>
+      <tr><th>이름</th><th>저장됨</th><th>지문</th></tr>
+      {% for value in provider.values %}
+      <tr>
+        <td class="code">{{ value.logical_name }}</td>
+        <td class="{{ 'ok' if value.present else 'missing' }}">
+          {{ '예' if value.present else '아니오' }}
+        </td>
+        <td class="code">{{ value.fingerprint_prefix or '-' }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endfor %}
+  </body>
+</html>

@@ -163,6 +163,7 @@ async def build_backoffice(
             config=config, transport=transport or HttpxTransport()
         ),
         account_id=account_id,
+        keys=master_key_ring(settings),
     )
 
 

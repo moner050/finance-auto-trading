@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from autotrader.apps.backoffice.accounts_read_model import AccountsReadModel
 from autotrader.apps.backoffice.auth import (
     SESSION_COOKIE,
     SESSION_LIFETIME,
@@ -48,6 +49,7 @@ from autotrader.apps.backoffice.second_password import (
     MySqlSecondPasswords,
     check_password,
 )
+from autotrader.security.secret_crypto import MasterKeyRing
 from autotrader.shared.ids import new_uuid7
 
 TEMPLATES = Path(__file__).resolve().parent / "templates"
@@ -66,6 +68,7 @@ def create_app(
     provider: IdentityProvider,
     approvals: ApprovalStore,
     account_id: UUID,
+    keys: MasterKeyRing | None = None,
 ) -> FastAPI:
     """Build the application, or raise rather than serve anonymously."""
     if type(config) is not BackofficeConfig:
@@ -87,6 +90,7 @@ def create_app(
     templates = Jinja2Templates(directory=str(TEMPLATES))
     controls = MySqlSafetyControls(sessions)
     passwords = MySqlSecondPasswords(sessions)
+    account_reader = None if keys is None else AccountsReadModel(sessions, keys)
     exposure = MySqlExposureControls(
         sessions=sessions, approvals=approvals, account_id=account_id
     )
@@ -158,6 +162,21 @@ def create_app(
         # Rendered from what was committed, read back, rather than from what
         # the handler believes it just did.
         return await _render(request, session, templates, sessions, account_id)
+
+    async def accounts(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+    ) -> Response:
+        if account_reader is None:
+            # Without a master key nothing here can even name a credential,
+            # and a page that renders every value as absent would read as an
+            # empty vault rather than as a missing key.
+            raise HTTPException(status_code=503, detail="secrets are unavailable")
+        return templates.TemplateResponse(
+            request=request,
+            name="accounts.html",
+            context={"session": session, "view": await account_reader.load()},
+        )
 
     async def arming_panel(
         request: Request,
@@ -245,6 +264,9 @@ def create_app(
     app.add_api_route("/", dashboard, methods=["GET"], response_class=HTMLResponse)
     app.add_api_route(
         "/controls", control, methods=["POST"], response_class=HTMLResponse
+    )
+    app.add_api_route(
+        "/accounts", accounts, methods=["GET"], response_class=HTMLResponse
     )
     app.add_api_route(
         "/controls/arm", arming_panel, methods=["GET"], response_class=HTMLResponse
