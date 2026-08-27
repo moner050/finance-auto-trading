@@ -6,6 +6,7 @@ from decimal import ROUND_FLOOR, Decimal
 from uuid import UUID
 
 from autotrader.domain.enums import OrderStyle, Side
+from autotrader.risk.models import V6RiskPolicySnapshot
 from autotrader.shared.decimal import require_decimal
 from autotrader.shared.time import require_utc
 from autotrader.strategies.david_v6.models import (
@@ -15,13 +16,13 @@ from autotrader.strategies.david_v6.models import (
     V6Market,
 )
 
-_DAILY_LOSS_FRACTION = Decimal("0.0075")
-_WEEKLY_LOSS_FRACTION = Decimal("0.0200")
-_OPEN_RISK_FRACTION = Decimal("0.0075")
 _MAX_SPREAD_TICKS = Decimal(3)
 # Section 6 refuses a fixed daily trade count and marks this bound as an
 # anti-overtrading safety candidate rather than one of David's values.
 _SESSION_TRADE_SAFETY_UPPER_BOUND = 8
+# A ceiling, not a setting. Section 21 approves seven for Binance USD-M, and a
+# policy row that could raise it would turn the approved limit into a default.
+MAX_LEVERAGE = 7
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +131,10 @@ class V6RiskContext:
     matched_indicators: tuple[MatchedIndicator, ...]
     mandatory_indicator_codes: frozenset[str]
     risk_request: V6RiskRequest
+    # The policy in force for this evaluation, carried with the request it
+    # sizes rather than looked up inside the engine, so what a decision was
+    # measured against is part of what the decision recorded.
+    policy: V6RiskPolicySnapshot
     target_price: Decimal
     valid_until: datetime
 
@@ -154,6 +159,10 @@ class V6RiskContext:
             raise ValueError("mandatory indicator codes must be trimmed text")
         if type(self.risk_request) is not V6RiskRequest:
             raise TypeError("risk_request must be an exact V6RiskRequest")
+        if type(self.policy) is not V6RiskPolicySnapshot:
+            raise TypeError("policy must be an exact V6RiskPolicySnapshot")
+        if self.policy.market is not self.risk_request.market:
+            raise ValueError("the policy and the request must name the same market")
         target = require_decimal(self.target_price)
         if target <= 0:
             raise ValueError("target_price must be positive")
@@ -161,13 +170,28 @@ class V6RiskContext:
         object.__setattr__(self, "valid_until", require_utc(self.valid_until))
 
 
-def evaluate_v6_risk(request: V6RiskRequest) -> V6RiskAuthority:
+def evaluate_v6_risk(
+    request: V6RiskRequest, *, policy: V6RiskPolicySnapshot
+) -> V6RiskAuthority:
+    """Size a trade against the policy that is actually in force.
+
+    The policy is required rather than defaulted. These fractions decide how
+    much money moves, and an engine that falls back to a built-in number when
+    nobody handed it one would keep trading after a policy was retired,
+    against limits the operator can no longer see or change.
+    """
     if type(request) is not V6RiskRequest:
         raise TypeError("request must be an exact V6RiskRequest")
+    if type(policy) is not V6RiskPolicySnapshot:
+        raise TypeError("policy must be an exact V6RiskPolicySnapshot")
+    if policy.market is not request.market:
+        # A cash policy applied to a futures request would size a leveraged
+        # position with the fractions approved for an unleveraged one.
+        raise ValueError("the policy and the request must name the same market")
     request.__post_init__()
     blockers: list[str] = []
     risk_base = min(request.session_start_equity, request.current_equity)
-    risk_fraction = _risk_fraction(request.market, request.grade, blockers)
+    risk_fraction = _risk_fraction(policy, request.grade, blockers)
     risk_budget = risk_base * risk_fraction
 
     buffer_values = (
@@ -182,7 +206,7 @@ def evaluate_v6_risk(request: V6RiskRequest) -> V6RiskAuthority:
             buffer = max(*buffer_values, Decimal("0.10") * request.atr_30s)
         if request.leverage is None:
             blockers.append("BINANCE_LEVERAGE_REQUIRED")
-        elif request.leverage > 7:
+        elif request.leverage > MAX_LEVERAGE:
             blockers.append("BINANCE_LEVERAGE_LIMIT")
     else:
         buffer = max(buffer_values)
@@ -212,11 +236,11 @@ def evaluate_v6_risk(request: V6RiskRequest) -> V6RiskAuthority:
     if distance_atr > Decimal("1.50"):
         blockers.append("STOP_DISTANCE_ABOVE_1_50_ATR5M")
 
-    if request.daily_net_pnl <= -(risk_base * _DAILY_LOSS_FRACTION):
+    if request.daily_net_pnl <= -(risk_base * policy.daily_loss_fraction):
         blockers.append("DAILY_LOSS_LIMIT")
-    if request.weekly_net_pnl <= -(risk_base * _WEEKLY_LOSS_FRACTION):
+    if request.weekly_net_pnl <= -(risk_base * policy.weekly_loss_fraction):
         blockers.append("WEEKLY_LOSS_LIMIT")
-    if request.consecutive_net_losses >= 2:
+    if request.consecutive_net_losses >= policy.max_consecutive_losses:
         blockers.append("CONSECUTIVE_LOSS_LIMIT")
     if request.session_trade_count >= _SESSION_TRADE_SAFETY_UPPER_BOUND:
         blockers.append("SESSION_TRADE_UPPER_BOUND")
@@ -225,7 +249,7 @@ def evaluate_v6_risk(request: V6RiskRequest) -> V6RiskAuthority:
         blockers.append("SESSION_OBJECTIVE_REACHED")
     if (
         request.current_open_structural_risk + risk_budget
-        > risk_base * _OPEN_RISK_FRACTION
+        > risk_base * policy.max_open_structural_risk_fraction
     ):
         blockers.append("OPEN_RISK_LIMIT")
 
@@ -255,22 +279,31 @@ def evaluate_v6_risk(request: V6RiskRequest) -> V6RiskAuthority:
 
 
 def _risk_fraction(
-    market: V6Market,
+    policy: V6RiskPolicySnapshot,
     grade: SetupGrade,
     blockers: list[str],
 ) -> Decimal:
+    """The fraction this grade is allowed, from the policy in force.
+
+    A cash policy carries no A-candidate fraction, and its absence is what
+    says the grade is unsupported there. Reading that from the policy rather
+    than from the market keeps one answer to the question.
+    """
     if grade is SetupGrade.REJECT:
         blockers.append("SETUP_REJECTED")
         return Decimal(0)
-    if market in {V6Market.KRX_CASH, V6Market.US_CASH}:
-        if grade is SetupGrade.A_CANDIDATE:
+    if grade is SetupGrade.A_CANDIDATE:
+        if policy.a_candidate_risk_fraction is None:
             blockers.append("CASH_A_CANDIDATE_UNSUPPORTED")
             return Decimal(0)
-        return Decimal("0.0025") if grade is SetupGrade.A else Decimal("0.0015")
-    return Decimal("0.0050") if grade is SetupGrade.A else Decimal("0.0025")
+        return policy.a_candidate_risk_fraction
+    if grade is SetupGrade.A:
+        return policy.a_risk_fraction
+    return policy.normal_risk_fraction
 
 
 __all__ = (
+    "MAX_LEVERAGE",
     "V6RiskAuthority",
     "V6RiskContext",
     "V6RiskRequest",

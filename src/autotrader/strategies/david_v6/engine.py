@@ -145,7 +145,7 @@ def evaluate_v6(
         grade=preliminary_grade,
         size_multiplier=_session_size_multiplier(facts),
     )
-    authority = evaluate_v6_risk(risk_request)
+    authority = evaluate_v6_risk(risk_request, policy=risk_context.policy)
     blockers.extend(authority.blocker_codes)
     canonical_blockers = tuple(sorted(set(blockers)))
     final_grade = SetupGrade.REJECT if canonical_blockers else grade

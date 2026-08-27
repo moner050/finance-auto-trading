@@ -22,6 +22,10 @@ from autotrader.apps.trader.tick import (
     run_tick,
 )
 from autotrader.domain.enums import OrderStyle, Side
+from autotrader.persistence.mysql.repositories.david_v6_risk import (
+    approved_v6_policy,
+)
+from autotrader.risk.models import V6RiskPolicySnapshot
 from autotrader.risk.v6 import V6RiskContext, V6RiskRequest
 from autotrader.shared.ids import new_uuid7
 from autotrader.strategies.common.decisions import StrategyDecision
@@ -38,6 +42,11 @@ from autotrader.strategies.david_v6.manifest import (
     v6_configuration_hash,
 )
 from autotrader.strategies.david_v6.models import SetupGrade, StrategyFamily, V6Decision
+
+
+def _policy(market: Market = Market.US_CASH) -> V6RiskPolicySnapshot:
+    """The approved policy, which is what the engine sizes against."""
+    return approved_v6_policy(market, policy_version_id=new_uuid7())
 
 
 class _Control:
@@ -97,6 +106,9 @@ def _risk_context(side: Side = Side.BUY) -> V6RiskContext:
         # The tick replaces these with what the evidence actually supports.
         matched_indicators=(),
         mandatory_indicator_codes=frozenset(),
+        # The policy is for the market the request names, which the
+        # context refuses to let drift apart.
+        policy=_policy(Market.US_CASH),
         risk_request=V6RiskRequest(
             market=Market.US_CASH,
             grade=SetupGrade.NORMAL,

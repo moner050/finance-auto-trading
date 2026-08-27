@@ -7,8 +7,31 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from autotrader.domain.enums import Side
-from autotrader.risk.v6 import V6RiskRequest, evaluate_v6_risk
+from autotrader.persistence.mysql.repositories.david_v6_risk import (
+    approved_v6_policy,
+)
+from autotrader.risk.models import V6RiskPolicySnapshot
+from autotrader.risk.v6 import (
+    V6RiskAuthority,
+    V6RiskRequest,
+    evaluate_v6_risk,
+)
+from autotrader.shared.ids import new_uuid7
 from autotrader.strategies.david_v6.models import SetupGrade, V6Market
+
+
+def _policy(market: V6Market = V6Market.BINANCE_USDM) -> V6RiskPolicySnapshot:
+    """The approved policy, which is what the engine sizes against."""
+    return approved_v6_policy(market, policy_version_id=new_uuid7())
+
+
+def _authority(request: V6RiskRequest) -> V6RiskAuthority:
+    """Evaluate against the approved policy for the market the request names.
+
+    Taken from the request rather than passed alongside it, because the two
+    disagreeing is exactly what the engine refuses.
+    """
+    return evaluate_v6_risk(request, policy=_policy(request.market))
 
 
 def _request(current_equity: Decimal, step: Decimal) -> V6RiskRequest:
@@ -48,7 +71,7 @@ def test_rounded_quantity_never_exceeds_risk_budget(
     current_equity: Decimal,
     step: Decimal,
 ) -> None:
-    authority = evaluate_v6_risk(_request(current_equity, step))
+    authority = _authority(_request(current_equity, step))
     per_unit_loss = abs(authority.stop_price - Decimal("100")) + Decimal("0.05")
 
     assert authority.quantity * per_unit_loss <= authority.risk_budget
@@ -77,8 +100,8 @@ def test_worse_equity_cannot_increase_quantity(
     lower = max(Decimal("1"), higher - reduction)
     request = _request(higher, Decimal("0.001"))
 
-    higher_authority = evaluate_v6_risk(request)
-    lower_authority = evaluate_v6_risk(replace(request, current_equity=lower))
+    higher_authority = _authority(request)
+    lower_authority = _authority(replace(request, current_equity=lower))
 
     assert lower_authority.risk_base <= higher_authority.risk_base
     assert lower_authority.quantity <= higher_authority.quantity

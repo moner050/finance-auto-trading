@@ -95,9 +95,12 @@ def test_a_session_survives_until_it_is_ended() -> None:
 
         session_id = await store.create_session(Operator(email=ALLOWED))
 
-        assert await store.operator_for(session_id) == Operator(email=ALLOWED)
+        held = await store.session_for(session_id)
+        assert held is not None and held.operator == Operator(email=ALLOWED)
+        # The token that lets a form act is stored with the session.
+        assert held.csrf_token
         await store.end_session(session_id)
-        assert await store.operator_for(session_id) is None
+        assert await store.session_for(session_id) is None
 
     _drive(scenario)
 
@@ -123,7 +126,7 @@ def test_a_session_carries_an_absolute_lifetime() -> None:
         session_id = await store.create_session(Operator(email=ALLOWED))
 
         first = await client.ttl(f"{SESSION_PREFIX}{session_id}")  # type: ignore[attr-defined]
-        await store.operator_for(session_id)
+        await store.session_for(session_id)
         second = await client.ttl(f"{SESSION_PREFIX}{session_id}")  # type: ignore[attr-defined]
 
         assert 0 < first <= 12 * 60 * 60
@@ -158,6 +161,7 @@ def test_a_stored_email_comes_back_normalized() -> None:
             Operator(email="  Operator@EXAMPLE.com ")
         )
 
-        assert await store.operator_for(session_id) == Operator(email=ALLOWED)
+        held = await store.session_for(session_id)
+        assert held is not None and held.operator == Operator(email=ALLOWED)
 
     _drive(scenario)

@@ -7,6 +7,10 @@ from decimal import Decimal
 import pytest
 
 from autotrader.domain.enums import OrderStyle, Side
+from autotrader.persistence.mysql.repositories.david_v6_risk import (
+    approved_v6_policy,
+)
+from autotrader.risk.models import V6RiskPolicySnapshot
 from autotrader.risk.v6 import V6RiskContext, V6RiskRequest
 from autotrader.shared.ids import new_uuid7
 from autotrader.strategies.david_v6.calendar import CalendarFacts
@@ -85,6 +89,11 @@ FACT_KEYS = (
     "session",
     "costs",
 )
+
+
+def _policy(market: V6Market = V6Market.US_CASH) -> V6RiskPolicySnapshot:
+    """The approved policy, which is what the engine sizes against."""
+    return approved_v6_policy(market, policy_version_id=new_uuid7())
 
 
 def _pivot(index: int, kind: PivotKind, price: str) -> Pivot:
@@ -364,6 +373,9 @@ def _context(
             if mandatory is None
             else mandatory
         ),
+        # The policy is for the market the request names, which the
+        # context refuses to let drift apart.
+        policy=_policy(bundle.market),
         risk_request=V6RiskRequest(
             market=bundle.market,
             grade=SetupGrade.NORMAL,

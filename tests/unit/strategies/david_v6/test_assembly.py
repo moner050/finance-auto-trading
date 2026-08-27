@@ -7,6 +7,10 @@ import pytest
 
 from autotrader.domain.completed_ohlcv import CompletedOhlcvBar
 from autotrader.domain.enums import OrderStyle, Side
+from autotrader.persistence.mysql.repositories.david_v6_risk import (
+    approved_v6_policy,
+)
+from autotrader.risk.models import V6RiskPolicySnapshot
 from autotrader.risk.v6 import V6RiskContext, V6RiskRequest
 from autotrader.shared.ids import new_uuid7
 from autotrader.strategies.david_v6.assembly import (
@@ -53,6 +57,11 @@ FIVE_MINUTES = timedelta(minutes=5)
 SESSION_OPEN = datetime(2026, 8, 25, 13, 30, tzinfo=UTC)
 # Enough five minute bars to clear the MACD warm-up and to cover ten days.
 BAR_COUNT = 240
+
+
+def _policy(market: V6Market = V6Market.US_CASH) -> V6RiskPolicySnapshot:
+    """The approved policy, which is what the engine sizes against."""
+    return approved_v6_policy(market, policy_version_id=new_uuid7())
 
 
 def _five_minute_bars(count: int = BAR_COUNT) -> tuple[CompletedOhlcvBar, ...]:
@@ -469,6 +478,9 @@ def _risk_context(result: AssemblyResult, side: Side) -> V6RiskContext:
         order_style=OrderStyle.LIMIT,
         matched_indicators=derive_indicators(result, side=side, reference_price=entry),
         mandatory_indicator_codes=frozenset(),
+        # The policy is for the market the request names, which the
+        # context refuses to let drift apart.
+        policy=_policy(result.bundle.market),
         risk_request=V6RiskRequest(
             market=result.bundle.market,
             grade=SetupGrade.NORMAL,

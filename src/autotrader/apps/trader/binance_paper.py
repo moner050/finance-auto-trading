@@ -62,6 +62,7 @@ from autotrader.persistence.mysql.seeds.core import (
     BINANCE_USDM_EXCHANGE_CODE,
     seed_core_reference_session,
 )
+from autotrader.risk.models import V6RiskPolicySnapshot
 from autotrader.risk.v6 import V6RiskContext, V6RiskRequest
 from autotrader.shared.ids import new_uuid7
 from autotrader.strategies.david_v6.models import SetupGrade, StrategyFamily, V6Market
@@ -94,8 +95,15 @@ class AccountBudget:
 class BinanceRiskContexts:
     """Price the account for one evaluation, from the bars it just saw."""
 
-    def __init__(self, *, budget: AccountBudget, side: Side = Side.BUY) -> None:
+    def __init__(
+        self,
+        *,
+        budget: AccountBudget,
+        policy: V6RiskPolicySnapshot,
+        side: Side = Side.BUY,
+    ) -> None:
         self._budget = budget
+        self._policy = policy
         self._side = side
 
     def build(
@@ -138,6 +146,7 @@ class BinanceRiskContexts:
                 cost_per_unit=budget.cost_per_unit,
                 leverage=budget.leverage,
             ),
+            policy=self._policy,
             target_price=entry,
             valid_until=now + budget.valid_for,
         )
@@ -185,6 +194,7 @@ def build_ports(
     budget: AccountBudget,
     account: ExecutionAccount,
     lease: LeaseSettings,
+    policy: V6RiskPolicySnapshot,
 ) -> LoopPorts:
     bars = BinanceExecutionBars(market_data)
     paper = PaperAccount(
@@ -215,7 +225,7 @@ def build_ports(
         source=BinanceContextSource(
             market_data=market_data,
             inputs=inputs,
-            risk=BinanceRiskContexts(budget=budget),
+            risk=BinanceRiskContexts(budget=budget, policy=policy),
         ),
         control=MySqlTradingControl(sessions),
         recorder=MySqlDecisionRecorder(sessions),

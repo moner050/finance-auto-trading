@@ -73,6 +73,21 @@ class V6RiskPolicyDefinition:
         )
 
 
+def approved_v6_policy(
+    market: V6Market, *, policy_version_id: UUID
+) -> V6RiskPolicySnapshot:
+    """The approved policy for one market, as the engine wants it.
+
+    One place builds this. A caller that assembled its own snapshot would be
+    deciding trade sizing in the caller, which is the thing moving these
+    numbers into a policy was meant to stop.
+    """
+    for definition in APPROVED_V6_RISK_POLICIES:
+        if definition.market is market:
+            return definition.snapshot(policy_version_id)
+    raise LookupError(f"no approved v6 risk policy for {market.value}")
+
+
 APPROVED_V6_RISK_POLICIES = (
     V6RiskPolicyDefinition(
         code="DAVID_V6_CASH_KRW",
