@@ -48,13 +48,15 @@ class _Broker:
         self._broker_id = broker_id
         self._held = held
 
-    async def read_snapshot(self, *, account_id: object) -> BrokerSnapshot:
+    async def read_snapshot(
+        self, *, account_id: object, now: datetime
+    ) -> BrokerSnapshot:
         assert isinstance(account_id, UUID)
         return BrokerSnapshot(
             broker_id=self._broker_id,
             account_id=account_id,
             complete=True,
-            expires_at=NOW + timedelta(minutes=1),
+            expires_at=now + timedelta(minutes=1),
             open_orders=(),
             positions=self._held,
         )
