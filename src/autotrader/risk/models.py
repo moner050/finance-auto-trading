@@ -11,6 +11,13 @@ from autotrader.shared.decimal import require_decimal
 from autotrader.shared.time import require_utc
 from autotrader.strategies.david_v6.models import SetupGrade, V6Market
 
+# Section 11.4 approves one percent of the account as the most a single trade
+# may put at risk. A policy may sit below it — the approved cash policies sit
+# at 0.25% and Binance at 0.75% — but nothing may sit above it. Without this
+# the only bound is (0, 1], which permits risking the whole account on one
+# trade and calling it a policy.
+TRADE_RISK_CEILING = Decimal("0.01")
+
 
 @dataclass(frozen=True, slots=True)
 class LockedAccountSnapshot:
@@ -153,6 +160,10 @@ class V6RiskPolicySnapshot:
             )
         ):
             raise ValueError("grade risk cannot exceed the absolute trade ceiling")
+        if self.absolute_trade_risk_fraction > TRADE_RISK_CEILING:
+            # Every grade sits at or below this fraction, so bounding it bounds
+            # them all.
+            raise ValueError("absolute trade risk cannot exceed one percent")
         if self.market is V6Market.BINANCE_USDM:
             if self.a_candidate_risk_fraction is None or self.stream_gap_age is None:
                 raise ValueError("Binance policy requires candidate and stream ages")

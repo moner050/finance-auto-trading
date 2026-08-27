@@ -30,7 +30,10 @@ from autotrader.apps.backoffice.secrets import (
     SecretNotFoundError,
 )
 from autotrader.persistence.mysql.models.accounts import Account, Broker
-from autotrader.persistence.mysql.models.risk import RiskPolicyVersion
+from autotrader.persistence.mysql.repositories.policy_binding import (
+    AccountPolicyBindings,
+    PolicyBinding,
+)
 from autotrader.security.secret_crypto import MasterKeyRing
 
 # Enough to tell two fingerprints apart on a screen, and not the fingerprint.
@@ -70,13 +73,34 @@ class AccountView:
     enabled: bool
     # The reference, which names where the credentials live. Not a credential.
     secret_reference: str
+    # This account's own binding. A version that happens to be active
+    # somewhere says nothing about what this account trades under.
+    policy_code: str | None
+    policy_version: str | None
+
+    @property
+    def bound(self) -> bool:
+        return self.policy_version is not None
 
 
 @dataclass(frozen=True, slots=True)
 class AccountsView:
     accounts: tuple[AccountView, ...]
     credentials: tuple[ProviderCredentialsView, ...]
-    active_policy_version: str | None
+
+
+def _account_view(
+    account: Account, broker_code: str, binding: PolicyBinding | None
+) -> AccountView:
+    return AccountView(
+        account_alias=account.account_alias,
+        broker_code=broker_code,
+        environment=account.environment,
+        enabled=account.enabled,
+        secret_reference=account.secret_reference,
+        policy_code=None if binding is None else binding.policy_code,
+        policy_version=None if binding is None else binding.version,
+    )
 
 
 class AccountsReadModel:
@@ -90,7 +114,6 @@ class AccountsReadModel:
         return AccountsView(
             accounts=await self.accounts(),
             credentials=await self.credentials(),
-            active_policy_version=await self.active_policy_version(),
         )
 
     async def accounts(self) -> tuple[AccountView, ...]:
@@ -102,16 +125,17 @@ class AccountsReadModel:
                     .order_by(Broker.code, Account.account_alias)
                 )
             ).all()
-        return tuple(
-            AccountView(
-                account_alias=account.account_alias,
-                broker_code=code,
-                environment=account.environment,
-                enabled=account.enabled,
-                secret_reference=account.secret_reference,
+            bindings = AccountPolicyBindings(session)
+            # Built inside the session: these instances are expired once it
+            # closes, and a detached one raises on attribute access.
+            return tuple(
+                [
+                    _account_view(
+                        account, code, await bindings.active_binding(account.id)
+                    )
+                    for account, code in rows
+                ]
             )
-            for account, code in rows
-        )
 
     async def credentials(self) -> tuple[ProviderCredentialsView, ...]:
         collected: list[ProviderCredentialsView] = []
@@ -134,15 +158,6 @@ class AccountsReadModel:
                 )
             )
         return tuple(collected)
-
-    async def active_policy_version(self) -> str | None:
-        async with self._sessions() as session:
-            return await session.scalar(
-                select(RiskPolicyVersion.version)
-                .where(RiskPolicyVersion.active.is_(True))
-                .order_by(RiskPolicyVersion.id.desc())
-                .limit(1)
-            )
 
     async def _value(self, field: ProviderField) -> StoredValueView:
         try:

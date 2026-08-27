@@ -31,6 +31,14 @@ from autotrader.apps.backoffice.auth import (
     new_login_attempt,
     require_csrf,
 )
+from autotrader.apps.backoffice.binding_commands import (
+    BindingFacts,
+    MySqlBindingCommands,
+    new_binding_command,
+)
+from autotrader.apps.backoffice.binding_commands import (
+    approval_for as binding_approval_for,
+)
 from autotrader.apps.backoffice.commands import (
     MySqlSafetyControls,
     SafetyAction,
@@ -43,6 +51,16 @@ from autotrader.apps.backoffice.exposure import (
     new_exposure_command,
 )
 from autotrader.apps.backoffice.ledger import SourceAddressUnknownError
+from autotrader.apps.backoffice.policies_read_model import PoliciesReadModel
+from autotrader.apps.backoffice.policy_commands import (
+    MySqlPolicyCommands,
+    PolicyFacts,
+    new_create_command,
+    new_policy_command,
+)
+from autotrader.apps.backoffice.policy_commands import (
+    approval_for as policy_approval_for,
+)
 from autotrader.apps.backoffice.read_model import OperationsReadModel, OperationsView
 from autotrader.apps.backoffice.second_password import (
     ApprovalStore,
@@ -110,6 +128,9 @@ def create_app(
     passwords = MySqlSecondPasswords(sessions)
     account_reader = None if keys is None else AccountsReadModel(sessions, keys)
     secret_store = None if keys is None else MySqlSecretStore(sessions, keys)
+    policy_reader = PoliciesReadModel(sessions)
+    policy_commands = MySqlPolicyCommands(sessions=sessions, approvals=approvals)
+    binding_commands = MySqlBindingCommands(sessions=sessions, approvals=approvals)
     secret_commands = (
         None
         if secret_store is None
@@ -331,6 +352,195 @@ def create_app(
         )
         return await _render_secrets(request, session, templates, secret_store)
 
+    async def policies_page(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+    ) -> Response:
+        return await _render_policies(
+            request, session, templates, policy_reader, commands=policy_commands
+        )
+
+    async def approve_policy(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        csrf_token: str = Form(...),
+        target_version_id: str = Form(...),
+        second_password: str | None = Form(None),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        commands = _require_policy_commands(policy_commands)
+        facts = await commands.facts(_version_id(target_version_id))
+        if second_password is None:
+            # First press: show what moves, so the password is typed against
+            # the difference rather than against a version number.
+            return await _render_policies(
+                request,
+                session,
+                templates,
+                policy_reader,
+                commands=policy_commands,
+                facts=facts,
+            )
+        session_id = _session_id(request)
+        source_ip = _source_ip(request)
+        await approvals.require_attempts_left(
+            session_id=session_id, source_ip=source_ip
+        )
+        verifier = await passwords.active()
+        if not check_password(verifier, second_password):
+            await approvals.record_failure(session_id=session_id, source_ip=source_ip)
+            return await _render_policies(
+                request,
+                session,
+                templates,
+                policy_reader,
+                commands=policy_commands,
+                facts=facts,
+                error=PASSWORD_MISMATCH,
+            )
+        await approvals.clear_failures(session_id=session_id, source_ip=source_ip)
+        approval_id = await approvals.issue(
+            policy_approval_for(
+                session_id=session_id, operator=session.operator, facts=facts
+            )
+        )
+        return await _render_policies(
+            request,
+            session,
+            templates,
+            policy_reader,
+            commands=policy_commands,
+            facts=facts,
+            approval_id=approval_id,
+        )
+
+    async def apply_policy(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        csrf_token: str = Form(...),
+        target_version_id: str = Form(...),
+        approval_id: str = Form(...),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        commands = _require_policy_commands(policy_commands)
+        await commands.activate(
+            new_policy_command(
+                target_version_id=_version_id(target_version_id),
+                operator=session.operator,
+                source_ip=_source_ip(request),
+                correlation_id=request.headers.get("x-request-id", str(new_uuid7())),
+                approval_id=approval_id,
+                requested_at=datetime.now(UTC),
+            ),
+            session_id=_session_id(request),
+        )
+        return await _render_policies(
+            request, session, templates, policy_reader, commands=policy_commands
+        )
+
+    async def create_policy_version(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        csrf_token: str = Form(...),
+        policy_code: str = Form(...),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        commands = _require_policy_commands(policy_commands)
+        # Section 9 puts the second password on activation, not on writing an
+        # inert row whose every value comes from the approved definition.
+        await commands.create(
+            new_create_command(
+                policy_code=policy_code,
+                operator=session.operator,
+                source_ip=_source_ip(request),
+                correlation_id=request.headers.get("x-request-id", str(new_uuid7())),
+                requested_at=datetime.now(UTC),
+            )
+        )
+        return await _render_policies(
+            request, session, templates, policy_reader, commands=policy_commands
+        )
+
+    async def approve_binding(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        csrf_token: str = Form(...),
+        account_id: str = Form(...),
+        target_version_id: str = Form(...),
+        second_password: str | None = Form(None),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        facts = await binding_commands.facts(
+            account_id=_uuid(account_id, "unknown account"),
+            target_version_id=_uuid(target_version_id, "unknown policy version"),
+        )
+        if second_password is None:
+            return await _render_policies(
+                request,
+                session,
+                templates,
+                policy_reader,
+                commands=policy_commands,
+                binding=facts,
+            )
+        session_id = _session_id(request)
+        source_ip = _source_ip(request)
+        await approvals.require_attempts_left(
+            session_id=session_id, source_ip=source_ip
+        )
+        verifier = await passwords.active()
+        if not check_password(verifier, second_password):
+            await approvals.record_failure(session_id=session_id, source_ip=source_ip)
+            return await _render_policies(
+                request,
+                session,
+                templates,
+                policy_reader,
+                commands=policy_commands,
+                binding=facts,
+                error=PASSWORD_MISMATCH,
+            )
+        await approvals.clear_failures(session_id=session_id, source_ip=source_ip)
+        approval_id = await approvals.issue(
+            binding_approval_for(
+                session_id=session_id, operator=session.operator, facts=facts
+            )
+        )
+        return await _render_policies(
+            request,
+            session,
+            templates,
+            policy_reader,
+            commands=policy_commands,
+            binding=facts,
+            approval_id=approval_id,
+        )
+
+    async def apply_binding(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        csrf_token: str = Form(...),
+        account_id: str = Form(...),
+        target_version_id: str = Form(...),
+        approval_id: str = Form(...),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        await binding_commands.bind(
+            new_binding_command(
+                account_id=_uuid(account_id, "unknown account"),
+                target_version_id=_uuid(target_version_id, "unknown policy version"),
+                operator=session.operator,
+                source_ip=_source_ip(request),
+                correlation_id=request.headers.get("x-request-id", str(new_uuid7())),
+                approval_id=approval_id,
+                requested_at=datetime.now(UTC),
+            ),
+            session_id=_session_id(request),
+        )
+        return await _render_policies(
+            request, session, templates, policy_reader, commands=policy_commands
+        )
+
     async def arming_panel(
         request: Request,
         session: Annotated[Session, Depends(require_session)],
@@ -425,6 +635,39 @@ def create_app(
         "/secrets", secrets_page, methods=["GET"], response_class=HTMLResponse
     )
     app.add_api_route(
+        "/policies", policies_page, methods=["GET"], response_class=HTMLResponse
+    )
+    app.add_api_route(
+        "/policies/approve",
+        approve_policy,
+        methods=["POST"],
+        response_class=HTMLResponse,
+    )
+    app.add_api_route(
+        "/policies/apply",
+        apply_policy,
+        methods=["POST"],
+        response_class=HTMLResponse,
+    )
+    app.add_api_route(
+        "/policies/create",
+        create_policy_version,
+        methods=["POST"],
+        response_class=HTMLResponse,
+    )
+    app.add_api_route(
+        "/bindings/approve",
+        approve_binding,
+        methods=["POST"],
+        response_class=HTMLResponse,
+    )
+    app.add_api_route(
+        "/bindings/apply",
+        apply_binding,
+        methods=["POST"],
+        response_class=HTMLResponse,
+    )
+    app.add_api_route(
         "/secrets/register",
         register_secret,
         methods=["POST"],
@@ -449,6 +692,54 @@ def create_app(
         "/controls/enable", enable, methods=["POST"], response_class=HTMLResponse
     )
     return app
+
+
+async def _render_policies(
+    request: Request,
+    session: Session,
+    templates: Jinja2Templates,
+    reader: PoliciesReadModel,
+    *,
+    commands: MySqlPolicyCommands | None,
+    error: str | None = None,
+    facts: PolicyFacts | None = None,
+    binding: BindingFacts | None = None,
+    approval_id: str | None = None,
+) -> Response:
+    return templates.TemplateResponse(
+        request=request,
+        name="policies.html",
+        context={
+            "session": session,
+            "view": await reader.load(),
+            "creatable": () if commands is None else await commands.creatable(),
+            "error": error,
+            "facts": facts,
+            "binding": binding,
+            "approval_id": approval_id,
+        },
+    )
+
+
+def _uuid(value: str, detail: str) -> UUID:
+    """A malformed id is a refusal here, rather than a framework error whose
+    message describes the form field."""
+    try:
+        return UUID(value)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=detail) from error
+
+
+def _version_id(value: str) -> UUID:
+    return _uuid(value, "unknown policy version")
+
+
+def _require_policy_commands(
+    commands: MySqlPolicyCommands | None,
+) -> MySqlPolicyCommands:
+    if commands is None:
+        raise HTTPException(status_code=503, detail="policies are unavailable")
+    return commands
 
 
 async def _render_secrets(

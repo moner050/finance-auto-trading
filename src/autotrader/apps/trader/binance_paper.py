@@ -26,6 +26,7 @@ from autotrader.apps.trader.composition import (
     MySqlReconciler,
     MySqlSchedulerLease,
     MySqlTradingControl,
+    bound_policy,
 )
 from autotrader.apps.trader.loop import (
     Clock,
@@ -186,7 +187,7 @@ async def register_instruments(
     return instrument_id
 
 
-def build_ports(
+async def build_ports(
     *,
     sessions: async_sessionmaker[AsyncSession],
     market_data: BinanceUsdmMarketData,
@@ -194,8 +195,21 @@ def build_ports(
     budget: AccountBudget,
     account: ExecutionAccount,
     lease: LeaseSettings,
-    policy: V6RiskPolicySnapshot,
 ) -> LoopPorts:
+    """Wire one loop for the account's bound policy.
+
+    The policy is not a parameter. Taking one would let a caller size trades
+    against fractions the operator never bound to this account, and nothing
+    downstream could notice.
+    """
+    bound = await bound_policy(
+        sessions, account_id=account.account.id, market=V6Market.BINANCE_USDM
+    )
+    if bound.policy_version_id != account.policy_version_id:
+        # A decision measured against one policy and filed under another is
+        # unauditable.
+        raise ValueError("the account and its binding must name one version")
+    policy = bound.snapshot
     bars = BinanceExecutionBars(market_data)
     paper = PaperAccount(
         account_alias=PAPER_ALIAS,

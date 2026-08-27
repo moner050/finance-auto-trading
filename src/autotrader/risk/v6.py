@@ -6,7 +6,7 @@ from decimal import ROUND_FLOOR, Decimal
 from uuid import UUID
 
 from autotrader.domain.enums import OrderStyle, Side
-from autotrader.risk.models import V6RiskPolicySnapshot
+from autotrader.risk.models import TRADE_RISK_CEILING, V6RiskPolicySnapshot
 from autotrader.shared.decimal import require_decimal
 from autotrader.shared.time import require_utc
 from autotrader.strategies.david_v6.models import (
@@ -19,10 +19,33 @@ from autotrader.strategies.david_v6.models import (
 _MAX_SPREAD_TICKS = Decimal(3)
 # Section 6 refuses a fixed daily trade count and marks this bound as an
 # anti-overtrading safety candidate rather than one of David's values.
-_SESSION_TRADE_SAFETY_UPPER_BOUND = 8
+SESSION_TRADE_UPPER_BOUND = 8
 # A ceiling, not a setting. Section 21 approves seven for Binance USD-M, and a
 # policy row that could raise it would turn the approved limit into a default.
 MAX_LEVERAGE = 7
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovedCapital:
+    """What section 11.4 approved each market to trade with.
+
+    The engine sizes from live equity, not from this, so nothing here bounds a
+    trade. It is the figure the operator approved, kept beside the ceilings so
+    the screen can show what an account is supposed to hold and the operator
+    can notice when it does not.
+    """
+
+    market: V6Market
+    amount: Decimal
+    unit: str
+    kind: str
+
+
+APPROVED_CAPITAL = (
+    ApprovedCapital(V6Market.KRX_CASH, Decimal("1000000"), "KRW", "계좌 자본"),
+    ApprovedCapital(V6Market.US_CASH, Decimal("2000"), "USD", "계좌 자본"),
+    ApprovedCapital(V6Market.BINANCE_USDM, Decimal("2000"), "USDT", "증거금"),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,7 +265,7 @@ def evaluate_v6_risk(
         blockers.append("WEEKLY_LOSS_LIMIT")
     if request.consecutive_net_losses >= policy.max_consecutive_losses:
         blockers.append("CONSECUTIVE_LOSS_LIMIT")
-    if request.session_trade_count >= _SESSION_TRADE_SAFETY_UPPER_BOUND:
+    if request.session_trade_count >= SESSION_TRADE_UPPER_BOUND:
         blockers.append("SESSION_TRADE_UPPER_BOUND")
     # Section 9.3: once the objective is met, close the screen and leave.
     if request.session_objective_reached:
@@ -303,7 +326,11 @@ def _risk_fraction(
 
 
 __all__ = (
+    "APPROVED_CAPITAL",
     "MAX_LEVERAGE",
+    "SESSION_TRADE_UPPER_BOUND",
+    "TRADE_RISK_CEILING",
+    "ApprovedCapital",
     "V6RiskAuthority",
     "V6RiskContext",
     "V6RiskRequest",

@@ -23,7 +23,10 @@
     <h2>계정</h2>
     {% if view.accounts %}
     <table>
-      <tr><th>브로커</th><th>별칭</th><th>환경</th><th>사용</th><th>자격증명 참조</th></tr>
+      <tr>
+        <th>브로커</th><th>별칭</th><th>환경</th><th>사용</th>
+        <th>리스크 정책</th><th>자격증명 참조</th>
+      </tr>
       {% for account in view.accounts %}
       <tr>
         <td class="code">{{ account.broker_code }}</td>
@@ -31,6 +34,13 @@
         <td class="code">{{ account.environment }}</td>
         <td class="{{ 'ok' if account.enabled else 'missing' }}">
           {{ '예' if account.enabled else '아니오' }}
+        </td>
+        <td class="{{ 'ok' if account.bound else 'missing' }}">
+          {% if account.bound %}
+          <span class="code">{{ account.policy_code }}</span> · {{ account.policy_version }}
+          {% else %}
+          연결 없음 — 매매 불가
+          {% endif %}
         </td>
         <td class="code">{{ account.secret_reference }}</td>
       </tr>
@@ -40,8 +50,10 @@
     <p class="empty">등록된 계정이 없습니다.</p>
     {% endif %}
 
-    <h2>활성 리스크 정책</h2>
-    <p class="code">{{ view.active_policy_version or '없음' }}</p>
+    <p class="note">
+      리스크 정책은 계정별 연결에서 결정됩니다.
+      <a href="/policies">리스크 정책 화면 →</a>
+    </p>
 
     <h2>자격증명</h2>
     <p class="note">값은 표시하지 않습니다. 저장 여부와 지문 앞부분만 보여줍니다.</p>

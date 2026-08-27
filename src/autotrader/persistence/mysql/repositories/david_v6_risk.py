@@ -270,10 +270,40 @@ def _exact_definition(*, code: str, market: V6Market) -> V6RiskPolicyDefinition:
     return definition
 
 
-def _require_exact_policy_row(
-    row: RiskPolicyVersion, definition: V6RiskPolicyDefinition
-) -> None:
-    expected = {
+def approved_definition(code: str) -> V6RiskPolicyDefinition | None:
+    """The approved authority behind a policy code, if there is one."""
+    return _DEFINITIONS_BY_CODE.get(code)
+
+
+def policy_row_refusal(row: RiskPolicyVersion, *, code: str) -> str | None:
+    """Why the loop would refuse this row, or None if it would load it.
+
+    `load_active_policy` builds its snapshot from the approved definition and
+    refuses a row that disagrees with it, so a row this returns a reason for
+    cannot be traded even once it is flagged active. The back office asks this
+    before arming a version, because the alternative is discovering it in the
+    loop, where the answer is a stopped trader rather than a refused form.
+    """
+    definition = _DEFINITIONS_BY_CODE.get(code)
+    if definition is None:
+        return "이 정책 코드는 승인된 v6 정책이 아닙니다."
+    if row.version != definition.version:
+        return f"승인된 버전은 {definition.version} 이며 이 버전은 로드되지 않습니다."
+    try:
+        _require_exact_policy_row(row, definition)
+    except ValueError as error:
+        return str(error)
+    return None
+
+
+def policy_row_values(definition: V6RiskPolicyDefinition) -> dict[str, object]:
+    """The stored columns an approved definition describes.
+
+    One mapping, read by both the writer and the guard. A row built from this
+    cannot fail the check that compares against it, which is the only way to
+    make "a created version is always loadable" a fact rather than a test.
+    """
+    return {
         "normal_risk_fraction": definition.normal_risk_fraction,
         "a_candidate_risk_fraction": definition.a_candidate_risk_fraction,
         "a_risk_fraction": definition.a_risk_fraction,
@@ -296,21 +326,29 @@ def _require_exact_policy_row(
             definition.daily_requires_authoritative_close
         ),
     }
+
+
+# The absolute-cap columns a percentage policy leaves empty. A row carrying any
+# of them is a different kind of policy wearing a v6 version string.
+ABSOLUTE_CAP_COLUMNS = (
+    "max_total_risk",
+    "max_position_value",
+    "max_daily_loss",
+    "max_drawdown",
+    "max_account_snapshot_age_seconds",
+    "max_risk_snapshot_age_seconds",
+    "max_market_data_age_seconds",
+    "max_provider_fact_age_seconds",
+)
+
+
+def _require_exact_policy_row(
+    row: RiskPolicyVersion, definition: V6RiskPolicyDefinition
+) -> None:
+    expected = policy_row_values(definition)
     if any(getattr(row, name) != value for name, value in expected.items()):
         raise ValueError("persisted v6 risk policy differs from approved authority")
-    if any(
-        getattr(row, name) is not None
-        for name in (
-            "max_total_risk",
-            "max_position_value",
-            "max_daily_loss",
-            "max_drawdown",
-            "max_account_snapshot_age_seconds",
-            "max_risk_snapshot_age_seconds",
-            "max_market_data_age_seconds",
-            "max_provider_fact_age_seconds",
-        )
-    ):
+    if any(getattr(row, name) is not None for name in ABSOLUTE_CAP_COLUMNS):
         raise ValueError("v6 percentage policy cannot contain an absolute cap")
 
 

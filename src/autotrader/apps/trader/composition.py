@@ -88,6 +88,9 @@ from autotrader.persistence.mysql.repositories.operations import (
     RuntimeControlRepository,
 )
 from autotrader.persistence.mysql.repositories.orders import MySqlOrderStore
+from autotrader.persistence.mysql.repositories.policy_binding import (
+    AccountPolicyBindings,
+)
 from autotrader.persistence.mysql.repositories.protection import (
     ProtectionRepository,
 )
@@ -95,7 +98,7 @@ from autotrader.persistence.mysql.repositories.reconciliation import (
     ReconciliationRepository,
 )
 from autotrader.persistence.mysql.repositories.risk import MySqlRiskReservationUow
-from autotrader.risk.models import RiskDecision, RiskOutcome
+from autotrader.risk.models import RiskDecision, RiskOutcome, V6RiskPolicySnapshot
 from autotrader.risk.service import (
     RiskDecisionRecord,
     RiskReservationRecord,
@@ -106,7 +109,7 @@ from autotrader.shared.ids import new_uuid7
 from autotrader.shared.time import require_utc
 from autotrader.strategies.common.decisions import StrategyDecision
 from autotrader.strategies.david_v6.hlit import HlitSetup
-from autotrader.strategies.david_v6.models import V6Decision
+from autotrader.strategies.david_v6.models import V6Decision, V6Market
 
 NO_KILL_SWITCH = "NONE"
 _RESERVATION_WINDOW = timedelta(minutes=5)
@@ -402,6 +405,51 @@ async def _persist_provenance(session: AsyncSession, decision: V6Decision) -> No
             )
         )
     await session.flush()
+
+
+class UnboundAccountError(RuntimeError):
+    """Raised when an account has no risk policy the loop can trade under."""
+
+
+@dataclass(frozen=True, slots=True)
+class BoundPolicy:
+    """The policy an account is bound to, and the version it came from.
+
+    The two travel together because they are the same fact. Handing the loop a
+    snapshot separately from the version id it is recorded under is how a
+    decision comes to be measured against one policy and filed under another.
+    """
+
+    policy_version_id: UUID
+    snapshot: V6RiskPolicySnapshot
+
+    def __post_init__(self) -> None:
+        if self.snapshot.policy_version_id != self.policy_version_id:
+            raise ValueError("the snapshot and the binding must name one version")
+
+
+async def bound_policy(
+    sessions: async_sessionmaker[AsyncSession],
+    *,
+    account_id: UUID,
+    market: V6Market,
+) -> BoundPolicy:
+    """Read the account's policy from its binding, or refuse to start.
+
+    Section 11.4 makes the binding the place an operator says which policy an
+    account trades under. If the loop took its policy from whoever wired it,
+    the screen would be recording a decision nothing acts on.
+    """
+    async with sessions() as session:
+        snapshot = await AccountPolicyBindings(session).resolve(
+            account_id, market=market
+        )
+        await session.rollback()
+    if snapshot is None:
+        raise UnboundAccountError(
+            "this account has no active risk policy binding for its market"
+        )
+    return BoundPolicy(policy_version_id=snapshot.policy_version_id, snapshot=snapshot)
 
 
 @dataclass(frozen=True, slots=True)
@@ -743,6 +791,7 @@ def _domain_decision(row: PersistedRiskDecision, intent_id: UUID) -> RiskDecisio
 
 
 __all__ = (
+    "BoundPolicy",
     "ExecutionAccount",
     "LeaseSettings",
     "MySqlDecisionRecorder",
@@ -750,6 +799,8 @@ __all__ = (
     "MySqlPaperExecution",
     "MySqlSchedulerLease",
     "MySqlTradingControl",
+    "UnboundAccountError",
+    "bound_policy",
 )
 
 
