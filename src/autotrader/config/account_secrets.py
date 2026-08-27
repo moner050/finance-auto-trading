@@ -15,6 +15,22 @@ if TYPE_CHECKING:
 _TOSS_LIVE_REFERENCE = "secret://dotenv/toss/live"
 _KIS_REAL_REFERENCE = "secret://dotenv/kis/real"
 _KIS_PAPER_REFERENCE = "secret://dotenv/kis/paper"
+
+# The same credentials read from the database instead of a file. The source
+# stays part of the reference, and the reference stays part of the account
+# scope hash, so a credential that moved is a different provenance rather than
+# the same one with a new home.
+DB_TOSS_LIVE_REFERENCE = "secret://db/toss/live"
+DB_KIS_REAL_REFERENCE = "secret://db/kis/live"
+DB_KIS_PAPER_REFERENCE = "secret://db/kis/paper"
+
+TOSS_REFERENCES = (_TOSS_LIVE_REFERENCE, DB_TOSS_LIVE_REFERENCE)
+KIS_REFERENCES = {
+    _KIS_REAL_REFERENCE: "LIVE",
+    _KIS_PAPER_REFERENCE: "PAPER",
+    DB_KIS_REAL_REFERENCE: "LIVE",
+    DB_KIS_PAPER_REFERENCE: "PAPER",
+}
 _SCOPE_DOMAIN = b"EXEC_ACCOUNT_SCOPE_V1"
 
 
@@ -31,7 +47,7 @@ class TossAccountSecret:
 
     def __post_init__(self) -> None:
         if (
-            self.reference != _TOSS_LIVE_REFERENCE
+            self.reference not in TOSS_REFERENCES
             or self.environment != "LIVE"
             or not _secret_value(self.client_id)
             or not _secret_value(self.client_secret)
@@ -51,11 +67,7 @@ class KisAccountSecret:
     def __post_init__(self) -> None:
         account_number = _secret_value(self.account_number)
         if (
-            (self.reference, self.environment)
-            not in {
-                (_KIS_REAL_REFERENCE, "LIVE"),
-                (_KIS_PAPER_REFERENCE, "PAPER"),
-            }
+            KIS_REFERENCES.get(self.reference) != self.environment
             or not _secret_value(self.app_key)
             or not _secret_value(self.app_secret)
             or not _ascii_digits(account_number, length=8)
@@ -162,7 +174,7 @@ class DotenvAccountSecretResolver:
 
 def toss_account_scope_hash(*, reference: str, account_seq: int) -> bytes:
     if (
-        reference != _TOSS_LIVE_REFERENCE
+        reference not in TOSS_REFERENCES
         or type(account_seq) is not int
         or account_seq <= 0
     ):
