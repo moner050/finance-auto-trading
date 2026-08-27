@@ -24,12 +24,17 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from autotrader.apps.backoffice.auth import Operator
 from autotrader.apps.backoffice.commands import (
     NO_KILL_SWITCH,
+    TARGET_KEY,
+    TARGET_TYPE,
     ControlOutcome,
     ControlState,
     NothingToControlError,
     control_state,
+    failure_code,
 )
+from autotrader.apps.backoffice.ledger import LedgerEntry, MySqlCommandLedger
 from autotrader.apps.backoffice.second_password import (
+    ApprovalRejectedError,
     ApprovalRequest,
     ApprovalStore,
     authority_digest,
@@ -42,9 +47,6 @@ from autotrader.persistence.mysql.models.operations import (
 from autotrader.persistence.mysql.models.risk import RiskPolicyVersion
 from autotrader.shared.ids import new_uuid7
 from autotrader.shared.time import require_utc
-
-TARGET_TYPE = "GLOBAL"
-TARGET_KEY = "ALL"
 
 
 class DangerousAction(StrEnum):
@@ -93,7 +95,7 @@ class ExposureCommand:
     id: UUID
     action: DangerousAction
     operator: Operator
-    source_ip: str | None
+    source_ip: str
     correlation_id: str
     approval_id: str
     requested_at: datetime
@@ -112,7 +114,7 @@ def new_exposure_command(
     *,
     action: DangerousAction,
     operator: Operator,
-    source_ip: str | None,
+    source_ip: str,
     correlation_id: str,
     approval_id: str,
     requested_at: datetime,
@@ -148,16 +150,50 @@ class MySqlExposureControls:
         sessions: async_sessionmaker[AsyncSession],
         approvals: ApprovalStore,
         account_id: UUID,
+        ledger: MySqlCommandLedger | None = None,
     ) -> None:
         self._sessions = sessions
         self._approvals = approvals
         self._account_id = account_id
+        self._ledger = ledger or MySqlCommandLedger(sessions)
 
     async def facts(self) -> ArmingFacts:
         async with self._sessions() as session:
             return await _arming_facts(session, self._account_id)
 
     async def apply(
+        self, command: ExposureCommand, *, session_id: str
+    ) -> ControlOutcome:
+        # The expected digest is what the operator was shown. Recorded on the
+        # attempt, so a refusal later is legible as "the world moved" rather
+        # than as an unexplained failure.
+        await self._ledger.open(
+            LedgerEntry(
+                id=command.id,
+                actor_email=command.operator.email,
+                source_ip=command.source_ip,
+                action=command.action.value,
+                target_type=TARGET_TYPE,
+                target_key=TARGET_KEY,
+                payload={
+                    "action": command.action.value,
+                    "correlation_id": command.correlation_id,
+                },
+                expected_digest=(await self.facts()).digest(),
+                started_at=command.requested_at,
+            )
+        )
+        try:
+            return await self._apply(command, session_id=session_id)
+        except Exception as error:
+            await self._ledger.fail(
+                command_id=command.id,
+                result_code=_failure_code(error),
+                completed_at=command.requested_at,
+            )
+            raise
+
+    async def _apply(
         self, command: ExposureCommand, *, session_id: str
     ) -> ControlOutcome:
         async with self._sessions() as session:
@@ -212,14 +248,30 @@ class MySqlExposureControls:
                     occurred_at=command.requested_at,
                 )
             )
+            await self._ledger.succeed(
+                session,
+                command_id=command.id,
+                result_code="APPLIED",
+                result=after.as_details(),
+                completed_at=command.requested_at,
+            )
             await session.commit()
         return ControlOutcome(
             command_id=command.id,
             action=command.action.value,
             armed=after.armed,
             kill_switch_level=after.kill_switch_level,
-            repeated=False,
         )
+
+
+def _failure_code(error: BaseException) -> str:
+    return _FAILURE_CODES.get(type(error), failure_code(error))
+
+
+_FAILURE_CODES: dict[type[BaseException], str] = {
+    StillHaltedError: "STILL_HALTED",
+    ApprovalRejectedError: "APPROVAL_REJECTED",
+}
 
 
 async def _arming_facts(

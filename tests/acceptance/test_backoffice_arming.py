@@ -39,6 +39,7 @@ from autotrader.apps.backoffice.exposure import (
     approval_for,
     new_exposure_command,
 )
+from autotrader.apps.backoffice.ledger import SOLE_OPERATOR_EMAIL
 from autotrader.apps.backoffice.second_password import (
     APPROVAL_PREFIX,
     ATTEMPT_PREFIX,
@@ -55,7 +56,9 @@ from autotrader.persistence.mysql.models.operations import (
     OpsTradingControl,
 )
 
-ALLOWED = "operator@example.com"
+# The command table pins the operator in a CHECK constraint, so a
+# command from anyone else is refused by the database itself.
+ALLOWED = SOLE_OPERATOR_EMAIL
 CSRF = "a-form-token"
 BASE_URL = "https://backoffice.example.com"
 PASSWORD = "correct horse battery staple"

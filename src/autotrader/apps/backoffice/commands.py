@@ -19,10 +19,11 @@ from enum import StrEnum
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from autotrader.apps.backoffice.auth import Operator
+from autotrader.apps.backoffice.ledger import LedgerEntry, MySqlCommandLedger
 from autotrader.persistence.mysql.models.operations import (
     OpsAuditLog,
     OpsTradingControl,
@@ -30,6 +31,8 @@ from autotrader.persistence.mysql.models.operations import (
 from autotrader.shared.ids import new_uuid7
 from autotrader.shared.time import require_utc
 
+TARGET_TYPE = "GLOBAL"
+TARGET_KEY = "ALL"
 NO_KILL_SWITCH = "NONE"
 BLOCK_NEW_EXPOSURE = "BLOCK_NEW_EXPOSURE"
 EMERGENCY = "EMERGENCY"
@@ -67,7 +70,7 @@ class SafetyCommand:
     id: UUID
     action: SafetyAction
     operator: Operator
-    source_ip: str | None
+    source_ip: str
     correlation_id: str
     requested_at: datetime
 
@@ -98,14 +101,13 @@ class ControlOutcome:
     action: str
     armed: bool
     kill_switch_level: str
-    repeated: bool
 
 
 def new_command(
     *,
     action: SafetyAction,
     operator: Operator,
-    source_ip: str | None,
+    source_ip: str,
     correlation_id: str,
     requested_at: datetime,
 ) -> SafetyCommand:
@@ -120,14 +122,45 @@ def new_command(
 
 
 class MySqlSafetyControls:
-    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        ledger: MySqlCommandLedger | None = None,
+    ) -> None:
         self._sessions = sessions
+        self._ledger = ledger or MySqlCommandLedger(sessions)
 
     async def apply(self, command: SafetyCommand) -> ControlOutcome:
+        # Opened and committed before anything is attempted, so a command that
+        # dies halfway leaves a row saying it was tried.
+        await self._ledger.open(
+            LedgerEntry(
+                id=command.id,
+                actor_email=command.operator.email,
+                source_ip=command.source_ip,
+                action=command.action.value,
+                target_type=TARGET_TYPE,
+                target_key=TARGET_KEY,
+                payload={
+                    "action": command.action.value,
+                    "correlation_id": command.correlation_id,
+                },
+                expected_digest=None,
+                started_at=command.requested_at,
+            )
+        )
+        try:
+            return await self._apply(command)
+        except Exception as error:
+            await self._ledger.fail(
+                command_id=command.id,
+                result_code=failure_code(error),
+                completed_at=command.requested_at,
+            )
+            raise
+
+    async def _apply(self, command: SafetyCommand) -> ControlOutcome:
         async with self._sessions() as session:
-            previous = await _existing_outcome(session, command)
-            if previous is not None:
-                return previous
             controls = list(
                 (
                     await session.scalars(select(OpsTradingControl).with_for_update())
@@ -148,8 +181,8 @@ class MySqlSafetyControls:
                 OpsAuditLog(
                     id=new_uuid7(),
                     action=f"BACKOFFICE_{command.action.value}",
-                    scope_type="GLOBAL",
-                    scope_key="ALL",
+                    scope_type=TARGET_TYPE,
+                    scope_key=TARGET_KEY,
                     actor_runtime_instance_id=None,
                     # Which runtime generation this was applied against.
                     fencing_token=max(control.fencing_token for control in controls),
@@ -157,17 +190,28 @@ class MySqlSafetyControls:
                     occurred_at=command.requested_at,
                 )
             )
-            # The state change and its audit record commit together. An
-            # unrecorded halt is indistinguishable from one that never
-            # happened.
+            await self._ledger.succeed(
+                session,
+                command_id=command.id,
+                result_code="APPLIED",
+                result=after.as_details(),
+                completed_at=command.requested_at,
+            )
+            # The state change, the control history and the command record all
+            # commit together. An unrecorded halt is indistinguishable from one
+            # that never happened.
             await session.commit()
         return ControlOutcome(
             command_id=command.id,
             action=command.action.value,
             armed=after.armed,
             kill_switch_level=after.kill_switch_level,
-            repeated=False,
         )
+
+
+def failure_code(error: BaseException) -> str:
+    """A stable code for the ledger, rather than a message that may change."""
+    return _FAILURE_CODES.get(type(error), "UNEXPECTED_ERROR")
 
 
 def _apply_to(control: OpsTradingControl, action: SafetyAction) -> None:
@@ -216,33 +260,17 @@ def _details(
     }
 
 
-async def _existing_outcome(
-    session: AsyncSession, command: SafetyCommand
-) -> ControlOutcome | None:
-    """A resubmitted form is the same command, not a second one."""
-    recorded = await session.scalar(
-        select(OpsAuditLog).where(
-            func.json_unquote(func.json_extract(OpsAuditLog.details, "$.command_id"))
-            == str(command.id)
-        )
-    )
-    if recorded is None:
-        return None
-    details = cast("dict[str, object]", recorded.details)
-    state = cast("dict[str, object]", details["after"])
-    return ControlOutcome(
-        command_id=command.id,
-        action=command.action.value,
-        armed=bool(state["armed"]),
-        kill_switch_level=str(state["kill_switch_level"]),
-        repeated=True,
-    )
+_FAILURE_CODES: dict[type[BaseException], str] = {
+    NothingToControlError: "NOTHING_TO_CONTROL",
+}
 
 
 __all__ = (
     "BLOCK_NEW_EXPOSURE",
     "EMERGENCY",
     "NO_KILL_SWITCH",
+    "TARGET_KEY",
+    "TARGET_TYPE",
     "ControlOutcome",
     "ControlState",
     "MySqlSafetyControls",
@@ -250,5 +278,6 @@ __all__ = (
     "SafetyAction",
     "SafetyCommand",
     "control_state",
+    "failure_code",
     "new_command",
 )

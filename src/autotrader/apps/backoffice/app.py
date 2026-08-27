@@ -41,6 +41,7 @@ from autotrader.apps.backoffice.exposure import (
     approval_for,
     new_exposure_command,
 )
+from autotrader.apps.backoffice.ledger import SourceAddressUnknownError
 from autotrader.apps.backoffice.read_model import OperationsReadModel, OperationsView
 from autotrader.apps.backoffice.second_password import (
     ApprovalStore,
@@ -149,7 +150,7 @@ def create_app(
             new_command(
                 action=requested,
                 operator=session.operator,
-                source_ip=request.client.host if request.client else None,
+                source_ip=_source_ip(request),
                 correlation_id=request.headers.get("x-request-id", str(new_uuid7())),
                 requested_at=datetime.now(UTC),
             )
@@ -182,7 +183,7 @@ def create_app(
         require_csrf(session, csrf_token)
         requested = _dangerous(action)
         session_id = _session_id(request)
-        source_ip = request.client.host if request.client else None
+        source_ip = _source_ip(request)
         await approvals.require_attempts_left(
             session_id=session_id, source_ip=source_ip
         )
@@ -224,7 +225,7 @@ def create_app(
             new_exposure_command(
                 action=_dangerous(action),
                 operator=session.operator,
-                source_ip=request.client.host if request.client else None,
+                source_ip=_source_ip(request),
                 correlation_id=request.headers.get("x-request-id", str(new_uuid7())),
                 approval_id=approval_id,
                 requested_at=datetime.now(UTC),
@@ -262,6 +263,18 @@ def _dangerous(action: str) -> DangerousAction:
         return DangerousAction(action)
     except ValueError as error:
         raise HTTPException(status_code=400, detail="unknown action") from error
+
+
+def _source_ip(request: Request) -> str:
+    """Where the command came from, which the audit contract requires.
+
+    A request with no peer address is anomalous for a backoffice reached over
+    loopback or a reverse proxy, and recording a placeholder would put a fact
+    in the ledger that is not one.
+    """
+    if request.client is None or not request.client.host:
+        raise SourceAddressUnknownError("a command must record where it came from")
+    return request.client.host
 
 
 def _session_id(request: Request) -> str:
