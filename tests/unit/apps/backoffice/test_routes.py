@@ -22,11 +22,13 @@ from autotrader.apps.backoffice.auth import (
     IdentityUnavailableError,
     LoginAttempt,
     Operator,
+    Session,
     VerifiedIdentity,
     new_session_id,
 )
 
 ALLOWED = "operator@example.com"
+CSRF = "a-form-token"
 
 
 class _NoDatabase:
@@ -52,8 +54,11 @@ class _Store:
         self.sessions[session_id] = operator
         return session_id
 
-    async def operator_for(self, session_id: str) -> Operator | None:
-        return self.sessions.get(session_id)
+    async def session_for(self, session_id: str) -> Session | None:
+        operator = self.sessions.get(session_id)
+        if operator is None:
+            return None
+        return Session(operator=operator, csrf_token=CSRF)
 
     async def end_session(self, session_id: str) -> None:
         self.sessions.pop(session_id, None)

@@ -21,6 +21,8 @@ from autotrader.apps.backoffice.auth import (
     SESSION_LIFETIME,
     LoginAttempt,
     Operator,
+    Session,
+    new_csrf_token,
     new_session_id,
     normalize_email,
 )
@@ -82,7 +84,14 @@ class RedisSessionStore:
         session_id = new_session_id()
         stored = await self._client.set(
             f"{SESSION_PREFIX}{session_id}",
-            json.dumps({"email": normalize_email(operator.email)}),
+            json.dumps(
+                {
+                    "email": normalize_email(operator.email),
+                    "csrf": new_csrf_token(),
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
             ex=int(SESSION_LIFETIME.total_seconds()),
             nx=True,
         )
@@ -90,14 +99,20 @@ class RedisSessionStore:
             raise SessionIdentityCollisionError("session identity is already taken")
         return session_id
 
-    async def operator_for(self, session_id: str) -> Operator | None:
+    async def session_for(self, session_id: str) -> Session | None:
         raw = await self._client.get(f"{SESSION_PREFIX}{session_id}")
         if raw is None:
+            return None
+        payload = _payload(raw)
+        token = payload.get("csrf")
+        if not isinstance(token, str) or not token:
+            # A session with no token could never authorize a form, and
+            # treating it as valid would leave one that silently cannot.
             return None
         # Deliberately not refreshed on use. The design gives a session a
         # twelve hour absolute lifetime, and sliding it would mean an open tab
         # never expires.
-        return Operator(email=str(_payload(raw)["email"]))
+        return Session(operator=Operator(email=str(payload["email"])), csrf_token=token)
 
     async def end_session(self, session_id: str) -> None:
         await self._client.delete(f"{SESSION_PREFIX}{session_id}")

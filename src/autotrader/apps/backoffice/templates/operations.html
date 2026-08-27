@@ -14,15 +14,28 @@
       .running { color: #00701a; }
       .code { font-family: ui-monospace, monospace; font-size: .85rem; color: #555; }
       .empty { color: #777; }
+      .controls { display: flex; gap: .75rem; align-items: center; margin: 1rem 0 2rem; }
+      .controls button { padding: .6rem 1.1rem; font-size: 1rem; cursor: pointer; }
+      .stop { background: #b00020; color: #fff; border: 1px solid #8a0018; font-weight: 600; }
+      .quiet { background: #f4f4f4; color: #222; border: 1px solid #bbb; }
+      .note { color: #777; font-size: .85rem; }
     </style>
   </head>
   <body>
-    <h1>자동매매 운영 <span class="code">{{ operator.email }}</span></h1>
+    <h1>자동매매 운영 <span class="code">{{ session.operator.email }}</span></h1>
 
     <p class="state {{ 'running' if view.armed else 'halted' }}">
       {{ '가동 중' if view.armed else '정지' }}
       <span class="code">{{ 'ARMED' if view.armed else 'DISARMED' }}</span>
     </p>
+
+    <form class="controls" method="post" action="/controls">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
+      <button class="stop" type="submit" name="action" value="HALT">HALT</button>
+      <button class="stop" type="submit" name="action" value="EMERGENCY">EMERGENCY</button>
+      <button class="quiet" type="submit" name="action" value="DISARM">DISARM</button>
+      <span class="note">모두 즉시 무장을 해제합니다. 되돌리는 조작은 여기에 없습니다.</span>
+    </form>
 
     <h2>제어</h2>
     {% if view.controls %}

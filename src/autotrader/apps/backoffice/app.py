@@ -7,11 +7,12 @@ anything added beside it, gets the operator or never runs.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, cast
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -23,12 +24,19 @@ from autotrader.apps.backoffice.auth import (
     BackofficeConfig,
     IdentityProvider,
     IdentityUnavailableError,
-    Operator,
+    Session,
     SessionStore,
     admitted_operator,
     new_login_attempt,
+    require_csrf,
+)
+from autotrader.apps.backoffice.commands import (
+    MySqlSafetyControls,
+    SafetyAction,
+    new_command,
 )
 from autotrader.apps.backoffice.read_model import OperationsReadModel, OperationsView
+from autotrader.shared.ids import new_uuid7
 
 TEMPLATES = Path(__file__).resolve().parent / "templates"
 LOGIN_PATH = "/auth/login"
@@ -63,6 +71,7 @@ def create_app(
     app = FastAPI(title="Autotrader Backoffice", docs_url=None, redoc_url=None)
     app.state.session_store = store
     templates = Jinja2Templates(directory=str(TEMPLATES))
+    controls = MySqlSafetyControls(sessions)
 
     async def _sign_in(request: Request, error: Exception) -> Response:
         del request, error
@@ -101,15 +110,36 @@ def create_app(
 
     async def dashboard(
         request: Request,
-        operator: Annotated[Operator, Depends(require_operator)],
+        session: Annotated[Session, Depends(require_session)],
     ) -> Response:
-        async with sessions() as session:
-            view = await OperationsReadModel(session).load(account_id=account_id)
-        return templates.TemplateResponse(
-            request=request,
-            name="operations.html",
-            context={"operator": operator, "view": view},
+        return await _render(request, session, templates, sessions, account_id)
+
+    async def control(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        action: str = Form(...),
+        csrf_token: str = Form(...),
+    ) -> Response:
+        # The token first, and nothing else before it. Section 12 allows this
+        # path to depend on authentication and the form token, and on nothing
+        # that could be unavailable at the moment it is needed.
+        require_csrf(session, csrf_token)
+        try:
+            requested = SafetyAction(action)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="unknown action") from error
+        await controls.apply(
+            new_command(
+                action=requested,
+                operator=session.operator,
+                source_ip=request.client.host if request.client else None,
+                correlation_id=request.headers.get("x-request-id", str(new_uuid7())),
+                requested_at=datetime.now(UTC),
+            )
         )
+        # Rendered from what was committed, read back, rather than from what
+        # the handler believes it just did.
+        return await _render(request, session, templates, sessions, account_id)
 
     # Registered rather than decorated: a decorated closure reads as dead
     # code to a type checker, and silencing that on every route is a habit
@@ -120,10 +150,29 @@ def create_app(
     app.add_api_route("/auth/callback", callback, methods=["GET"])
     app.add_api_route("/auth/logout", logout, methods=["POST"])
     app.add_api_route("/", dashboard, methods=["GET"], response_class=HTMLResponse)
+    app.add_api_route(
+        "/controls", control, methods=["POST"], response_class=HTMLResponse
+    )
     return app
 
 
-async def require_operator(request: Request) -> Operator:
+async def _render(
+    request: Request,
+    session: Session,
+    templates: Jinja2Templates,
+    sessions: async_sessionmaker[AsyncSession],
+    account_id: UUID,
+) -> Response:
+    async with sessions() as db:
+        view = await OperationsReadModel(db).load(account_id=account_id)
+    return templates.TemplateResponse(
+        request=request,
+        name="operations.html",
+        context={"session": session, "view": view},
+    )
+
+
+async def require_session(request: Request) -> Session:
     """Resolve the operator, or refuse.
 
     Defined at module scope rather than inside the factory: with postponed
@@ -135,12 +184,12 @@ async def require_operator(request: Request) -> Operator:
     session_id = request.cookies.get(SESSION_COOKIE)
     if session_id is None:
         raise OperatorRequired
-    operator = await store.operator_for(session_id)
-    if operator is None:
+    session = await store.session_for(session_id)
+    if session is None:
         # Redis lost the session, or it expired. Either way nobody is signed
         # in, and a cookie is not a second opinion.
         raise OperatorRequired
-    return operator
+    return session
 
 
 def _set_session_cookie(

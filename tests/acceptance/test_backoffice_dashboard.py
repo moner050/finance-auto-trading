@@ -32,19 +32,26 @@ from autotrader.apps.backoffice.app import LOGIN_PATH, create_app
 from autotrader.apps.backoffice.auth import (
     SESSION_COOKIE,
     BackofficeConfig,
+    CsrfRejectedError,
     LoginAttempt,
     Operator,
+    Session,
     VerifiedIdentity,
     new_session_id,
 )
 from autotrader.apps.trader.loop import run_pass
 from autotrader.apps.trader.market_data import HLIT_TIMEFRAME
+from autotrader.apps.trader.tick import DISARMED, SUBMITTED
 from autotrader.config.settings import Settings
 from autotrader.persistence.mysql.engine import create_engine
 from autotrader.persistence.mysql.models.core import CoreInstrument
-from autotrader.persistence.mysql.models.operations import OpsTradingControl
+from autotrader.persistence.mysql.models.operations import (
+    OpsAuditLog,
+    OpsTradingControl,
+)
 
 ALLOWED = "operator@example.com"
+CSRF = "a-form-token"
 BASE_URL = "https://backoffice.example.com"
 
 # Anything shaped like a credential has no business in a rendered page.
@@ -69,8 +76,11 @@ class _Store:
         self.sessions[session_id] = operator
         return session_id
 
-    async def operator_for(self, session_id: str) -> Operator | None:
-        return self.sessions.get(session_id)
+    async def session_for(self, session_id: str) -> Session | None:
+        operator = self.sessions.get(session_id)
+        if operator is None:
+            return None
+        return Session(operator=operator, csrf_token=CSRF)
 
     async def end_session(self, session_id: str) -> None:
         self.sessions.pop(session_id, None)
@@ -247,5 +257,167 @@ def test_the_same_page_without_a_session_shows_nothing_at_all() -> None:
         assert response.headers["location"] == LOGIN_PATH
         # Not a redacted page. No page.
         assert response.text == ""
+
+    _drive(scenario)
+
+
+async def _signed_in(
+    sessions: async_sessionmaker[AsyncSession], store: _Store, account_id: UUID
+) -> tuple[FastAPI, str]:
+    app = _backoffice(sessions, store, account_id)
+    return app, await store.create_session(Operator(email=ALLOWED))
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_halting_from_the_screen_stops_the_running_loop() -> None:
+    """The completion criterion for this phase: a loop that is taking bars
+    stops because somebody pressed a button."""
+
+    async def scenario(sessions: async_sessionmaker[AsyncSession]) -> None:
+        ids = await _risk_seed(sessions)
+        await _arm(sessions, armed=True)
+        manifest = await _register_strategy(sessions, uuid7())
+        bars = _Bars()
+        ports = _ports(
+            sessions,
+            context=_context(manifest, ids.instrument_id),  # type: ignore[attr-defined]
+            ids=ids,
+            bars=bars,
+            lease_name=f"halt:{uuid7().hex[:12]}",
+        )
+        assert (await run_pass(now=NOW, ports=ports)).reason == SUBMITTED
+
+        app, session_id = await _signed_in(sessions, _Store(), ids.account_id)  # type: ignore[attr-defined]
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url=BASE_URL
+        ) as client:
+            client.cookies.set(SESSION_COOKIE, session_id)
+            response = await client.post(
+                "/controls", data={"action": "HALT", "csrf_token": CSRF}
+            )
+
+        assert response.status_code == 200
+        assert "DISARMED" in response.text
+        assert "BLOCK_NEW_EXPOSURE" in response.text
+
+        # A fresh bar to evaluate, so the refusal is the armed check rather
+        # than the absence of anything to do. Nothing was restarted or told to
+        # reload: the loop reads the control every pass.
+        bars.closed = True
+        resumed = _ports(
+            sessions,
+            context=_context(manifest, ids.instrument_id),  # type: ignore[attr-defined]
+            ids=ids,
+            bars=bars,
+            lease_name=f"halt:{uuid7().hex[:12]}",
+        )
+        after = await run_pass(now=NOW + HLIT_TIMEFRAME, ports=resumed)
+        assert after.reason == DISARMED
+
+        async with sessions() as session:
+            audit = await session.scalar(
+                select(OpsAuditLog).where(OpsAuditLog.action == "BACKOFFICE_HALT")
+            )
+            assert audit is not None
+            assert audit.details["operator_email"] == ALLOWED
+            assert audit.details["before"] == {
+                "armed": True,
+                "kill_switch_level": "NONE",
+            }
+            assert audit.details["after"] == {
+                "armed": False,
+                "kill_switch_level": "BLOCK_NEW_EXPOSURE",
+            }
+
+    _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_a_form_without_the_session_token_changes_nothing() -> None:
+    """A cross-site form submits no token. That is the whole attack, and it
+    has to fail before anything is written."""
+
+    async def scenario(sessions: async_sessionmaker[AsyncSession]) -> None:
+        ids = await _risk_seed(sessions)
+        await _arm(sessions, armed=True)
+
+        app, session_id = await _signed_in(sessions, _Store(), ids.account_id)  # type: ignore[attr-defined]
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url=BASE_URL
+        ) as client:
+            client.cookies.set(SESSION_COOKIE, session_id)
+            with pytest.raises(CsrfRejectedError):
+                await client.post(
+                    "/controls",
+                    data={"action": "HALT", "csrf_token": "borrowed-from-nowhere"},
+                )
+
+        async with sessions() as session:
+            control = await session.scalar(select(OpsTradingControl))
+            assert control is not None
+            assert control.armed is True
+            assert control.kill_switch_level == "NONE"
+            assert await session.scalar(select(OpsAuditLog)) is None
+
+    _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_halting_without_a_session_is_refused_before_anything_is_read() -> None:
+    async def scenario(sessions: async_sessionmaker[AsyncSession]) -> None:
+        ids = await _risk_seed(sessions)
+        await _arm(sessions, armed=True)
+
+        app = _backoffice(sessions, _Store(), ids.account_id)  # type: ignore[attr-defined]
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url=BASE_URL,
+            follow_redirects=False,
+        ) as client:
+            response = await client.post(
+                "/controls", data={"action": "HALT", "csrf_token": CSRF}
+            )
+
+        assert response.status_code == 303
+        assert response.headers["location"] == LOGIN_PATH
+        async with sessions() as session:
+            control = await session.scalar(select(OpsTradingControl))
+            assert control is not None
+            assert control.armed is True
+
+    _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_a_resubmitted_form_is_the_same_command_not_a_second_one() -> None:
+    async def scenario(sessions: async_sessionmaker[AsyncSession]) -> None:
+        ids = await _risk_seed(sessions)
+        await _arm(sessions, armed=True)
+
+        app, session_id = await _signed_in(sessions, _Store(), ids.account_id)  # type: ignore[attr-defined]
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url=BASE_URL
+        ) as client:
+            client.cookies.set(SESSION_COOKIE, session_id)
+            for _ in range(3):
+                await client.post(
+                    "/controls", data={"action": "DISARM", "csrf_token": CSRF}
+                )
+
+        async with sessions() as session:
+            entries = (await session.scalars(select(OpsAuditLog))).all()
+
+        # Three presses, three commands, because each carries its own id. What
+        # must not happen is a control that ends up in a different state for
+        # having been pressed more than once.
+        assert len(entries) == 3
+        assert all(
+            entry.details["after"] == {"armed": False, "kill_switch_level": "NONE"}
+            for entry in entries
+        )
 
     _drive(scenario)

@@ -37,11 +37,28 @@ class IdentityUnavailableError(RuntimeError):
     """Raised when the backoffice cannot tell who is asking."""
 
 
+class CsrfRejectedError(RuntimeError):
+    """Raised when a state-changing request carries no proof of its origin."""
+
+
 @dataclass(frozen=True, slots=True)
 class Operator:
     """The one person this backoffice answers to."""
 
     email: str
+
+
+@dataclass(frozen=True, slots=True)
+class Session:
+    """A signed-in operator, and the token that proves a form came from them.
+
+    The token is stored beside the session rather than derived from its id.
+    Deriving it would mean anything that learns the id can also forge the
+    token, which is the one thing the token exists to prevent.
+    """
+
+    operator: Operator
+    csrf_token: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,7 +151,7 @@ class SessionStore(Protocol):
         """Store the session and return its opaque id."""
         ...
 
-    async def operator_for(self, session_id: str) -> Operator | None: ...
+    async def session_for(self, session_id: str) -> Session | None: ...
 
     async def end_session(self, session_id: str) -> None: ...
 
@@ -149,6 +166,20 @@ def new_login_attempt() -> LoginAttempt:
 
 def new_session_id() -> str:
     return secrets.token_urlsafe(_SESSION_ID_BYTES)
+
+
+def new_csrf_token() -> str:
+    return secrets.token_urlsafe(_SESSION_ID_BYTES)
+
+
+def require_csrf(session: Session, submitted: str | None) -> None:
+    """Refuse a form that did not come from this session.
+
+    Compared in constant time, and a missing token is a mismatch rather than
+    a special case, because "no token" is what a cross-site form submits.
+    """
+    if submitted is None or not secrets.compare_digest(session.csrf_token, submitted):
+        raise CsrfRejectedError("form token does not match this session")
 
 
 def admitted_operator(
@@ -174,14 +205,18 @@ __all__ = (
     "SESSION_LIFETIME",
     "SESSION_PATH",
     "BackofficeConfig",
+    "CsrfRejectedError",
     "IdentityProvider",
     "IdentityUnavailableError",
     "LoginAttempt",
     "Operator",
+    "Session",
     "SessionStore",
     "VerifiedIdentity",
     "admitted_operator",
+    "new_csrf_token",
     "new_login_attempt",
     "new_session_id",
     "normalize_email",
+    "require_csrf",
 )
