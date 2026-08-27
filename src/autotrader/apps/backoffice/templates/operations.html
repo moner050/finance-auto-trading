@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <title>자동매매 운영</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; }
+      h1 { font-size: 1.4rem; }
+      h2 { font-size: 1rem; margin-top: 2rem; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border-bottom: 1px solid #ddd; padding: .4rem .6rem; text-align: left; }
+      .state { font-weight: 600; }
+      .halted { color: #b00020; }
+      .running { color: #00701a; }
+      .code { font-family: ui-monospace, monospace; font-size: .85rem; color: #555; }
+      .empty { color: #777; }
+    </style>
+  </head>
+  <body>
+    <h1>자동매매 운영 <span class="code">{{ operator.email }}</span></h1>
+
+    <p class="state {{ 'running' if view.armed else 'halted' }}">
+      {{ '가동 중' if view.armed else '정지' }}
+      <span class="code">{{ 'ARMED' if view.armed else 'DISARMED' }}</span>
+    </p>
+
+    <h2>제어</h2>
+    {% if view.controls %}
+    <table>
+      <tr><th>범위</th><th>무장</th><th>킬 스위치</th><th>리스 만료</th></tr>
+      {% for control in view.controls %}
+      <tr>
+        <td>{{ control.scope_type }} / {{ control.scope_key }}</td>
+        <td>{{ '예' if control.armed else '아니오' }}</td>
+        <td class="code">{{ control.kill_switch_level }}</td>
+        <td>{{ control.lease_expires_at or '-' }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="empty">제어 행이 없습니다. 아무도 무장시키지 않았습니다.</p>
+    {% endif %}
+
+    <h2>포지션</h2>
+    {% if view.positions %}
+    <table>
+      <tr><th>종목</th><th>수량</th><th>평균단가</th><th>통화</th><th>보호</th></tr>
+      {% for position in view.positions %}
+      <tr>
+        <td>{{ position.instrument_code }}</td>
+        <td>{{ position.quantity }}</td>
+        <td>{{ position.average_cost }}</td>
+        <td>{{ position.currency or '-' }}</td>
+        <td class="{{ '' if position.protected else 'halted' }}">
+          {{ '손절 있음' if position.protected else '손절 없음' }}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="empty">열린 포지션이 없습니다.</p>
+    {% endif %}
+
+    <h2>최근 결정</h2>
+    {% if view.decisions %}
+    <table>
+      <tr><th>시각</th><th>시장</th><th>등급</th><th>방향</th><th>차단 사유</th></tr>
+      {% for decision in view.decisions %}
+      <tr>
+        <td>{{ decision.generated_at }}</td>
+        <td class="code">{{ decision.market }}</td>
+        <td>{{ decision.grade }}</td>
+        <td>{{ decision.side }}</td>
+        <td class="code">{{ decision.blockers | join(', ') or '-' }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="empty">기록된 결정이 없습니다.</p>
+    {% endif %}
+
+    <h2>정산 차이</h2>
+    {% if view.drifts %}
+    <table>
+      <tr><th>시각</th><th>종목</th><th>심각도</th><th>구분</th></tr>
+      {% for drift in view.drifts %}
+      <tr>
+        <td>{{ drift.created_at }}</td>
+        <td>{{ drift.instrument_code or '-' }}</td>
+        <td class="{{ 'halted' if drift.severity == 'BLOCKING' else '' }}">{{ drift.severity }}</td>
+        <td class="code">{{ drift.diff_key }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="empty">미해결 정산 차이가 없습니다.</p>
+    {% endif %}
+
+    <h2>미해결 incident</h2>
+    {% if view.incidents %}
+    <table>
+      <tr><th>시각</th><th>심각도</th><th>사유</th><th>범위</th></tr>
+      {% for incident in view.incidents %}
+      <tr>
+        <td>{{ incident.created_at }}</td>
+        <td class="{{ 'halted' if incident.severity == 'BLOCKING' else '' }}">{{ incident.severity }}</td>
+        <td class="code">{{ incident.reason_code }}</td>
+        <td>{{ incident.scope_type or '-' }} / {{ incident.scope_key or '-' }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="empty">미해결 incident가 없습니다.</p>
+    {% endif %}
+  </body>
+</html>
