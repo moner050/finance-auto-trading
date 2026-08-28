@@ -61,6 +61,7 @@ from autotrader.persistence.mysql.models.binance_usdm import (
     BinanceUsdmTradeFactRow,
 )
 from autotrader.persistence.mysql.models.core import CoreBase
+from autotrader.persistence.mysql.models.promotion import PromotionSessionRow
 from autotrader.persistence.mysql.models.toss_us_reconciliation import (
     TossUsCashFactRow,
     TossUsOrderFactRow,
@@ -85,6 +86,7 @@ __all__ = [
     "BinanceUsdmPositionFactRow",
     "BinanceUsdmReconciliationRunRow",
     "BinanceUsdmTradeFactRow",
+    "PromotionSessionRow",
     "TossUsCashFactRow",
     "TossUsOrderFactRow",
     "TossUsPositionFactRow",

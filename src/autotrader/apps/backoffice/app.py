@@ -7,7 +7,7 @@ anything added beside it, gets the operator or never runs.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated, cast
 from uuid import UUID
@@ -15,6 +15,7 @@ from uuid import UUID
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from autotrader.apps.backoffice.account_commands import (
@@ -73,6 +74,7 @@ from autotrader.apps.backoffice.policy_commands import (
 from autotrader.apps.backoffice.policy_commands import (
     approval_for as policy_approval_for,
 )
+from autotrader.apps.backoffice.promotion_read_model import PromotionReadModel
 from autotrader.apps.backoffice.read_model import OperationsReadModel, OperationsView
 from autotrader.apps.backoffice.second_password import (
     ApprovalStore,
@@ -95,6 +97,10 @@ from autotrader.apps.backoffice.secrets import (
     SecretReferenceError,
     SecretScope,
 )
+from autotrader.execution.promotion.models import PromotionMode
+from autotrader.persistence.mysql.models.bindings import ProviderAccountBinding
+from autotrader.persistence.mysql.models.david_v6 import DavidV6ManifestRow
+from autotrader.persistence.mysql.repositories.promotion import PromotionSessions
 from autotrader.security.secret_crypto import MasterKeyRing
 from autotrader.shared.ids import new_uuid7
 
@@ -142,6 +148,7 @@ def create_app(
     secret_store = None if keys is None else MySqlSecretStore(sessions, keys)
     policy_reader = PoliciesReadModel(sessions)
     evidence_reader = EvidenceReadModel(sessions)
+    promotion_reader = PromotionReadModel(sessions)
     policy_commands = MySqlPolicyCommands(sessions=sessions, approvals=approvals)
     binding_commands = MySqlBindingCommands(sessions=sessions, approvals=approvals)
     account_commands = MySqlAccountCommands(sessions=sessions, approvals=approvals)
@@ -541,6 +548,70 @@ def create_app(
         )
         return await _render_accounts(request, session, templates, account_reader)
 
+    async def promotion_page(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+    ) -> Response:
+        return await _render_promotion(request, session, templates, promotion_reader)
+
+    async def claim_session(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        csrf_token: str = Form(...),
+        binding_id: str = Form(...),
+        mode: str = Form(...),
+        exchange_date: str = Form(...),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        # Claiming records that a day is being watched. It creates no
+        # readiness: only completing does, and only against evidence.
+        async with sessions() as store:
+            binding = await store.scalar(
+                select(ProviderAccountBinding).where(
+                    ProviderAccountBinding.id == _uuid(binding_id, "unknown binding")
+                )
+            )
+            if binding is None:
+                raise HTTPException(status_code=400, detail="unknown binding")
+            manifest = await store.scalar(
+                select(DavidV6ManifestRow).order_by(
+                    DavidV6ManifestRow.registered_at.desc()
+                )
+            )
+            if manifest is None:
+                raise HTTPException(
+                    status_code=409, detail="no strategy manifest is registered"
+                )
+            await PromotionSessions(store).claim(
+                binding_id=binding.id,
+                account_id=binding.account_id,
+                manifest_id=manifest.id,
+                mode=_promotion_mode(mode),
+                exchange_date=_exchange_date(exchange_date),
+                now=datetime.now(UTC),
+            )
+            await store.commit()
+        return await _render_promotion(request, session, templates, promotion_reader)
+
+    async def complete_session(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        csrf_token: str = Form(...),
+        session_id: str = Form(...),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        moment = datetime.now(UTC)
+        async with sessions() as store:
+            # The repository counts the evidence and refuses if the manifest
+            # does not verify. Nothing the form said is taken as a fact.
+            await PromotionSessions(store).complete(
+                session_id=_uuid(session_id, "unknown session"),
+                now=moment,
+                today=moment.date(),
+            )
+            await store.commit()
+        return await _render_promotion(request, session, templates, promotion_reader)
+
     async def evidence_page(
         request: Request,
         session: Annotated[Session, Depends(require_session)],
@@ -873,6 +944,21 @@ def create_app(
         response_class=HTMLResponse,
     )
     app.add_api_route(
+        "/promotion", promotion_page, methods=["GET"], response_class=HTMLResponse
+    )
+    app.add_api_route(
+        "/promotion/claim",
+        claim_session,
+        methods=["POST"],
+        response_class=HTMLResponse,
+    )
+    app.add_api_route(
+        "/promotion/complete",
+        complete_session,
+        methods=["POST"],
+        response_class=HTMLResponse,
+    )
+    app.add_api_route(
         "/evidence", evidence_page, methods=["GET"], response_class=HTMLResponse
     )
     app.add_api_route(
@@ -933,6 +1019,42 @@ def create_app(
         "/controls/enable", enable, methods=["POST"], response_class=HTMLResponse
     )
     return app
+
+
+async def _render_promotion(
+    request: Request,
+    session: Session,
+    templates: Jinja2Templates,
+    reader: PromotionReadModel,
+    *,
+    error: str | None = None,
+) -> Response:
+    return templates.TemplateResponse(
+        request=request,
+        name="promotion.html",
+        context={
+            "session": session,
+            "view": await reader.load(today=datetime.now(UTC).date()),
+            "error": error,
+        },
+    )
+
+
+def _promotion_mode(value: str) -> PromotionMode:
+    try:
+        return PromotionMode(value)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="unknown mode") from error
+
+
+def _exchange_date(value: str) -> date:
+    """A trading day, not a timestamp."""
+    try:
+        return date.fromisoformat(value)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400, detail="exchange_date must be YYYY-MM-DD"
+        ) from error
 
 
 async def _render_accounts(
