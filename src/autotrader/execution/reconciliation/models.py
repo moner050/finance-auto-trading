@@ -18,6 +18,7 @@ class ReconciliationDiffKind(StrEnum):
     INTERNAL_POSITION_BROKER_MISSING = "INTERNAL_POSITION_BROKER_MISSING"
     BROKER_POSITION_INTERNAL_MISSING = "BROKER_POSITION_INTERNAL_MISSING"
     POSITION_QUANTITY_MISMATCH = "POSITION_QUANTITY_MISMATCH"
+    OPEN_ORDER_CLIENT_ID_MISMATCH = "OPEN_ORDER_CLIENT_ID_MISMATCH"
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,11 +30,26 @@ class InternalOpenOrder:
 
 @dataclass(frozen=True, slots=True)
 class BrokerOpenOrder:
+    """One order the broker says is working.
+
+    `broker_client_order_id` is None when the broker does not echo ours back.
+    KIS has no such field at all and Toss omits it from its order list, so
+    requiring it would mean two of three brokers could never be reconciled.
+    It is corroboration where it exists, not the identity: the broker's own
+    order id is what names the order on both sides.
+    """
+
     broker_order_id: str
-    broker_client_order_id: str
+    broker_client_order_id: str | None
     canonical_terms_hash: bytes
 
     def __post_init__(self) -> None:
+        if not self.broker_order_id:
+            raise ValueError("broker_order_id is required")
+        if self.broker_client_order_id == "":
+            # Absent and empty are different answers, and an empty string
+            # would compare unequal to every client id we ever sent.
+            raise ValueError("broker_client_order_id is absent or a value")
         if len(self.canonical_terms_hash) != 32:
             raise ValueError("canonical_terms_hash must be SHA-256 bytes")
 

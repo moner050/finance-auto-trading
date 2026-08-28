@@ -172,7 +172,7 @@ exhaustion confirmed, zones 3개
 
 ---
 
-## Phase 3 — 실 브로커 정산과 보호 — 리더 하나 남음
+## Phase 3 — 실 브로커 정산과 보호 — 실계좌 스모크만 남음
 
 계획을 세울 때 전제했던 것이 성립하지 않았다. `PROTECTIVE` 인텐트를 만드는 코드가
 `src/` 어디에도 없었고, `MySqlFillStore`/`FillRepository`는 참조가 0건이었다.
@@ -200,11 +200,36 @@ exhaustion confirmed, zones 3개
   페이퍼 루프에도 진짜 상대가 있다 — 저널 영수증은 브로커가, 포지션 원장은 fill store가
   쓰므로 둘의 불일치는 견해 차이가 아니라 한쪽 경로의 결함이다.
 
-**남은 것 — 실계좌 스냅샷 리더**
+**실계좌 스냅샷 리더 (2026-08-27)**
 
-`BrokerSnapshotReader` 포트에 KIS `account_snapshot`, Toss `us_account_snapshot`,
-Binance `account` 어댑터를 맞추는 것 하나. 비교·영속화·incident·킬 스위치·루프 배선은
-페이퍼 브로커를 상대로 전부 검증됐다. 이 조각만 실계좌 자격증명을 요구한다.
+`BrokerSnapshotReader` 포트에 세 브로커를 맞췄다. 어댑터는 커넥션도 자격증명도
+쥐지 않는다 — 스냅샷을 돌려주는 콜러블을 받으므로 전송과 비밀값은 이미 그것을
+소유한 곳에 남고, 실계좌 없이도 시험할 수 있다.
+
+- `live_snapshots.py` — 심볼 → instrument_id 변환과 조립. 규칙 두 개가 핵심이다.
+  **평평한 종목은 0이 아니라 부재**(Binance는 한 번이라도 증거금을 잡은 모든
+  심볼을 0으로 보고한다), **모르는 심볼은 누락이 아니라 거부**(빼면 브로커가
+  들고 있다는 종목에 대해 계좌가 비었다고 보고하게 되고, 대조는 drift 0을
+  낸다 — 대조가 잡으라고 있는 바로 그 실패다).
+- `live_readers.py` — 세 번역기와 `LiveSnapshotReader`. 주문 id는 **쓰기 쪽과
+  같은 빌더**를 쓴다(`kis_provider_order_id` / `toss_provider_order_id` /
+  `binance_provider_order_id`). 여기서 형식을 두 번째로 유도하면 두 쪽이 갈라지고,
+  기록해 둔 것과 다른 주문 id는 남이 낸 주문으로 읽힌다.
+
+**포트를 하나 고쳤다.** `BrokerOpenOrder.broker_client_order_id`가 필수였는데,
+KIS에는 그런 필드가 아예 없고 Toss는 주문 목록에서 빼고 준다. 필수로 두면 세 중
+둘은 영원히 대조할 수 없다. 이제 선택값이고, 비교는 **브로커 자신의 주문 id**로
+키를 잡는다. 쌍으로 키를 잡으면 "브로커가 되돌려주지 않았다"가 "다른 주문이다"로
+바뀌어 한 주문이 두 번 보고된다. 양쪽에 client id가 있고 다를 때만
+`OPEN_ORDER_CLIENT_ID_MISMATCH`로 막는다 — 주문 id는 같은데 client id가 다르면,
+우리가 내지 않은 주문이 이 계좌에 있고 그것이 우리 id를 가져간 것이다.
+
+**남은 것 — 실계좌 스모크**
+
+자격증명이 DB로 옮겨진 뒤 세 계좌에서 실제로 읽어 drift 0을 확인하는 것.
+Binance 실계좌 키는 현재 읽기 전용이며 어떤 주문 경로에도 배선하지 않았다.
+US 종목은 시드에 NYSE 거래소만 있으므로 NASDAQ 심볼은 등록이 먼저 필요하다 —
+모르는 심볼은 조용히 빠지지 않고 스냅샷을 거부하므로 이 사실은 시끄럽게 드러난다.
 
 **완료 기준:** 세 브로커 모두에 대해 실계좌 스냅샷을 읽어 drift 0을 보고한다.
 

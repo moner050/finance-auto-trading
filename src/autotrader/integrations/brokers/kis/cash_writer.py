@@ -130,7 +130,7 @@ class KisCashWriter:
         context = await self._load_context(command, CommandType.CANCEL)
         if context.target_order is None:
             raise BrokerWriteDisabled("exact KIS cancel target authority is absent")
-        expected_target = _provider_order_id(
+        expected_target = kis_provider_order_id(
             _provider_date(command),
             context.target_order.organization_number,
             context.target_order.order_number,
@@ -204,7 +204,7 @@ class KisCashWriter:
             return None
         order = decision.adopted_order
         return BrokerWriteResult(
-            broker_order_id=_provider_order_id(
+            broker_order_id=kis_provider_order_id(
                 order.order_date,
                 order.organization_number,
                 order.order_number,
@@ -268,7 +268,7 @@ def _require_write_result(
     if dispatch.organization_number is None or dispatch.order_number is None:
         raise KisCashWriterUnknown("KIS cash acknowledgement identity is incomplete")
     return BrokerWriteResult(
-        broker_order_id=_provider_order_id(
+        broker_order_id=kis_provider_order_id(
             _provider_date(command),
             dispatch.organization_number,
             dispatch.order_number,
@@ -283,7 +283,7 @@ def _provider_date(command: BrokerOrderCommand) -> str:
     return command.dispatch_attempted_at.astimezone(_KST).strftime("%Y%m%d")
 
 
-def _provider_order_id(order_date: str, organization: str, order_number: str) -> str:
+def kis_provider_order_id(order_date: str, organization: str, order_number: str) -> str:
     if (
         len(order_date) != 8
         or not order_date.isascii()
@@ -329,4 +329,5 @@ __all__ = (
     "KisCashWriter",
     "KisCashWriterRejected",
     "KisCashWriterUnknown",
+    "kis_provider_order_id",
 )

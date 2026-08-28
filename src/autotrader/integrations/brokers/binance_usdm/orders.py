@@ -567,7 +567,7 @@ class BinanceUsdmOrderService:
                 commissions.get(fill.commission_asset, Decimal()) + fill.commission
             )
         return BrokerWriteResult(
-            broker_order_id=f"BINANCE-USDM:{order.order_id}",
+            broker_order_id=binance_provider_order_id(order.order_id),
             client_order_id=order.client_order_id,
             provider_state=order.status,
             cumulative_filled_quantity=order.executed_quantity,
@@ -1038,6 +1038,13 @@ def _client_order_id(value: object) -> str:
     ):
         raise ValueError("Binance USD-M client order ID is invalid")
     return text
+
+
+def binance_provider_order_id(order_id: int) -> str:
+    """The one place this string is built, so the reader matches the writer."""
+    if type(order_id) is not int or order_id <= 0:
+        raise ValueError("Binance provider order id is invalid")
+    return f"BINANCE-USDM:{order_id}"
 
 
 def _provider_order_id(value: object) -> str:

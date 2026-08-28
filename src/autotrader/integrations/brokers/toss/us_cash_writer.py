@@ -47,6 +47,13 @@ class TossUsCashWriterRejected(BrokerSubmissionRejected):
     """Toss authoritatively rejected the order."""
 
 
+def toss_provider_order_id(provider_order_id: str) -> str:
+    """The one place this string is built, so the reader matches the writer."""
+    if not provider_order_id or provider_order_id != provider_order_id.strip():
+        raise ValueError("Toss provider order id is invalid")
+    return f"TOSS-US:{provider_order_id}"
+
+
 @dataclass(frozen=True, slots=True)
 class BrokerWriteResult:
     broker_order_id: str
@@ -422,7 +429,7 @@ class TossUsCashWriter:
 
 def _result(provider_order_id: str, *, recovered: bool) -> BrokerWriteResult:
     return BrokerWriteResult(
-        broker_order_id=f"TOSS-US:{provider_order_id}",
+        broker_order_id=toss_provider_order_id(provider_order_id),
         provider_state="RECOVERED" if recovered else "ACKNOWLEDGED",
     )
 

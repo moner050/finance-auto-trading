@@ -335,3 +335,80 @@ class _RunStore:
     async def persist_run(self, run: ReconciliationRun) -> ReconciliationRun:
         self.runs.append(run)
         return run
+
+
+def test_a_broker_that_does_not_echo_our_client_id_still_matches() -> None:
+    """KIS has no client order id field and Toss omits it from its order list.
+    Keying on the pair would report every one of their orders twice: once as
+    ours the broker never heard of, once as theirs we never placed."""
+    now = datetime(2026, 8, 27, tzinfo=UTC)
+    snapshot = BrokerSnapshot(
+        broker_id=uuid4(),
+        account_id=uuid4(),
+        complete=True,
+        expires_at=now + timedelta(seconds=30),
+        open_orders=(
+            BrokerOpenOrder(
+                broker_order_id="KIS-KRX:20260827:00001:0000000001",
+                broker_client_order_id=None,
+                canonical_terms_hash=b"a" * 32,
+            ),
+        ),
+        positions=(),
+    )
+    internal = (
+        InternalOpenOrder(
+            order_id=uuid4(),
+            broker_order_id="KIS-KRX:20260827:00001:0000000001",
+            broker_client_order_id="ours-1",
+        ),
+    )
+
+    diffs = ReconciliationService().compare(
+        now=now,
+        snapshot=snapshot,
+        internal_open_orders=internal,
+        internal_positions=(),
+    )
+
+    assert diffs == ()
+
+
+def test_a_client_id_the_broker_does_not_recognise_is_one_finding() -> None:
+    """One order id, two client ids: something placed an order on this account
+    that we did not, and it took an id we did."""
+    now = datetime(2026, 8, 27, tzinfo=UTC)
+    snapshot = BrokerSnapshot(
+        broker_id=uuid4(),
+        account_id=uuid4(),
+        complete=True,
+        expires_at=now + timedelta(seconds=30),
+        open_orders=(
+            BrokerOpenOrder(
+                broker_order_id="BINANCE-USDM:42",
+                broker_client_order_id="somebody-elses",
+                canonical_terms_hash=b"a" * 32,
+            ),
+        ),
+        positions=(),
+    )
+    order_id = uuid4()
+    internal = (
+        InternalOpenOrder(
+            order_id=order_id,
+            broker_order_id="BINANCE-USDM:42",
+            broker_client_order_id="ours-1",
+        ),
+    )
+
+    diffs = ReconciliationService().compare(
+        now=now,
+        snapshot=snapshot,
+        internal_open_orders=internal,
+        internal_positions=(),
+    )
+
+    assert len(diffs) == 1
+    assert diffs[0].kind is ReconciliationDiffKind.OPEN_ORDER_CLIENT_ID_MISMATCH
+    assert diffs[0].blocking is True
+    assert diffs[0].internal_order_id == order_id

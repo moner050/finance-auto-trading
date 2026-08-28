@@ -65,19 +65,36 @@ class ReconciliationService:
                     broker_order_id=None,
                 )
             )
+        # Keyed on the broker's own order id. It is what both sides can name
+        # an order by; the client id is ours, and only some brokers hand it
+        # back. Keying on the pair would turn "the broker did not echo it"
+        # into "this is a different order", reported twice.
         broker_by_identity = {
-            (order.broker_order_id, order.broker_client_order_id): order
-            for order in snapshot.open_orders
+            order.broker_order_id: order for order in snapshot.open_orders
         }
         internal_by_identity = {
-            (order.broker_order_id, order.broker_client_order_id): order
-            for order in internal_open_orders
+            order.broker_order_id: order for order in internal_open_orders
         }
         for identity, internal in internal_by_identity.items():
-            if identity not in broker_by_identity:
+            broker = broker_by_identity.get(identity)
+            if broker is None:
                 diffs.append(
                     ReconciliationDiff(
                         kind=ReconciliationDiffKind.INTERNAL_OPEN_BROKER_MISSING,
+                        blocking=True,
+                        internal_order_id=internal.order_id,
+                        broker_order_id=internal.broker_order_id,
+                    )
+                )
+            elif (
+                broker.broker_client_order_id is not None
+                and broker.broker_client_order_id != internal.broker_client_order_id
+            ):
+                # One order id, two client ids. Something placed an order on
+                # this account that we did not, and it took an id we did.
+                diffs.append(
+                    ReconciliationDiff(
+                        kind=ReconciliationDiffKind.OPEN_ORDER_CLIENT_ID_MISMATCH,
                         blocking=True,
                         internal_order_id=internal.order_id,
                         broker_order_id=internal.broker_order_id,
@@ -199,12 +216,11 @@ def _run_hash(
                 "broker_order_id": order.broker_order_id,
                 "canonical_terms_hash": order.canonical_terms_hash.hex(),
             }
+            # By the broker's order id alone: it is unique on this side, and
+            # the client id is now sometimes absent, which no ordering
+            # against a string can accommodate.
             for order in sorted(
-                snapshot.open_orders,
-                key=lambda order: (
-                    order.broker_order_id,
-                    order.broker_client_order_id,
-                ),
+                snapshot.open_orders, key=lambda order: order.broker_order_id
             )
         ],
         "internal_open_orders": [
