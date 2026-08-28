@@ -1,0 +1,35 @@
+# The only process on this host that listens on a public port.
+#
+# Everything else is on the compose network with no published ports, so the
+# back office cannot be reached except through here, and TLS is not something
+# the application has to be trusted to get right.
+
+{
+	email {$CADDY_ACME_EMAIL}
+}
+
+{$BACKOFFICE_DOMAIN} {
+	encode zstd gzip
+
+	# Caddy obtains and renews the certificate. The upstream is plain HTTP on
+	# a private network it is the only member of that is reachable.
+	reverse_proxy backoffice:8000 {
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Request-Id {http.request.uuid}
+	}
+
+	# The session cookie is Secure and SameSite=Lax already; these close the
+	# gaps a cookie cannot.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

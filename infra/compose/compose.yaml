@@ -1,8 +1,117 @@
 name: finance-auto-trading
 
+# Caddy is the only service with published ports. Everything else talks over
+# the compose network, so the back office cannot be reached except through the
+# proxy that terminates TLS.
+#
+# MySQL and Redis are optional. This project already runs against an external
+# database, and forcing a second one on a deployment that has one is how two
+# databases end up half populated. Bring them up with:
+#
+#     docker compose --profile local-data up -d
+#
+# and point DATABASE_URL and REDIS_URL at them; otherwise set those to the
+# instances you already run.
+
+x-app: &app
+  build:
+    context: ../..
+    dockerfile: infra/docker/app.Dockerfile
+    args:
+      GATE_COMMIT_SHA: ${GATE_COMMIT_SHA:-unknown}
+      GATE_MIGRATION_HEAD: ${GATE_MIGRATION_HEAD:-unknown}
+      GATE_OFFICIAL_FACT_REGISTRY_SHA256: ${GATE_OFFICIAL_FACT_REGISTRY_SHA256:-unknown}
+  image: finance-auto-trading:local
+  environment: &app-env
+    DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
+    REDIS_URL: ${REDIS_URL:?set REDIS_URL in .env}
+    TZ: UTC
+  restart: unless-stopped
+  networks: [private]
+
 services:
+  # One shot, and everything else waits for it to succeed. A back office that
+  # started against an unmigrated database would render an empty vault rather
+  # than refuse, which is the shape of failure this ordering exists to stop.
+  migrate:
+    <<: *app
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    restart: "no"
+
+  backoffice:
+    <<: *app
+    command:
+      - "python"
+      - "-m"
+      - "autotrader.apps.backoffice"
+      - "${BACKOFFICE_ACCOUNT_ID:?set BACKOFFICE_ACCOUNT_ID in .env}"
+    environment:
+      <<: *app-env
+      # What browsers reach it at, which is what is registered with Google.
+      BACKOFFICE_PUBLIC_URL: https://${BACKOFFICE_DOMAIN:?set BACKOFFICE_DOMAIN in .env}
+      # Where the process listens. Every interface, because Caddy reaches it
+      # across the container network and nothing else can.
+      BACKOFFICE_BIND_HOST: 0.0.0.0
+      BACKOFFICE_BIND_PORT: 8000
+      BACKOFFICE_ALLOWED_EMAIL: ${BACKOFFICE_ALLOWED_EMAIL:?set BACKOFFICE_ALLOWED_EMAIL in .env}
+      BACKOFFICE_MASTER_KEY: ${BACKOFFICE_MASTER_KEY:?set BACKOFFICE_MASTER_KEY in .env}
+      BACKOFFICE_MASTER_KEY_VERSION: ${BACKOFFICE_MASTER_KEY_VERSION:-1}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # The put-call series exists only because this runs. A day it is down is a
+  # day that measure can never be recovered for.
+  capture:
+    <<: *app
+    entrypoint: ["/bin/sh", "/opt/capture-loop.sh"]
+    command: []
+    environment:
+      <<: *app-env
+      CAPTURE_HOUR: ${CAPTURE_HOUR:-1}
+    volumes:
+      - ./capture-loop.sh:/opt/capture-loop.sh:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Not a worker. The loop has inputs with no producer, so this reports what
+  # is missing and exits. It is here so the report is one command on the
+  # deployment rather than a thing to remember how to run.
+  trader-check:
+    <<: *app
+    command:
+      - "python"
+      - "-m"
+      - "autotrader.apps.trader"
+      - "--account"
+      - "${TRADER_ACCOUNT_ALIAS:-unset}"
+      - "--check"
+    restart: "no"
+    profiles: [check]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  caddy:
+    image: caddy:2.10-alpine@sha256:e2cf1bfeb4e7b2d2e6dfc02f4cf3b3a58b0dc5b03cabbbca5c3ac95c0bd39c46
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      BACKOFFICE_DOMAIN: ${BACKOFFICE_DOMAIN:?set BACKOFFICE_DOMAIN in .env}
+      CADDY_ACME_EMAIL: ${CADDY_ACME_EMAIL:?set CADDY_ACME_EMAIL in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [backoffice]
+    networks: [private]
+
   mysql:
     image: mysql:8.4.11@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+    profiles: [local-data]
     command:
       - --default-time-zone=+00:00
       - --transaction-isolation=READ-COMMITTED
@@ -14,18 +123,35 @@ services:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
     ports:
       - 127.0.0.1:${MYSQL_PORT:-3306}:3306
+    volumes:
+      - mysql-data:/var/lib/mysql
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u autotrader --password=$$MYSQL_PASSWORD"]
       interval: 5s
       timeout: 3s
       retries: 20
+    networks: [private]
 
   redis:
     image: redis:8.2.8@sha256:2f7462b9e93e0a7ae2edf3a0a0babc8a4d29f8bfc50849b906b7caaef925edc1
+    profiles: [local-data]
     ports:
       - 127.0.0.1:${REDIS_PORT:-6379}:6379
+    volumes:
+      - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 20
+    networks: [private]
+
+networks:
+  private:
+    driver: bridge
+
+volumes:
+  caddy-data:
+  caddy-config:
+  mysql-data:
+  redis-data:

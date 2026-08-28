@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     # deployment already uses; the field keeps the readable spelling.
     redis_password: SecretStr | None = Field(default=None, alias="REDIS_PW")
     backoffice_public_url: str | None = None
+    # Where the process listens, which is not where browsers reach it. Behind
+    # a reverse proxy the public URL is a domain the container cannot bind,
+    # and deriving one from the other made the two impossible to separate.
+    # Loopback by default: a process that binds every interface should do so
+    # because someone said to.
+    backoffice_bind_host: str = "127.0.0.1"
+    backoffice_bind_port: int = 8000
     backoffice_allowed_email: str | None = None
     oauth_google_client_id: str | None = None
     oauth_google_client_secret: SecretStr | None = None

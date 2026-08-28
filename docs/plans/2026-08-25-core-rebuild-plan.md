@@ -422,6 +422,39 @@ python -m autotrader.apps.trader --account <alias> --check
 - Caddy만 80/443을 공개하고 나머지는 private network에 둔다.
 - migration·인증·비밀값·DB·Redis 실패 시 fail-closed.
 
+**진행 (2026-08-28)**
+
+`infra/compose/`에 스택을 만들었다. Caddy만 80/443을 공개하고, 나머지는 published
+port가 없다. `tests/architecture/test_compose_exposure.py`가 이 성질을 검사한다 —
+compose 파일은 타입 검사도 테스트도 받지 않는 곳이라 주장으로 남겨두지 않았다.
+
+- **migrate** — one-shot. backoffice와 capture가
+  `service_completed_successfully`를 기다린다. 마이그레이션 안 된 DB 위의
+  백오피스는 거부하지 않고 빈 금고를 그린다.
+- **backoffice** — Caddy 뒤에서 8000을 듣는다.
+- **capture** — 매일 UTC `CAPTURE_HOUR`에 돈다. 풋콜 계열이 존재하는 유일한
+  이유이며, 이 컨테이너가 안 뜬 날은 그 측정을 영영 못 얻는다. 실패해도 루프는
+  계속된다 — 거래소 하나가 안 되는 것은 하루치 손실이고, 종료하면 그 뒤 모든
+  날을 잃는다.
+- **trader-check** — 워커가 아니다. 루프에 생산자 없는 입력이 있으므로 무엇이
+  없는지 보고하고 끝난다. `--profile check`로만 뜬다.
+- **MySQL·Redis** — `--profile local-data`로만 뜨고 loopback에만 바인드한다.
+  이 프로젝트는 이미 외부 DB를 쓰고 있고, 기본으로 두 번째를 띄우면 두 DB가
+  반씩 채워지는 길이다.
+
+**컨테이너에 넣기 전에 고친 것:** 백오피스가 `BACKOFFICE_PUBLIC_URL`의 호스트명에
+바인드하고 있었다. 리버스 프록시 뒤에서는 컨테이너가 바인드할 수 없는 도메인이다.
+`BACKOFFICE_BIND_HOST`/`BACKOFFICE_BIND_PORT`로 분리했고 기본은 loopback이다 —
+모든 인터페이스에 바인드하는 것은 누가 그러라고 말했기 때문이어야 한다.
+
+Dockerfile도 고쳤다. `alembic.ini`와 `migrations/`를 복사하지 않아서 migrate
+서비스가 붙어서는 올릴 게 없다고 보고했을 것이고, root로 돌고 있었다 — 마스터
+키와 DB 비밀번호가 그 프로세스 환경에 들어온다.
+
+**미검증:** 이 머신에 Docker가 없어 이미지 빌드와 스택 기동을 실행해 보지 못했다.
+compose 구조와 노출 성질은 테스트로 확인했고, 실제 빌드와 브라우저 E2E는 Ubuntu
+호스트에서 해야 한다.
+
 ---
 
 ## 미검증 항목

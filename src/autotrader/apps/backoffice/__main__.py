@@ -27,7 +27,7 @@ def main(argv: tuple[str, ...]) -> int:
         print(USAGE, file=sys.stderr)
         return 2
     settings = Settings()
-    public_url = require_public_origin(
+    require_public_origin(
         str(settings.backoffice_public_url), name="BACKOFFICE_PUBLIC_URL"
     )
     # Built before the server starts, because reading the configuration
@@ -42,8 +42,14 @@ def main(argv: tuple[str, ...]) -> int:
             account_id=UUID(argv[0]),
         )
     )
-    host, _, port = public_url.rsplit("//", 1)[1].partition(":")
-    uvicorn.run(app, host=host, port=int(port or "8000"), log_level="info")
+    # The public URL is validated because it has to match what is registered
+    # with the identity provider. It is not where the process listens.
+    uvicorn.run(
+        app,
+        host=settings.backoffice_bind_host,
+        port=settings.backoffice_bind_port,
+        log_level="info",
+    )
     return 0
 
 
