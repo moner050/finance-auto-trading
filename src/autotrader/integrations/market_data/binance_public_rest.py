@@ -14,6 +14,8 @@ import httpx
 _BASE_URL = "https://fapi.binance.com"
 _KLINES = "/fapi/v1/klines"
 _AGG_TRADES = "/fapi/v1/aggTrades"
+_EXCHANGE_INFO = "/fapi/v1/exchangeInfo"
+_BOOK_TICKER = "/fapi/v1/ticker/bookTicker"
 _TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 
 
@@ -68,7 +70,43 @@ class BinancePublicRest:
             {"symbol": symbol, "fromId": str(from_id), "limit": str(limit)},
         )
 
+    async def exchange_info(self, *, symbol: str) -> dict[str, object]:
+        """The venue's own filters for one symbol.
+
+        Tick size and lot size decide the price and quantity of a real order,
+        so they are read from the exchange rather than configured. A number
+        typed into a settings file is a number that can be wrong while every
+        order it shapes still looks reasonable.
+        """
+        payload = await self._get_object(_EXCHANGE_INFO, {"symbol": symbol})
+        found = payload.get("symbols")
+        if not isinstance(found, list):
+            raise BinancePublicRestError(f"{_EXCHANGE_INFO} sent no symbols")
+        # The USD-M endpoint ignores the symbol parameter and answers with
+        # every listed contract, so the one asked for is selected here. It is
+        # still sent, because a venue that starts honouring it costs nothing.
+        for item in cast("list[object]", found):
+            if isinstance(item, dict) and item.get("symbol") == symbol:  # type: ignore[union-attr]
+                return cast("dict[str, object]", item)
+        raise BinancePublicRestError(f"{_EXCHANGE_INFO} does not list {symbol}")
+
+    async def book_ticker(self, *, symbol: str) -> dict[str, object]:
+        """The best bid and ask, which is what a spread is."""
+        return await self._get_object(_BOOK_TICKER, {"symbol": symbol})
+
+    async def _get_object(self, path: str, params: dict[str, str]) -> dict[str, object]:
+        payload = await self._request(path, params)
+        if not isinstance(payload, dict):
+            raise BinancePublicRestError(f"{path} did not answer with an object")
+        return cast("dict[str, object]", payload)
+
     async def _get(self, path: str, params: dict[str, str]) -> tuple[object, ...]:
+        payload = await self._request(path, params)
+        if not isinstance(payload, list):
+            raise BinancePublicRestError(f"{path} did not answer with a list")
+        return tuple(cast("list[object]", payload))
+
+    async def _request(self, path: str, params: dict[str, str]) -> object:
         client = self._ensure_client()
         try:
             response = await client.get(
@@ -79,10 +117,7 @@ class BinancePublicRest:
         if response.status_code != 200:
             # The body can carry a rate-limit ban, so keep the status visible.
             raise BinancePublicRestError(f"{path} answered {response.status_code}")
-        payload = response.json()
-        if not isinstance(payload, list):
-            raise BinancePublicRestError(f"{path} did not answer with a list")
-        return tuple(cast("list[object]", payload))
+        return response.json()
 
     def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None:

@@ -88,35 +88,58 @@ UNSOURCED_INPUTS = (
     MissingInput(
         name="order_flow_thresholds",
         reason=(
-            "OrderFlowThresholds is constructed nowhere in src; the notional "
-            "bands have no source"
+            "only delta_p90_notional names its percentile; the big-trade and "
+            "ceros bands have no stated definition to compute"
         ),
     ),
     MissingInput(
         name="fee_schedule",
         reason=(
-            "FeeSchedule is constructed nowhere in src; the venue's fees are "
-            "not read from exchange information or configured"
+            "FeeSchedule is per unit, so it needs a commission rate and a "
+            "price; the rate is account-specific and read from an "
+            "authenticated endpoint this has no credentials for"
         ),
     ),
     MissingInput(
         name="pessimism",
         reason=(
-            "PessimismInputs is constructed nowhere in src; the volatility, "
-            "put-call and breadth percentiles have no provider"
+            "PessimismInputs wants volatility, put-call and breadth "
+            "percentiles; a perpetual futures venue answers none of them"
         ),
     ),
     MissingInput(
         name="benchmark_returns",
         reason=(
             "no benchmark return series is stored or computed; the strategy "
-            "blocks with REGIME_UNAVAILABLE without it"
+            "blocks with REGIME_UNAVAILABLE without at least 200 of them"
         ),
     ),
     MissingInput(
-        name="atr_ratio, range_efficiency",
-        reason="computed from bars, but nothing computes them outside a test",
+        name="range_efficiency",
+        reason=(
+            "a point-in-time percentile, and the quantity it ranks is defined "
+            "in no strategy document; computing one would be inventing the "
+            "definition"
+        ),
     ),
+    MissingInput(
+        name="atr_ratio",
+        reason=(
+            "a point-in-time percentile of the ATR ratio; the ATR is "
+            "computable but the lookback it is ranked against is not stated"
+        ),
+    ),
+)
+
+# Read from the venue rather than configured, so they are no longer on the
+# list above: tick size, lot step, minimum quantity and minimum notional come
+# from exchangeInfo, and the spread from the best bid and ask.
+VENUE_SOURCED = (
+    "tick_size",
+    "quantity_step",
+    "minimum_quantity",
+    "minimum_notional",
+    "spread",
 )
 
 
@@ -308,6 +331,7 @@ def unsourced_inputs() -> tuple[MissingInput, ...]:
 
 __all__ = (
     "UNSOURCED_INPUTS",
+    "VENUE_SOURCED",
     "MissingInput",
     "OperatorFacts",
     "ResolvedAccount",

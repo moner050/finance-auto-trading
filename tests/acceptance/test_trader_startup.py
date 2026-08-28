@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from autotrader.apps.trader.startup import (
     UNSOURCED_INPUTS,
+    VENUE_SOURCED,
     OperatorFacts,
     StartupRefusedError,
     resolve_account,
@@ -245,6 +246,14 @@ def test_the_unsourced_inputs_are_named_rather_than_counted() -> None:
         "benchmark_returns",
     }
     assert all(item.reason for item in missing)
+
+
+def test_what_the_venue_answers_is_no_longer_missing() -> None:
+    """Tick size and lot size come from exchangeInfo now, so they are facts
+    rather than settings, and settings are where a wrong number hides."""
+    names = {item.name for item in unsourced_inputs()}
+
+    assert names.isdisjoint(VENUE_SOURCED)
 
 
 def test_operator_facts_have_no_defaults() -> None:
