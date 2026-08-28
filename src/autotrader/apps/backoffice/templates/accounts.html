@@ -14,18 +14,26 @@
       .missing { color: #b00020; }
       .empty { color: #777; }
       .note { color: #777; font-size: .85rem; }
+      .danger { color: #b00020; }
+      .panel { border: 1px solid #ccc; padding: 1rem 1.25rem; margin: 1rem 0; }
+      input, select { padding: .35rem; font-size: .95rem; }
+      button { padding: .4rem .8rem; font-size: .95rem; cursor: pointer; }
+      .go { background: #00701a; color: #fff; border: 1px solid #005414; font-weight: 600; }
+      .off { background: #fff; border: 1px solid #b00020; color: #b00020; }
     </style>
   </head>
   <body>
     <h1>계정과 자격증명 <span class="code">{{ session.operator.email }}</span></h1>
     <p><a href="/">← 운영 화면</a></p>
 
+    {% if error %}<p class="danger">{{ error }}</p>{% endif %}
+
     <h2>계정</h2>
     {% if view.accounts %}
     <table>
       <tr>
         <th>브로커</th><th>별칭</th><th>환경</th><th>사용</th>
-        <th>리스크 정책</th><th>자격증명 참조</th>
+        <th>리스크 정책</th><th>자격증명 참조</th><th></th>
       </tr>
       {% for account in view.accounts %}
       <tr>
@@ -43,11 +51,181 @@
           {% endif %}
         </td>
         <td class="code">{{ account.secret_reference }}</td>
+        <td>
+          {% if account.enabled %}
+          <form method="post" action="/accounts/disable">
+            <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
+            <input type="hidden" name="account_id" value="{{ account.account_id }}" />
+            <button class="off" type="submit">사용 중지</button>
+          </form>
+          {% else %}
+          <form method="post" action="/accounts/enable/approve">
+            <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
+            <input type="hidden" name="account_id" value="{{ account.account_id }}" />
+            <button type="submit">사용 시작</button>
+          </form>
+          {% endif %}
+        </td>
       </tr>
       {% endfor %}
     </table>
     {% else %}
     <p class="empty">등록된 계정이 없습니다.</p>
+    {% endif %}
+
+    <h2>계정 추가</h2>
+    <p class="note">
+      추가된 계정은 <strong>사용 안 함</strong> 상태로 만들어집니다. §9는 사용 시작에
+      2차 비밀번호를 요구하므로, 추가 단계에서 바로 쓰이게 만들면 관문을 건너뛰게
+      됩니다. 별칭에는 계좌번호를 넣지 마세요 — 숫자 6자리 이상이면 거부됩니다.
+    </p>
+    <form method="post" action="/accounts/create" class="panel">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
+      <p>
+        <label>브로커
+          <select name="broker_code" required>
+            {% for code in view.brokers %}
+            <option value="{{ code }}">{{ code }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>환경
+          <select name="environment" required>
+            <option value="PAPER">PAPER</option>
+            <option value="LIVE">LIVE</option>
+          </select>
+        </label>
+      </p>
+      <p>
+        <label>별칭 <input name="account_alias" required /></label>
+        <label>자격증명 참조
+          <input name="secret_reference" value="secret://" size="40" required />
+        </label>
+      </p>
+      <button type="submit">추가</button>
+    </form>
+
+    <h2>Provider 바인딩</h2>
+    <p class="note">
+      정산 실행이 붙는 단위입니다. 개정은 덮어쓰지 않고 쌓입니다 — 개정 3에
+      기록된 실행은 개정 4가 대체된 뒤에도 읽을 수 있어야 합니다.
+      환경은 계정에서 결정되고, account_seq는 Toss만 요구합니다.
+    </p>
+    {% if view.provider_bindings %}
+    <table>
+      <tr>
+        <th>계정</th><th>provider</th><th>환경</th><th>account_seq</th>
+        <th>개정</th><th>상태</th><th>기록 시각</th>
+      </tr>
+      {% for item in view.provider_bindings %}
+      <tr>
+        <td>{{ item.account_alias }}</td>
+        <td class="code">{{ item.provider_code }}</td>
+        <td class="code">{{ item.environment }}</td>
+        <td>{{ item.account_seq if item.account_seq is not none else '-' }}</td>
+        <td>{{ item.revision }}</td>
+        <td class="{{ 'ok' if item.active else 'empty' }}">
+          {{ '적용 중' if item.active else '이전' }}
+        </td>
+        <td class="code">{{ item.observed_at }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="empty">바인딩이 없습니다.</p>
+    {% endif %}
+
+    <form method="post" action="/accounts/provider/approve" class="panel">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
+      <p>
+        <label>계정
+          <select name="account_id" required>
+            {% for account in view.accounts %}
+            <option value="{{ account.account_id }}">
+              {{ account.account_alias }} ({{ account.broker_code }})
+            </option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>provider
+          <select name="provider_code" required>
+            <option value="KIS">KIS</option>
+            <option value="TOSS">TOSS</option>
+            <option value="BINANCE">BINANCE</option>
+          </select>
+        </label>
+        <label>account_seq <input name="account_seq" size="10" /></label>
+      </p>
+      <button type="submit">바인딩</button>
+    </form>
+
+    {% if enable %}
+    <div class="panel">
+      <h2>사용 시작 확인</h2>
+      <p>
+        <strong>{{ enable.account_alias }}</strong>
+        ({{ enable.broker_code }} · {{ enable.environment }}) 를 사용 시작합니다.
+        루프가 이 계정을 집어 갑니다.
+      </p>
+      {% if not enable.provider_bound %}
+      <p class="danger">provider 바인딩이 없습니다. 먼저 바인딩하세요.</p>
+      {% endif %}
+      {% if approval_id %}
+      <form method="post" action="/accounts/enable/apply">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
+        <input type="hidden" name="approval_id" value="{{ approval_id }}" />
+        <input type="hidden" name="account_id" value="{{ enable.account_id }}" />
+        <button class="go" type="submit">사용 시작</button>
+        <span class="note">승인은 60초 후 만료되며 한 번만 사용됩니다.</span>
+      </form>
+      {% else %}
+      <form method="post" action="/accounts/enable/approve">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
+        <input type="hidden" name="account_id" value="{{ enable.account_id }}" />
+        <p><label>2차 비밀번호
+          <input type="password" name="second_password" autocomplete="off" required />
+        </label></p>
+        <button type="submit">승인</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if provider %}
+    <div class="panel">
+      <h2>바인딩 확인</h2>
+      <p>
+        <strong>{{ provider.account_alias }}</strong> 에
+        <span class="code">{{ provider.provider_code }}</span> 를
+        {{ provider.environment }} 환경으로 바인딩합니다.
+        현재 개정 {{ provider.current_revision or '없음' }} →
+        다음 개정으로 넘어갑니다.
+      </p>
+      {% if approval_id %}
+      <form method="post" action="/accounts/provider/apply">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
+        <input type="hidden" name="approval_id" value="{{ approval_id }}" />
+        <input type="hidden" name="account_id" value="{{ provider.account_id }}" />
+        <input type="hidden" name="provider_code" value="{{ provider.provider_code }}" />
+        <input type="hidden" name="account_seq"
+               value="{{ provider.account_seq if provider.account_seq is not none else '' }}" />
+        <button class="go" type="submit">바인딩 적용</button>
+        <span class="note">승인은 60초 후 만료되며 한 번만 사용됩니다.</span>
+      </form>
+      {% else %}
+      <form method="post" action="/accounts/provider/approve">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
+        <input type="hidden" name="account_id" value="{{ provider.account_id }}" />
+        <input type="hidden" name="provider_code" value="{{ provider.provider_code }}" />
+        <input type="hidden" name="account_seq"
+               value="{{ provider.account_seq if provider.account_seq is not none else '' }}" />
+        <p><label>2차 비밀번호
+          <input type="password" name="second_password" autocomplete="off" required />
+        </label></p>
+        <button type="submit">승인</button>
+      </form>
+      {% endif %}
+    </div>
     {% endif %}
 
     <p class="note">

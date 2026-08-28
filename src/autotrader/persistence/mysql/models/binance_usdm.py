@@ -15,7 +15,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.mysql import DATETIME, VARBINARY
+from sqlalchemy.dialects.mysql import VARBINARY
 from sqlalchemy.orm import Mapped, mapped_column
 
 from autotrader.persistence.mysql.models.core import CoreBase
@@ -27,11 +27,6 @@ _BINDING_FK_TARGET = (
     "exec_provider_account_binding.id",
     "exec_provider_account_binding.account_id",
 )
-
-
-class _UtcDateTime6(UtcDateTime):
-    impl = DATETIME(fsp=6)
-    cache_ok = True
 
 
 class BinanceUsdmReconciliationRunRow(CoreBase):
@@ -92,9 +87,9 @@ class BinanceUsdmReconciliationRunRow(CoreBase):
     settlement_asset: Mapped[str] = mapped_column(
         String(8, collation="ascii_bin"), nullable=False
     )
-    provider_as_of: Mapped[datetime] = mapped_column(_UtcDateTime6(), nullable=False)
-    started_at: Mapped[datetime] = mapped_column(_UtcDateTime6(), nullable=False)
-    completed_at: Mapped[datetime] = mapped_column(_UtcDateTime6(), nullable=False)
+    provider_as_of: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
     result: Mapped[str] = mapped_column(
         String(16, collation="ascii_bin"), nullable=False
     )
@@ -134,8 +129,8 @@ class BinanceUsdmBalanceFactRow(CoreBase):
     maximum_withdraw_amount: Mapped[Decimal] = mapped_column(
         Numeric(38, 18), nullable=False
     )
-    updated_at: Mapped[datetime] = mapped_column(_UtcDateTime6(), nullable=False)
-    captured_at: Mapped[datetime] = mapped_column(_UtcDateTime6(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
 
 
 class BinanceUsdmPositionFactRow(CoreBase):
@@ -193,8 +188,8 @@ class BinanceUsdmPositionFactRow(CoreBase):
     open_order_initial_margin: Mapped[Decimal] = mapped_column(
         Numeric(38, 18), nullable=False
     )
-    updated_at: Mapped[datetime] = mapped_column(_UtcDateTime6(), nullable=False)
-    captured_at: Mapped[datetime] = mapped_column(_UtcDateTime6(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
 
 
 class BinanceUsdmOrderFactRow(CoreBase):
@@ -247,7 +242,7 @@ class BinanceUsdmOrderFactRow(CoreBase):
     original_quantity: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     reduce_only: Mapped[bool] = mapped_column(Boolean(), nullable=False)
     close_position: Mapped[bool] = mapped_column(Boolean(), nullable=False)
-    captured_at: Mapped[datetime] = mapped_column(_UtcDateTime6(), nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
 
 
 class BinanceUsdmAlgoOrderFactRow(CoreBase):
@@ -298,7 +293,7 @@ class BinanceUsdmAlgoOrderFactRow(CoreBase):
     quantity: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     trigger_price: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     close_position: Mapped[bool] = mapped_column(Boolean(), nullable=False)
-    captured_at: Mapped[datetime] = mapped_column(_UtcDateTime6(), nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
 
 
 class BinanceUsdmTradeFactRow(CoreBase):
@@ -341,8 +336,8 @@ class BinanceUsdmTradeFactRow(CoreBase):
         String(8, collation="ascii_bin"), nullable=False
     )
     realized_pnl: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
-    occurred_at: Mapped[datetime] = mapped_column(_UtcDateTime6(), nullable=False)
-    captured_at: Mapped[datetime] = mapped_column(_UtcDateTime6(), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
 
 
 class BinanceUsdmIncomeFactRow(CoreBase):
@@ -386,8 +381,8 @@ class BinanceUsdmIncomeFactRow(CoreBase):
     )
     income: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     asset: Mapped[str] = mapped_column(String(8, collation="ascii_bin"), nullable=False)
-    occurred_at: Mapped[datetime] = mapped_column(_UtcDateTime6(), nullable=False)
-    captured_at: Mapped[datetime] = mapped_column(_UtcDateTime6(), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
 
 
 class BinanceUsdmConfigurationFactRow(CoreBase):
@@ -428,7 +423,7 @@ class BinanceUsdmConfigurationFactRow(CoreBase):
     minimum_quantity: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     quantity_step_size: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
     minimum_notional: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
-    captured_at: Mapped[datetime] = mapped_column(_UtcDateTime6(), nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
 
 
 __all__ = (

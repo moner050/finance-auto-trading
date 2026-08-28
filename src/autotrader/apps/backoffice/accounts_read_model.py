@@ -14,6 +14,7 @@ cannot sign a request is worse than seeing nothing.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -33,6 +34,10 @@ from autotrader.persistence.mysql.models.accounts import Account, Broker
 from autotrader.persistence.mysql.repositories.policy_binding import (
     AccountPolicyBindings,
     PolicyBinding,
+)
+from autotrader.persistence.mysql.repositories.provider_binding import (
+    ProviderBinding,
+    ProviderBindings,
 )
 from autotrader.security.secret_crypto import MasterKeyRing
 
@@ -67,6 +72,7 @@ class ProviderCredentialsView:
 
 @dataclass(frozen=True, slots=True)
 class AccountView:
+    account_id: UUID
     account_alias: str
     broker_code: str
     environment: str
@@ -84,15 +90,47 @@ class AccountView:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderBindingView:
+    """One revision of a provider acting for an account.
+
+    History is shown, not just the active one: a run recorded against
+    revision three has to remain readable after revision four replaces it.
+    """
+
+    account_alias: str
+    provider_code: str
+    environment: str
+    account_seq: int | None
+    revision: int
+    active: bool
+    observed_at: str
+
+
+@dataclass(frozen=True, slots=True)
 class AccountsView:
     accounts: tuple[AccountView, ...]
     credentials: tuple[ProviderCredentialsView, ...]
+    brokers: tuple[str, ...]
+    provider_bindings: tuple[ProviderBindingView, ...]
+
+
+def _provider_binding_view(binding: ProviderBinding) -> ProviderBindingView:
+    return ProviderBindingView(
+        account_alias=binding.account_alias,
+        provider_code=binding.provider_code,
+        environment=binding.environment,
+        account_seq=binding.account_seq,
+        revision=binding.revision,
+        active=binding.active,
+        observed_at=binding.observed_at.isoformat(timespec="seconds"),
+    )
 
 
 def _account_view(
     account: Account, broker_code: str, binding: PolicyBinding | None
 ) -> AccountView:
     return AccountView(
+        account_id=account.id,
         account_alias=account.account_alias,
         broker_code=broker_code,
         environment=account.environment,
@@ -114,6 +152,8 @@ class AccountsReadModel:
         return AccountsView(
             accounts=await self.accounts(),
             credentials=await self.credentials(),
+            brokers=await self.brokers(),
+            provider_bindings=await self.provider_bindings(),
         )
 
     async def accounts(self) -> tuple[AccountView, ...]:
@@ -136,6 +176,31 @@ class AccountsReadModel:
                     for account, code in rows
                 ]
             )
+
+    async def brokers(self) -> tuple[str, ...]:
+        """The codes an account can be created under, from the table.
+
+        A hard-coded list here would let the form offer a broker no row
+        matches, and the refusal would arrive after the operator filled it in.
+        """
+        async with self._sessions() as session:
+            codes = (
+                await session.scalars(select(Broker.code).order_by(Broker.code))
+            ).all()
+        return tuple(codes)
+
+    async def provider_bindings(self) -> tuple[ProviderBindingView, ...]:
+        async with self._sessions() as session:
+            accounts = (await session.scalars(select(Account.id))).all()
+            repository = ProviderBindings(session)
+            views: list[ProviderBindingView] = []
+            for account_id in accounts:
+                views.extend(
+                    _provider_binding_view(binding)
+                    for binding in await repository.for_account(account_id)
+                )
+            await session.rollback()
+        return tuple(views)
 
     async def credentials(self) -> tuple[ProviderCredentialsView, ...]:
         collected: list[ProviderCredentialsView] = []
@@ -183,6 +248,7 @@ __all__ = (
     "AccountView",
     "AccountsReadModel",
     "AccountsView",
+    "ProviderBindingView",
     "ProviderCredentialsView",
     "StoredValueView",
 )

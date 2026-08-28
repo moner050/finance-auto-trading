@@ -71,12 +71,14 @@ def test_account_isolation_secret_reference_and_signed_observed_position() -> No
                     account_alias="same-alias",
                     environment="PAPER",
                     secret_reference="secret://paper",
+                    enabled=True,
                 )
                 live = await accounts.create(
                     broker_id=broker.id,
                     account_alias="same-alias",
                     environment="LIVE",
                     secret_reference="secret://live",
+                    enabled=True,
                 )
                 assert paper.id != live.id
                 with pytest.raises(ValueError, match="plaintext"):
@@ -85,6 +87,7 @@ def test_account_isolation_secret_reference_and_signed_observed_position() -> No
                         account_alias="plain-12345678",
                         environment="PAPER",
                         secret_reference="secret://bad",
+                        enabled=False,
                     )
                 observed = Position(
                     id=uuid7(),

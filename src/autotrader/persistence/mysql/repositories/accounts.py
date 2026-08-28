@@ -20,7 +20,15 @@ class AccountRepository:
         account_alias: str,
         environment: str,
         secret_reference: str,
+        enabled: bool,
     ) -> Account:
+        """`enabled` has no default on purpose.
+
+        Section 9 puts the second password on account enablement. A create
+        that quietly enabled would hand out the gated state without the gate,
+        and a default here is exactly how that happens without anyone
+        choosing it.
+        """
         if len(re.sub(r"[^0-9]", "", account_alias)) >= 6:
             raise ValueError("plaintext account number is not allowed")
         if not secret_reference.startswith("secret://"):
@@ -30,9 +38,20 @@ class AccountRepository:
             account_alias=account_alias,
             environment=environment,
             secret_reference=secret_reference,
-            enabled=True,
+            enabled=enabled,
         )
         self._session.add(account)
+        await self._session.flush()
+        return account
+
+    async def set_enabled(self, account_id: UUID, *, enabled: bool) -> Account:
+        """Turn one account on or off, and say which it was."""
+        account = await self._session.scalar(
+            select(Account).where(Account.id == account_id).with_for_update()
+        )
+        if account is None:
+            raise LookupError("that account is not stored")
+        account.enabled = enabled
         await self._session.flush()
         return account
 

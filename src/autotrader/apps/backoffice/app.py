@@ -17,6 +17,17 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from autotrader.apps.backoffice.account_commands import (
+    EnableFacts,
+    MySqlAccountCommands,
+    ProviderBindingFacts,
+)
+from autotrader.apps.backoffice.account_commands import (
+    binding_approval_for as provider_approval_for,
+)
+from autotrader.apps.backoffice.account_commands import (
+    enable_approval_for as account_enable_approval_for,
+)
 from autotrader.apps.backoffice.accounts_read_model import AccountsReadModel
 from autotrader.apps.backoffice.auth import (
     SESSION_COOKIE,
@@ -44,6 +55,7 @@ from autotrader.apps.backoffice.commands import (
     SafetyAction,
     new_command,
 )
+from autotrader.apps.backoffice.evidence_read_model import EvidenceReadModel
 from autotrader.apps.backoffice.exposure import (
     DangerousAction,
     MySqlExposureControls,
@@ -129,8 +141,10 @@ def create_app(
     account_reader = None if keys is None else AccountsReadModel(sessions, keys)
     secret_store = None if keys is None else MySqlSecretStore(sessions, keys)
     policy_reader = PoliciesReadModel(sessions)
+    evidence_reader = EvidenceReadModel(sessions)
     policy_commands = MySqlPolicyCommands(sessions=sessions, approvals=approvals)
     binding_commands = MySqlBindingCommands(sessions=sessions, approvals=approvals)
+    account_commands = MySqlAccountCommands(sessions=sessions, approvals=approvals)
     secret_commands = (
         None
         if secret_store is None
@@ -214,16 +228,7 @@ def create_app(
         request: Request,
         session: Annotated[Session, Depends(require_session)],
     ) -> Response:
-        if account_reader is None:
-            # Without a master key nothing here can even name a credential,
-            # and a page that renders every value as absent would read as an
-            # empty vault rather than as a missing key.
-            raise HTTPException(status_code=503, detail="secrets are unavailable")
-        return templates.TemplateResponse(
-            request=request,
-            name="accounts.html",
-            context={"session": session, "view": await account_reader.load()},
-        )
+        return await _render_accounts(request, session, templates, account_reader)
 
     async def secrets_page(
         request: Request,
@@ -351,6 +356,203 @@ def create_app(
             session_id=_session_id(request),
         )
         return await _render_secrets(request, session, templates, secret_store)
+
+    async def create_account(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        csrf_token: str = Form(...),
+        broker_code: str = Form(...),
+        account_alias: str = Form(...),
+        environment: str = Form(...),
+        secret_reference: str = Form(...),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        # Section 9 gates enablement, not creation; the row this writes is
+        # disabled and cannot trade.
+        await account_commands.create(
+            broker_code=broker_code,
+            account_alias=account_alias,
+            environment=environment,
+            secret_reference=secret_reference,
+            operator=session.operator,
+            source_ip=_source_ip(request),
+            correlation_id=request.headers.get("x-request-id", str(new_uuid7())),
+            now=datetime.now(UTC),
+        )
+        return await _render_accounts(request, session, templates, account_reader)
+
+    async def disable_account(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        csrf_token: str = Form(...),
+        account_id: str = Form(...),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        # No second password, for the same reason HALT has none: taking an
+        # account out of service must work when the approval path does not.
+        await account_commands.set_enabled(
+            account_id=_uuid(account_id, "unknown account"),
+            enabled=False,
+            operator=session.operator,
+            source_ip=_source_ip(request),
+            correlation_id=request.headers.get("x-request-id", str(new_uuid7())),
+            approval_id=None,
+            session_id=_session_id(request),
+            now=datetime.now(UTC),
+        )
+        return await _render_accounts(request, session, templates, account_reader)
+
+    async def approve_enable_account(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        csrf_token: str = Form(...),
+        account_id: str = Form(...),
+        second_password: str | None = Form(None),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        facts = await account_commands.enable_facts(
+            _uuid(account_id, "unknown account")
+        )
+        if second_password is None:
+            return await _render_accounts(
+                request, session, templates, account_reader, enable=facts
+            )
+        session_id = _session_id(request)
+        source_ip = _source_ip(request)
+        await approvals.require_attempts_left(
+            session_id=session_id, source_ip=source_ip
+        )
+        verifier = await passwords.active()
+        if not check_password(verifier, second_password):
+            await approvals.record_failure(session_id=session_id, source_ip=source_ip)
+            return await _render_accounts(
+                request,
+                session,
+                templates,
+                account_reader,
+                enable=facts,
+                error=PASSWORD_MISMATCH,
+            )
+        await approvals.clear_failures(session_id=session_id, source_ip=source_ip)
+        approval_id = await approvals.issue(
+            account_enable_approval_for(
+                session_id=session_id, operator=session.operator, facts=facts
+            )
+        )
+        return await _render_accounts(
+            request,
+            session,
+            templates,
+            account_reader,
+            enable=facts,
+            approval_id=approval_id,
+        )
+
+    async def apply_enable_account(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        csrf_token: str = Form(...),
+        account_id: str = Form(...),
+        approval_id: str = Form(...),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        await account_commands.set_enabled(
+            account_id=_uuid(account_id, "unknown account"),
+            enabled=True,
+            operator=session.operator,
+            source_ip=_source_ip(request),
+            correlation_id=request.headers.get("x-request-id", str(new_uuid7())),
+            approval_id=approval_id,
+            session_id=_session_id(request),
+            now=datetime.now(UTC),
+        )
+        return await _render_accounts(request, session, templates, account_reader)
+
+    async def approve_provider_binding(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        csrf_token: str = Form(...),
+        account_id: str = Form(...),
+        provider_code: str = Form(...),
+        account_seq: str = Form(""),
+        second_password: str | None = Form(None),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        facts = await account_commands.binding_facts(
+            account_id=_uuid(account_id, "unknown account"),
+            provider_code=provider_code,
+            account_seq=_account_seq(account_seq),
+        )
+        if second_password is None:
+            return await _render_accounts(
+                request, session, templates, account_reader, provider=facts
+            )
+        session_id = _session_id(request)
+        source_ip = _source_ip(request)
+        await approvals.require_attempts_left(
+            session_id=session_id, source_ip=source_ip
+        )
+        verifier = await passwords.active()
+        if not check_password(verifier, second_password):
+            await approvals.record_failure(session_id=session_id, source_ip=source_ip)
+            return await _render_accounts(
+                request,
+                session,
+                templates,
+                account_reader,
+                provider=facts,
+                error=PASSWORD_MISMATCH,
+            )
+        await approvals.clear_failures(session_id=session_id, source_ip=source_ip)
+        approval_id = await approvals.issue(
+            provider_approval_for(
+                session_id=session_id, operator=session.operator, facts=facts
+            )
+        )
+        return await _render_accounts(
+            request,
+            session,
+            templates,
+            account_reader,
+            provider=facts,
+            approval_id=approval_id,
+        )
+
+    async def apply_provider_binding(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        csrf_token: str = Form(...),
+        account_id: str = Form(...),
+        provider_code: str = Form(...),
+        account_seq: str = Form(""),
+        approval_id: str = Form(...),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        await account_commands.bind_provider(
+            account_id=_uuid(account_id, "unknown account"),
+            provider_code=provider_code,
+            account_seq=_account_seq(account_seq),
+            operator=session.operator,
+            source_ip=_source_ip(request),
+            correlation_id=request.headers.get("x-request-id", str(new_uuid7())),
+            approval_id=approval_id,
+            session_id=_session_id(request),
+            now=datetime.now(UTC),
+        )
+        return await _render_accounts(request, session, templates, account_reader)
+
+    async def evidence_page(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+    ) -> Response:
+        return templates.TemplateResponse(
+            request=request,
+            name="evidence.html",
+            context={
+                "session": session,
+                "view": await evidence_reader.load(now=datetime.now(UTC)),
+            },
+        )
 
     async def policies_page(
         request: Request,
@@ -635,6 +837,45 @@ def create_app(
         "/secrets", secrets_page, methods=["GET"], response_class=HTMLResponse
     )
     app.add_api_route(
+        "/accounts/create",
+        create_account,
+        methods=["POST"],
+        response_class=HTMLResponse,
+    )
+    app.add_api_route(
+        "/accounts/disable",
+        disable_account,
+        methods=["POST"],
+        response_class=HTMLResponse,
+    )
+    app.add_api_route(
+        "/accounts/enable/approve",
+        approve_enable_account,
+        methods=["POST"],
+        response_class=HTMLResponse,
+    )
+    app.add_api_route(
+        "/accounts/enable/apply",
+        apply_enable_account,
+        methods=["POST"],
+        response_class=HTMLResponse,
+    )
+    app.add_api_route(
+        "/accounts/provider/approve",
+        approve_provider_binding,
+        methods=["POST"],
+        response_class=HTMLResponse,
+    )
+    app.add_api_route(
+        "/accounts/provider/apply",
+        apply_provider_binding,
+        methods=["POST"],
+        response_class=HTMLResponse,
+    )
+    app.add_api_route(
+        "/evidence", evidence_page, methods=["GET"], response_class=HTMLResponse
+    )
+    app.add_api_route(
         "/policies", policies_page, methods=["GET"], response_class=HTMLResponse
     )
     app.add_api_route(
@@ -694,6 +935,36 @@ def create_app(
     return app
 
 
+async def _render_accounts(
+    request: Request,
+    session: Session,
+    templates: Jinja2Templates,
+    reader: AccountsReadModel | None,
+    *,
+    error: str | None = None,
+    enable: EnableFacts | None = None,
+    provider: ProviderBindingFacts | None = None,
+    approval_id: str | None = None,
+) -> Response:
+    if reader is None:
+        # Without a master key nothing here can even name a credential, and a
+        # page that renders every value as absent would read as an empty vault
+        # rather than as a missing key.
+        raise HTTPException(status_code=503, detail="secrets are unavailable")
+    return templates.TemplateResponse(
+        request=request,
+        name="accounts.html",
+        context={
+            "session": session,
+            "view": await reader.load(),
+            "error": error,
+            "enable": enable,
+            "provider": provider,
+            "approval_id": approval_id,
+        },
+    )
+
+
 async def _render_policies(
     request: Request,
     session: Session,
@@ -719,6 +990,19 @@ async def _render_policies(
             "approval_id": approval_id,
         },
     )
+
+
+def _account_seq(value: str) -> int | None:
+    """Blank means absent, which is what KIS and Binance require."""
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400, detail="account_seq must be a whole number"
+        ) from error
 
 
 def _uuid(value: str, detail: str) -> UUID:
