@@ -101,10 +101,11 @@ UNSOURCED_INPUTS = (
         ),
     ),
     MissingInput(
-        name="pessimism",
+        name="pessimism.put_call_percentile",
         reason=(
-            "PessimismInputs wants volatility, put-call and breadth "
-            "percentiles; a perpetual futures venue answers none of them"
+            "the last of the three. Realised volatility and market breadth "
+            "are computed from Binance's own data; a perpetual futures venue "
+            "lists no options, so this one has no source here at all"
         ),
     ),
     MissingInput(
@@ -140,6 +141,10 @@ VENUE_SOURCED = (
     "minimum_quantity",
     "minimum_notional",
     "spread",
+    # Breadth is the share of the venue's own USDT perpetual contracts
+    # advancing, ranked against its own history. Measured, not configured.
+    "pessimism.breadth_percentile",
+    "pessimism.volatility_percentile",
 )
 
 

@@ -24,6 +24,7 @@ TABLES: tuple[str, ...] = (
     "exec_order_intent",
     "exec_order_intent_legacy_strategy_link",
     "exec_reconciliation_diff",
+    "market_pessimism_daily",
     "ops_audit_log",
     "ops_inbox_dead_letter",
     "ops_inbox_event",
@@ -259,6 +260,23 @@ _CREATE: tuple[str, ...] = (
     CONSTRAINT ck_exec_reconciliation_diff_severity CHECK (severity in ('INFO','WARNING','BLOCKING')),
     CONSTRAINT ck_exec_reconciliation_diff_status CHECK (status in ('OPEN','RESOLVED')),
     CONSTRAINT uq_exec_reconciliation_diff_identity UNIQUE (run_id, diff_key)
+)""",
+    """CREATE TABLE market_pessimism_daily (
+    id BINARY(16) NOT NULL,
+    exchange_date DATE NOT NULL,
+    realised_volatility NUMERIC(38, 18),
+    breadth_advancing BIGINT,
+    breadth_declining BIGINT,
+    breadth_unchanged BIGINT,
+    calls_volume NUMERIC(38, 18),
+    puts_volume NUMERIC(38, 18),
+    captured_at DATETIME(6) NOT NULL,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_market_pessimism_daily_day UNIQUE (exchange_date),
+    CONSTRAINT ck_market_pessimism_daily_non_negative CHECK ((realised_volatility IS NULL OR realised_volatility >= 0) AND (breadth_advancing IS NULL OR breadth_advancing >= 0) AND (breadth_declining IS NULL OR breadth_declining >= 0) AND (breadth_unchanged IS NULL OR breadth_unchanged >= 0) AND (calls_volume IS NULL OR calls_volume >= 0) AND (puts_volume IS NULL OR puts_volume >= 0)),
+    CONSTRAINT ck_market_pessimism_daily_breadth_whole CHECK ((breadth_advancing IS NULL AND breadth_declining IS NULL AND breadth_unchanged IS NULL) OR (breadth_advancing IS NOT NULL AND breadth_declining IS NOT NULL AND breadth_unchanged IS NOT NULL)),
+    CONSTRAINT ck_market_pessimism_daily_put_call_whole CHECK ((calls_volume IS NULL AND puts_volume IS NULL) OR (calls_volume IS NOT NULL AND puts_volume IS NOT NULL)),
+    CONSTRAINT ck_market_pessimism_daily_not_empty CHECK (realised_volatility IS NOT NULL OR breadth_advancing IS NOT NULL OR calls_volume IS NOT NULL)
 )""",
     """CREATE TABLE ops_audit_log (
     id BINARY(16) NOT NULL,

@@ -242,7 +242,9 @@ def test_the_unsourced_inputs_are_named_rather_than_counted() -> None:
         "calendar",
         "fee_schedule",
         "order_flow_thresholds",
-        "pessimism",
+        # Named down to the one percentile still without a source, rather than
+        # the whole of pessimism: two of its three are measured now.
+        "pessimism.put_call_percentile",
         "benchmark_returns",
     }
     assert all(item.reason for item in missing)

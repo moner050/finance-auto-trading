@@ -90,6 +90,10 @@ class BinancePublicRest:
                 return cast("dict[str, object]", item)
         raise BinancePublicRestError(f"{_EXCHANGE_INFO} does not list {symbol}")
 
+    async def exchange_info_all(self) -> dict[str, object]:
+        """Every listed contract, which is how the venue defines its market."""
+        return await self._get_object(_EXCHANGE_INFO, {})
+
     async def book_ticker(self, *, symbol: str) -> dict[str, object]:
         """The best bid and ask, which is what a spread is."""
         return await self._get_object(_BOOK_TICKER, {"symbol": symbol})
