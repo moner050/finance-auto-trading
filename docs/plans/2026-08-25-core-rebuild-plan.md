@@ -372,6 +372,35 @@ staged/active 개념이 통째로 없고(`core_instrument`는 평평한 목록�
 
 ---
 
+## 트레이더 진입점 (2026-08-27)
+
+트레이더를 시작할 방법이 없었다. 백오피스에는 `__main__.py`가 있는데 트레이더에는
+없었고, `binance_paper.run()`은 아무도 호출하지 않았다. Phase 2~3에서 만든 것이
+전부 테스트에서만 돌고 있었다는 뜻이다.
+
+```
+python -m autotrader.apps.trader --account <alias> --check
+```
+
+`--check`가 계정·브로커·provider 바인딩·정책 바인딩·인스트루먼트·manifest를 DB에서
+해석하고, **없는 것을 한 번에 전부 이름으로** 보고한다. 하나 고치면 다음 것을
+알려주는 방식은 운영자를 재시작으로 목록을 훑게 만든다.
+
+**아직 루프를 돌리지 못한다.** `BinanceLoopInputs`의 여섯 입력이 `src/` 안에
+생산자가 없다 — `ExchangeCalendar`, `OrderFlowThresholds`, `FeeSchedule`,
+`PessimismInputs`, benchmark 수익률 계열, `atr_ratio`/`range_efficiency`.
+다섯 타입은 단위 테스트에서만 생성된다.
+
+지어내지 않고 시작도 하지 않는 쪽을 골랐다. 지어내야 할 값이 tick size·수수료·
+자본이고 이는 "운영자의 돈이며 어떤 전략도 지어내서는 안 되는" 것이다. 게다가
+`assembly.py`가 regime 없이는 `REGIME_UNAVAILABLE`로 막으므로, 절반쯤 지어낸
+입력으로 켜면 **도는 것처럼 보이면서 매 패스 거래를 거부하는** 상태가 된다.
+그게 안 켜지는 것보다 나쁘다.
+
+`UNSOURCED_INPUTS`가 그 목록이며 작업 항목이다.
+
+---
+
 ## Phase 5 — LIVE 승격
 
 제거한 8단계 승격 의식을 되살리지 않는다. 대신 실제로 위험을 줄이는 최소 조건만 둔다.
