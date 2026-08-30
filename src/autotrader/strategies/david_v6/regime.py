@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
+from itertools import pairwise
 from typing import cast
 
 from autotrader.shared.decimal import require_decimal
@@ -47,38 +48,101 @@ class PessimismInputs:
 
 @dataclass(frozen=True, slots=True)
 class RegimeFacts:
+    """The author's regime, and two observations beside it.
+
+    Section 2.1 gives the regime as SMA 6/70/200 on the instrument: slope of
+    the 200 positive, the 70 above it, the 70's slope positive. That is all of
+    it, and `trend` is it.
+
+    `sideways` and `low_volatility` are not in that rule. They were added on
+    top of it and they used to exclude a trade on their own, which made the
+    system refuse in conditions the author traded through. They are reported
+    now and gate nothing.
+
+    `pessimism_extreme` is a condition on one signal, not on the regime. The
+    author uses it for a MACD cross below zero and nowhere else, so its
+    absence leaves the regime available rather than blocking every decision.
+    """
+
     state: EvidenceState
     trend: RegimeLabel | None
-    sideways: bool
-    low_volatility: bool
+    sideways: bool | None
+    low_volatility: bool | None
     pessimism_extreme: bool | None
     excluded: bool
+
+
+def daily_returns(closes: Sequence[Decimal]) -> tuple[Decimal, ...]:
+    """The series `evaluate_regime` ranks a trend from, from daily closes.
+
+    Section 2.1 gives the author's regime as SMA 6/70/200 on the instrument
+    itself: slope(sma200) > 0 and sma70 > sma200 and slope(sma70) > 0, with
+    those lengths marked as observed from his screen and not to be optimised.
+    `_trend` implements exactly that, over a level series it rebuilds from
+    returns.
+
+    Rebasing is a positive scale factor and a simple moving average is linear,
+    so the comparisons and the slopes come out the same whether they are taken
+    over closes or over closes divided by the first one. The instrument's own
+    returns therefore reproduce the author's rule rather than approximate it,
+    and no separate benchmark has to be chosen.
+    """
+    prices = [require_decimal(close) for close in closes]
+    if any(price <= 0 for price in prices):
+        raise ValueError("a close must be positive")
+    return tuple((later - earlier) / earlier for earlier, later in pairwise(prices))
 
 
 def evaluate_regime(
     *,
     benchmark_returns: Sequence[Decimal],
-    atr_ratio: Decimal,
-    range_efficiency: Decimal,
-    pessimism_inputs: PessimismInputs,
+    atr_ratio: Decimal | None = None,
+    range_efficiency: Decimal | None = None,
+    pessimism_inputs: PessimismInputs | None = None,
 ) -> RegimeFacts:
-    volatility_percentile = _percentile(atr_ratio, "atr_ratio")
-    efficiency_percentile = _percentile(range_efficiency, "range_efficiency")
-    if type(cast(object, pessimism_inputs)) is not PessimismInputs:
+    """The regime, from the only rule the author gave for it.
+
+    Everything except the trend is optional because everything except the
+    trend is something else: two observations the author's rule does not
+    consult, and a condition that belongs to one signal.
+    """
+    volatility_percentile = (
+        None if atr_ratio is None else _percentile(atr_ratio, "atr_ratio")
+    )
+    efficiency_percentile = (
+        None
+        if range_efficiency is None
+        else _percentile(range_efficiency, "range_efficiency")
+    )
+    if pessimism_inputs is not None and (
+        type(cast(object, pessimism_inputs)) is not PessimismInputs
+    ):
         raise TypeError("pessimism_inputs must be exact PessimismInputs")
     returns = _returns(benchmark_returns)
-    sideways = efficiency_percentile <= _BOTTOM_QUINTILE
-    low_volatility = volatility_percentile <= _BOTTOM_QUINTILE
-    pessimism_extreme = _pessimism_extreme(pessimism_inputs)
+    sideways = (
+        None
+        if efficiency_percentile is None
+        else efficiency_percentile <= _BOTTOM_QUINTILE
+    )
+    low_volatility = (
+        None
+        if volatility_percentile is None
+        else volatility_percentile <= _BOTTOM_QUINTILE
+    )
+    pessimism_extreme = (
+        None if pessimism_inputs is None else _pessimism_extreme(pessimism_inputs)
+    )
     trend = _trend(returns)
-    available = trend is not None and pessimism_extreme is not None
+    # The regime is available when its rule can be evaluated, which needs the
+    # two hundred closes the SMAs are taken over and nothing else.
+    available = trend is not None
     return RegimeFacts(
         state=(EvidenceState.AVAILABLE if available else EvidenceState.UNAVAILABLE),
         trend=trend,
         sideways=sideways,
         low_volatility=low_volatility,
         pessimism_extreme=pessimism_extreme,
-        excluded=sideways or low_volatility or not available,
+        excluded=not available,
     )
 
 
@@ -139,5 +203,6 @@ __all__ = (
     "PessimismInputs",
     "RegimeFacts",
     "RegimeLabel",
+    "daily_returns",
     "evaluate_regime",
 )

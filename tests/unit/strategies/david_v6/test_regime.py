@@ -3,11 +3,14 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from autotrader.strategies.david_v6.models import EvidenceState
 from autotrader.strategies.david_v6.regime import (
     PessimismInputs,
     RegimeFacts,
     RegimeLabel,
+    daily_returns,
     evaluate_regime,
 )
 
@@ -28,8 +31,8 @@ def _pessimism(**changes: object) -> PessimismInputs:
 def _evaluate(
     *,
     returns: tuple[Decimal, ...] | None = None,
-    atr_ratio: Decimal = Decimal("0.50"),
-    range_efficiency: Decimal = Decimal("0.50"),
+    atr_ratio: Decimal | None = Decimal("0.50"),
+    range_efficiency: Decimal | None = Decimal("0.50"),
     pessimism: PessimismInputs | None = None,
 ) -> RegimeFacts:
     return evaluate_regime(
@@ -46,20 +49,33 @@ def test_trend_labels_use_completed_return_history() -> None:
     assert _evaluate(returns=(Decimal("0"),) * 200).trend is RegimeLabel.BALANCE
 
 
-def test_sideways_and_low_volatility_bottom_quintiles_are_independent() -> None:
+def test_sideways_and_low_volatility_are_observed_but_gate_nothing() -> None:
+    """Section 2.1's regime is the SMA rule alone. These two were added on top
+    of it and used to exclude a trade by themselves, which refused in
+    conditions the author traded through."""
     sideways = _evaluate(range_efficiency=Decimal("0.20"))
     low_volatility = _evaluate(atr_ratio=Decimal("0.20"))
 
-    assert (sideways.sideways, sideways.low_volatility, sideways.excluded) == (
-        True,
-        False,
-        True,
-    )
-    assert (
-        low_volatility.sideways,
-        low_volatility.low_volatility,
-        low_volatility.excluded,
-    ) == (False, True, True)
+    assert (sideways.sideways, sideways.low_volatility) == (True, False)
+    assert (low_volatility.sideways, low_volatility.low_volatility) == (False, True)
+    # Reported, and not a reason to stand aside.
+    assert sideways.excluded is False
+    assert low_volatility.excluded is False
+
+
+def test_the_regime_is_excluded_only_when_its_own_rule_cannot_be_read() -> None:
+    assert _evaluate(returns=(Decimal("0.01"),) * 199).excluded is True
+    assert _evaluate().excluded is False
+
+
+def test_the_two_observations_are_optional() -> None:
+    """They are not in the author's rule, so their absence is not a gap in
+    it."""
+    facts = _evaluate(atr_ratio=None, range_efficiency=None)
+
+    assert facts.state is EvidenceState.AVAILABLE
+    assert facts.sideways is None
+    assert facts.low_volatility is None
 
 
 def test_pessimism_extreme_requires_two_of_three_same_date_quantiles() -> None:
@@ -82,12 +98,20 @@ def test_pessimism_extreme_requires_two_of_three_same_date_quantiles() -> None:
     assert only_one.pessimism_extreme is False
 
 
-def test_unavailable_pessimism_component_makes_composite_unavailable() -> None:
-    facts = _evaluate(
-        pessimism=_pessimism(put_call_percentile=None),
-    )
+def test_a_missing_pessimism_component_leaves_the_regime_available() -> None:
+    """Pessimism belongs to one signal — a MACD cross below zero — not to the
+    regime. Blocking every decision on it made an input the author used
+    occasionally into a precondition for trading at all."""
+    facts = _evaluate(pessimism=_pessimism(put_call_percentile=None))
 
-    assert facts.state is EvidenceState.UNAVAILABLE
+    assert facts.state is EvidenceState.AVAILABLE
+    assert facts.pessimism_extreme is None
+
+
+def test_pessimism_may_be_absent_entirely() -> None:
+    facts = evaluate_regime(benchmark_returns=(Decimal("0.01"),) * 200)
+
+    assert facts.state is EvidenceState.AVAILABLE
     assert facts.pessimism_extreme is None
 
 
@@ -96,3 +120,34 @@ def test_fewer_than_200_completed_returns_are_unavailable() -> None:
 
     assert facts.state is EvidenceState.UNAVAILABLE
     assert facts.trend is None
+
+
+def test_daily_returns_reproduce_the_authors_rule_from_closes() -> None:
+    """Section 2.1 gives the regime as SMA 6/70/200 on the instrument itself.
+    Rebasing is a positive scale and a moving average is linear, so the same
+    answer comes out whether the trend is taken over closes or over returns
+    rebuilt from them."""
+    closes = [Decimal(100) + Decimal(index) for index in range(260)]
+
+    returns = daily_returns(closes)
+
+    assert len(returns) == len(closes) - 1
+    facts = evaluate_regime(
+        benchmark_returns=returns,
+        atr_ratio=Decimal("0.5"),
+        range_efficiency=Decimal("0.5"),
+        pessimism_inputs=PessimismInputs(
+            completed_date=date(2026, 8, 27),
+            volatility_percentile=Decimal("0.5"),
+            put_call_percentile=Decimal("0.5"),
+            breadth_percentile=Decimal("0.5"),
+        ),
+    )
+    # A monotonically rising series is the author's uptrend: the 200 slopes up,
+    # the 70 is above it, and the 70 slopes up.
+    assert facts.trend is RegimeLabel.TREND_UP
+
+
+def test_a_non_positive_close_is_refused() -> None:
+    with pytest.raises(ValueError, match="close must be positive"):
+        daily_returns([Decimal(100), Decimal(0)])

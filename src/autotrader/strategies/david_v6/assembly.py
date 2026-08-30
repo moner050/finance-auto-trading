@@ -368,12 +368,10 @@ def _universe(inputs: AssemblyInputs) -> EvidenceItem[object]:
 
 
 def _regime(inputs: AssemblyInputs) -> EvidenceItem[object]:
-    if (
-        inputs.benchmark_returns is None
-        or inputs.atr_ratio is None
-        or inputs.range_efficiency is None
-        or inputs.pessimism is None
-    ):
+    if inputs.benchmark_returns is None:
+        # The author's rule is SMA 6/70/200 on the instrument, so the closes
+        # are the only thing it cannot be evaluated without. The other three
+        # are observations beside the rule and a condition on one signal.
         return _unavailable("REGIME_UNAVAILABLE")
     facts = evaluate_regime(
         benchmark_returns=inputs.benchmark_returns,

@@ -241,13 +241,27 @@ def test_the_unsourced_inputs_are_named_rather_than_counted() -> None:
     assert {item.name for item in missing} >= {
         "calendar",
         "fee_schedule",
-        "order_flow_thresholds",
         # Named down to the one percentile still without a source, rather than
         # the whole of pessimism: two of its three are measured now.
         "pessimism.put_call_percentile",
-        "benchmark_returns",
     }
     assert all(item.reason for item in missing)
+
+
+def test_the_authors_own_regime_needs_nothing_chosen() -> None:
+    """Section 2.1 gives it as SMA 6/70/200 on the instrument itself, and the
+    trend is computed over a series rebuilt from returns, which a moving
+    average cannot tell apart from the closes. So the benchmark was never a
+    choice to make."""
+    assert "benchmark_returns" not in {item.name for item in unsourced_inputs()}
+    assert "benchmark_returns" in VENUE_SOURCED
+
+
+def test_telemetry_the_author_never_published_is_not_demanded() -> None:
+    """Ceros osmóticos is undisclosed, confidence LOW, telemetry only, and no
+    decision reads it. Requiring its thresholds would make an operator invent
+    two numbers to compute a field nothing consults."""
+    assert "order_flow_thresholds" not in {item.name for item in unsourced_inputs()}
 
 
 def test_what_the_venue_answers_is_no_longer_missing() -> None:

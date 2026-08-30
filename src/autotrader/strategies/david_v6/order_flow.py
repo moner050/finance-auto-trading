@@ -73,8 +73,13 @@ class OrderFlowThresholds:
     extreme_big_trade_notional: Decimal
     delta_p90_notional: Decimal
     atr_30s: Decimal
-    ceros_near_zero_notional: Decimal
-    ceros_large_notional: Decimal
+    # Section 15.2 records Ceros osmóticos as undisclosed, confidence LOW, and
+    # `telemetry_only`. Nothing here reads the result, so requiring these
+    # would make an operator invent two numbers the author never published in
+    # order to compute a field no decision consults. Absent means the
+    # telemetry is absent, which is the truth about it.
+    ceros_near_zero_notional: Decimal | None = None
+    ceros_large_notional: Decimal | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -83,16 +88,30 @@ class OrderFlowThresholds:
             "extreme_big_trade_notional",
             "delta_p90_notional",
             "atr_30s",
-            "ceros_near_zero_notional",
-            "ceros_large_notional",
         ):
             value = require_decimal(getattr(self, name))
             if value <= 0:
                 raise ValueError(f"{name} must be positive")
             object.__setattr__(self, name, value)
+        for name in ("ceros_near_zero_notional", "ceros_large_notional"):
+            found = getattr(self, name)
+            if found is None:
+                continue
+            value = require_decimal(found)
+            if value <= 0:
+                raise ValueError(f"{name} must be positive when present")
+            object.__setattr__(self, name, value)
         if self.extreme_big_trade_notional < self.normal_big_trade_notional:
             raise ValueError("extreme Big Trade threshold cannot be below normal")
-        if self.ceros_large_notional < self.ceros_near_zero_notional:
+        if (self.ceros_near_zero_notional is None) != (
+            self.ceros_large_notional is None
+        ):
+            raise ValueError("both Ceros thresholds are present or neither is")
+        if (
+            self.ceros_large_notional is not None
+            and self.ceros_near_zero_notional is not None
+            and self.ceros_large_notional < self.ceros_near_zero_notional
+        ):
             raise ValueError("Ceros large threshold cannot be below near-zero")
 
 
@@ -424,6 +443,8 @@ def _ceros(
     minimum = min(levels)
     maximum = max(levels)
     span = maximum - minimum
+    near_zero = thresholds.ceros_near_zero_notional
+    large = thresholds.ceros_large_notional
     qualifying: list[Decimal] = []
     for price, sides in levels.items():
         smaller = min(sides.values())
@@ -434,8 +455,10 @@ def _ceros(
             or price >= maximum - Decimal("0.30") * span
         )
         if (
-            smaller <= thresholds.ceros_near_zero_notional
-            and larger >= thresholds.ceros_large_notional
+            near_zero is not None
+            and large is not None
+            and smaller <= near_zero
+            and larger >= large
             and imbalance >= Decimal(4)
             and outer
         ):

@@ -81,21 +81,15 @@ UNSOURCED_INPUTS = (
     MissingInput(
         name="calendar",
         reason=(
-            "ExchangeCalendar is constructed nowhere in src; the venue's "
-            "session times have no loader"
-        ),
-    ),
-    MissingInput(
-        name="order_flow_thresholds",
-        reason=(
-            "only delta_p90_notional names its percentile; the big-trade and "
-            "ceros bands have no stated definition to compute"
+            "the strategy is intraday and flattens before the close; a "
+            "perpetual venue has no close, so which hour stands in for one "
+            "is a decision the author never had to make"
         ),
     ),
     MissingInput(
         name="fee_schedule",
         reason=(
-            "FeeSchedule is per unit, so it needs a commission rate and a "
+            "the schedule is per unit, so it needs a commission rate and a "
             "price; the rate is account-specific and read from an "
             "authenticated endpoint this has no credentials for"
         ),
@@ -103,31 +97,23 @@ UNSOURCED_INPUTS = (
     MissingInput(
         name="pessimism.put_call_percentile",
         reason=(
-            "the last of the three. Realised volatility and market breadth "
-            "are computed from Binance's own data; a perpetual futures venue "
-            "lists no options, so this one has no source here at all"
-        ),
-    ),
-    MissingInput(
-        name="benchmark_returns",
-        reason=(
-            "no benchmark return series is stored or computed; the strategy "
-            "blocks with REGIME_UNAVAILABLE without at least 200 of them"
+            "measured daily from Deribit, but a percentile needs sixty days "
+            "and no venue publishes a history of the ratio to backfill from"
         ),
     ),
     MissingInput(
         name="range_efficiency",
         reason=(
-            "a point-in-time percentile, and the quantity it ranks is defined "
-            "in no strategy document; computing one would be inventing the "
-            "definition"
+            "a percentile the author's regime does not use; section 2.1 gives "
+            "the regime as SMA 6/70/200 alone, and the quantity this ranks is "
+            "defined in no document"
         ),
     ),
     MissingInput(
         name="atr_ratio",
         reason=(
-            "a point-in-time percentile of the ATR ratio; the ATR is "
-            "computable but the lookback it is ranked against is not stated"
+            "as above: not part of the author's regime, and the lookback the "
+            "ATR ratio is ranked against is unstated"
         ),
     ),
 )
@@ -145,6 +131,12 @@ VENUE_SOURCED = (
     # advancing, ranked against its own history. Measured, not configured.
     "pessimism.breadth_percentile",
     "pessimism.volatility_percentile",
+    # Section 2.1's regime is SMA 6/70/200 on the instrument itself, and a
+    # moving average is linear under rebasing, so the instrument's own daily
+    # returns are the author's rule rather than a stand-in for it.
+    "benchmark_returns",
+    # Undisclosed by the author, telemetry only, and read by no decision.
+    "order_flow_thresholds.ceros",
 )
 
 
