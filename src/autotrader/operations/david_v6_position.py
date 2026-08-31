@@ -140,6 +140,24 @@ class V6PositionAction:
     telemetry_only: bool
     account_halt: bool
 
+    def __post_init__(self) -> None:
+        """A telemetry action carries no order.
+
+        Section 15.2 puts several items at `telemetry_only`, meaning recorded
+        and never allowed to move a decision, and section 11.4 says the 25%
+        and 50% retracements produce no orders at all. The flag said so and
+        nothing read it: every telemetry action happened to be built with no
+        quantity, so the rule held by construction and would have stopped
+        holding the first time one was built any other way.
+        """
+        if self.telemetry_only and (
+            self.order_style is not None
+            or self.quantity is not None
+            or self.stop_price is not None
+            or self.account_halt
+        ):
+            raise ValueError("a telemetry-only action cannot carry an order")
+
 
 def manage_v6_position(
     position: V6ManagedPosition,

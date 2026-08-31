@@ -9,6 +9,7 @@ from autotrader.config.settings import RuntimeMode
 from autotrader.domain.enums import OrderStyle, Side
 from autotrader.operations.david_v6_position import (
     V6ManagedPosition,
+    V6PositionAction,
     V6PositionActionKind,
     V6PositionFacts,
     manage_v6_position,
@@ -325,3 +326,50 @@ def test_stop_placement_actions_carry_no_entry_order_style() -> None:
 
     assert actions[0].kind is V6PositionActionKind.ACTIVATE_INITIAL_STOP
     assert actions[0].order_style is None
+
+
+def test_a_telemetry_action_cannot_carry_an_order() -> None:
+    """Section 15.2 puts several items at `telemetry_only` - recorded, never
+    allowed to move a decision - and section 11.4 gives the 25% and 50%
+    retracements no orders at all. The flag said so and nothing read it: every
+    telemetry action happened to be built with no quantity, so the rule held
+    by construction and would have stopped holding the first time one was
+    built any other way."""
+    with pytest.raises(ValueError, match="cannot carry an order"):
+        V6PositionAction(
+            kind=V6PositionActionKind.RECORD_FIB_25,
+            reason="RECORD_FIB_25",
+            order_style=OrderStyle.MARKET,
+            quantity=Decimal("1"),
+            stop_price=None,
+            average_entry_price=None,
+            resulting_worst_case_risk=Decimal("0"),
+            reduce_only=False,
+            telemetry_only=True,
+            account_halt=False,
+        )
+
+
+def test_the_fibonacci_observations_place_no_orders() -> None:
+    """25% is the first reaction and 50% is balance and management. Neither is
+    an exit, and 66% is the only one that is."""
+    observations = (
+        V6PositionActionKind.RECORD_FIB_25,
+        V6PositionActionKind.RECORD_FIB_50_RESEARCH,
+    )
+
+    for kind in observations:
+        action = V6PositionAction(
+            kind=kind,
+            reason=kind.value,
+            order_style=None,
+            quantity=None,
+            stop_price=None,
+            average_entry_price=None,
+            resulting_worst_case_risk=Decimal("0"),
+            reduce_only=False,
+            telemetry_only=True,
+            account_halt=False,
+        )
+        assert action.quantity is None
+        assert action.order_style is None
