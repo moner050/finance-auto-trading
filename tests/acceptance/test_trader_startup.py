@@ -239,7 +239,6 @@ def test_the_unsourced_inputs_are_named_rather_than_counted() -> None:
 
     assert missing == UNSOURCED_INPUTS
     assert {item.name for item in missing} >= {
-        "fee_schedule",
         # Named down to the one percentile still without a source, rather than
         # the whole of pessimism: two of its three are measured now.
         "pessimism.put_call_percentile",
@@ -261,6 +260,14 @@ def test_the_session_boundary_was_measured_rather_than_left_open() -> None:
     thins. It is a decision, but it is made."""
     assert "calendar" not in {item.name for item in unsourced_inputs()}
     assert "calendar" in VENUE_SOURCED
+
+
+def test_the_fee_is_read_from_the_account_rather_than_a_rate_card() -> None:
+    """A published rate card does not know this account's tier, referral or
+    BNB setting, and a fee that is too low makes a cost filter agree with
+    trades it has not actually priced."""
+    assert "fee_schedule" not in {item.name for item in unsourced_inputs()}
+    assert "fee_schedule" in VENUE_SOURCED
 
 
 def test_telemetry_the_author_never_published_is_not_demanded() -> None:

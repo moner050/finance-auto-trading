@@ -79,14 +79,6 @@ class ResolvedAccount:
 # refusal names all of them at once and the list is a work item.
 UNSOURCED_INPUTS = (
     MissingInput(
-        name="fee_schedule",
-        reason=(
-            "the schedule is per unit, so it needs a commission rate and a "
-            "price; the rate is account-specific and read from an "
-            "authenticated endpoint this has no credentials for"
-        ),
-    ),
-    MissingInput(
         name="pessimism.put_call_percentile",
         reason=(
             "measured daily from Deribit, but a percentile needs sixty days "
@@ -133,6 +125,10 @@ VENUE_SOURCED = (
     # liquidity thins, so the forced flat happens before the drought rather
     # than in it.
     "calendar",
+    # Account-specific rather than published, so it is read signed from
+    # /fapi/v1/commissionRate at the price the order would fill near, rather
+    # than copied off a rate card that does not know this account's tier.
+    "fee_schedule",
 )
 
 
