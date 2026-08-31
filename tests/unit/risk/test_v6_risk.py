@@ -11,6 +11,8 @@ from autotrader.persistence.mysql.repositories.david_v6_risk import (
 )
 from autotrader.risk.models import V6RiskPolicySnapshot
 from autotrader.risk.v6 import (
+    RESEARCH_SCORE_AUTHORITY,
+    SCORE_ONLY,
     V6RiskAuthority,
     V6RiskRequest,
     evaluate_v6_risk,
@@ -89,10 +91,12 @@ def test_stop_distance_must_be_between_point_four_and_one_point_five_atr() -> No
     ("market", "grade", "expected"),
     (
         (V6Market.KRX_CASH, SetupGrade.NORMAL, Decimal("0.0015")),
-        (V6Market.US_CASH, SetupGrade.A, Decimal("0.0025")),
         (V6Market.BINANCE_USDM, SetupGrade.NORMAL, Decimal("0.0025")),
         (V6Market.BINANCE_USDM, SetupGrade.A_CANDIDATE, Decimal("0.0025")),
-        (V6Market.BINANCE_USDM, SetupGrade.A, Decimal("0.0050")),
+        # A drew 0.0050 until the score that produces the grade was held to
+        # what section 21.3 says it is. See the test below.
+        (V6Market.US_CASH, SetupGrade.A, Decimal("0.0015")),
+        (V6Market.BINANCE_USDM, SetupGrade.A, Decimal("0.0025")),
     ),
 )
 def test_grade_and_market_select_fixed_percentage_risk(
@@ -112,6 +116,44 @@ def test_grade_and_market_select_fixed_percentage_risk(
     assert authority.risk_fraction == expected
     assert authority.risk_base == Decimal("1800")
     assert authority.risk_budget == Decimal("1800") * expected
+
+
+def test_a_research_score_does_not_enlarge_a_position() -> None:
+    """Section 21.3 titles itself 연구용 점수표 and says "이 점수는 David의
+    직접식이 아니다"; section 15.2 marks the determination it stands in for as
+    `score_only`. Sizing is order authority, and the document's rule is that
+    an estimated rule gets none until it has passed backtest and shadow."""
+    assert RESEARCH_SCORE_AUTHORITY == SCORE_ONLY
+
+    graded = _authority(
+        _request(
+            market=V6Market.BINANCE_USDM,
+            grade=SetupGrade.A,
+            atr_30s=Decimal("2"),
+            leverage=7,
+        )
+    )
+    plain = _authority(
+        _request(
+            market=V6Market.BINANCE_USDM,
+            grade=SetupGrade.NORMAL,
+            atr_30s=Decimal("2"),
+            leverage=7,
+        )
+    )
+
+    assert graded.risk_fraction == plain.risk_fraction
+
+
+def test_holding_the_score_down_never_turns_a_refusal_into_a_trade() -> None:
+    """Only the size is capped. A cash policy carries no A-candidate fraction,
+    and that absence must stay a refusal rather than become a smaller order."""
+    blocked = _authority(
+        _request(market=V6Market.US_CASH, grade=SetupGrade.A_CANDIDATE)
+    )
+
+    assert "CASH_A_CANDIDATE_UNSUPPORTED" in blocked.blocker_codes
+    assert blocked.risk_fraction == Decimal(0)
 
 
 def test_cash_candidate_and_missing_binance_atr_are_blocked() -> None:

@@ -30,6 +30,7 @@ from autotrader.strategies.david_v6.grading import (
     DIRECTION_SHORT,
     FIBONACCI_EXTENSION_CLUSTER,
     HIGHER_TIMEFRAME_BIAS,
+    HYPOTHESIS_CODES,
     PROFILE_VALUE_CONFLUENCE,
     REGULAR_HLIT_DIVERGENCE,
     V1_SECADO,
@@ -369,7 +370,10 @@ def _context(
         order_style=OrderStyle.LIMIT,
         matched_indicators=indicators,
         mandatory_indicator_codes=(
-            frozenset(indicator.key for indicator in indicators)
+            # Everything matched except the reverse-engineered ones, which
+            # section 15.2 holds at `score_only` and which the context refuses
+            # to let become a precondition for entering at all.
+            frozenset(indicator.key for indicator in indicators) - HYPOTHESIS_CODES
             if mandatory is None
             else mandatory
         ),
@@ -827,3 +831,33 @@ def test_signals_a_and_b_still_pass_without_a_pessimism_extreme() -> None:
     )
 
     assert "METODO_GATE_FAILED" not in decision.blockers
+
+
+def test_a_reverse_engineered_indicator_cannot_be_required() -> None:
+    """Section 15.2 holds every undisclosed item at `score_only`, and the
+    document's governing principle is that an estimated rule gets no order
+    authority until it has passed backtest and shadow. Requiring one is that
+    authority in its strongest form: without it there is no entry at all."""
+    bundle = _bundle(market=V6Market.BINANCE_USDM)
+
+    with pytest.raises(ValueError, match="cannot be mandatory"):
+        _context(
+            bundle,
+            family=StrategyFamily.HLIT,
+            side=Side.BUY,
+            mandatory=frozenset({V1_SECADO}),
+        )
+
+
+def test_the_confirmed_indicators_may_still_be_required() -> None:
+    """The rule refuses hypotheses, not mandatory indicators as such."""
+    bundle = _bundle(market=V6Market.BINANCE_USDM)
+
+    context = _context(
+        bundle,
+        family=StrategyFamily.HLIT,
+        side=Side.BUY,
+        mandatory=frozenset({REGULAR_HLIT_DIVERGENCE}),
+    )
+
+    assert REGULAR_HLIT_DIVERGENCE in context.mandatory_indicator_codes

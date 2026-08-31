@@ -9,6 +9,7 @@ from autotrader.domain.enums import OrderStyle, Side
 from autotrader.risk.models import TRADE_RISK_CEILING, V6RiskPolicySnapshot
 from autotrader.shared.decimal import require_decimal
 from autotrader.shared.time import require_utc
+from autotrader.strategies.david_v6.grading import HYPOTHESIS_CODES
 from autotrader.strategies.david_v6.models import (
     MatchedIndicator,
     SetupGrade,
@@ -23,6 +24,26 @@ SESSION_TRADE_UPPER_BOUND = 8
 # A ceiling, not a setting. Section 21 approves seven for Binance USD-M, and a
 # policy row that could raise it would turn the approved limit into a default.
 MAX_LEVERAGE = 7
+
+# What the setup grade is allowed to decide.
+#
+# The grade comes from section 21.3, which titles itself "연구용 점수표" and
+# says outright: "이 점수는 David의 직접식이 아니다 ... Ablation으로 검증하기
+# 위한 연구 프레임이다". Section 15.2 then classifies the Cyborg large-move
+# determination the score stands in for as `score_only`, and the document's
+# governing principle is that estimated rules "백테스트·섀도 거래를 통과하기
+# 전에는 주문 권한을 주지 않는다".
+#
+# Sizing is order authority. A grade of A drew twice the fraction of NORMAL on
+# Binance, so a research score was deciding how large a real order is. While
+# this stays SCORE_ONLY the grade is computed, recorded and available to
+# ablation, and it cannot enlarge a position.
+#
+# Raising it is a deliberate edit here, not a policy row, because the promotion
+# gate proves that sessions ran rather than that this table means anything.
+SCORE_ONLY = "SCORE_ONLY"
+DECIDES_SIZE = "DECIDES_SIZE"
+RESEARCH_SCORE_AUTHORITY = SCORE_ONLY
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,6 +201,16 @@ class V6RiskContext:
             for code in self.mandatory_indicator_codes
         ):
             raise ValueError("mandatory indicator codes must be trimmed text")
+        # Requiring a hypothesis is order authority in its strongest form:
+        # without it there is no entry at all. The document forbids exactly
+        # that until an estimated rule has passed backtest and shadow, so the
+        # rule lives here rather than in whoever assembles the set.
+        hypotheses = self.mandatory_indicator_codes & HYPOTHESIS_CODES
+        if hypotheses:
+            raise ValueError(
+                "a reverse-engineered indicator cannot be mandatory: "
+                + ", ".join(sorted(hypotheses))
+            )
         if type(self.risk_request) is not V6RiskRequest:
             raise TypeError("risk_request must be an exact V6RiskRequest")
         if type(self.policy) is not V6RiskPolicySnapshot:
@@ -311,6 +342,11 @@ def _risk_fraction(
     A cash policy carries no A-candidate fraction, and its absence is what
     says the grade is unsupported there. Reading that from the policy rather
     than from the market keeps one answer to the question.
+
+    While `RESEARCH_SCORE_AUTHORITY` is SCORE_ONLY the elevated fractions are
+    held down to the normal one. Only the size is capped: a grade that blocks
+    still blocks, because refusing to trade and trading smaller are different
+    answers and this must never turn the first into the second.
     """
     if grade is SetupGrade.REJECT:
         blockers.append("SETUP_REJECTED")
@@ -319,15 +355,25 @@ def _risk_fraction(
         if policy.a_candidate_risk_fraction is None:
             blockers.append("CASH_A_CANDIDATE_UNSUPPORTED")
             return Decimal(0)
-        return policy.a_candidate_risk_fraction
+        return _allowed(policy.a_candidate_risk_fraction, policy)
     if grade is SetupGrade.A:
-        return policy.a_risk_fraction
+        return _allowed(policy.a_risk_fraction, policy)
     return policy.normal_risk_fraction
+
+
+def _allowed(fraction: Decimal, policy: V6RiskPolicySnapshot) -> Decimal:
+    """An elevated fraction, or the normal one while the score is research."""
+    if RESEARCH_SCORE_AUTHORITY == SCORE_ONLY:
+        return min(fraction, policy.normal_risk_fraction)
+    return fraction
 
 
 __all__ = (
     "APPROVED_CAPITAL",
+    "DECIDES_SIZE",
     "MAX_LEVERAGE",
+    "RESEARCH_SCORE_AUTHORITY",
+    "SCORE_ONLY",
     "SESSION_TRADE_UPPER_BOUND",
     "TRADE_RISK_CEILING",
     "ApprovedCapital",

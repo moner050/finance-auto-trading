@@ -1,8 +1,18 @@
 """Setup grading from the section 21.3 weighted score.
 
-The score table and its two cutoffs come from the specification. Names of
-reverse-engineered items carry their V1 source, which section 18.3 requires so
-that a hypothesis is never mistaken for a confirmed rule.
+The weights and the two cutoffs are transcribed from the specification, but
+the specification is careful about what they are and this should be too. The
+section is titled "연구용 점수표" and ends: "이 점수는 David의 직접식이 아니다
+... Ablation으로 검증하기 위한 연구 프레임이다". It is a research frame, not
+the author's formula, and section 15.2 classifies the Cyborg large-move
+determination it stands in for as `score_only`.
+
+So the grade is computed and recorded here, and what it is allowed to decide
+is settled elsewhere: `risk.v6.RESEARCH_SCORE_AUTHORITY` holds it to a score
+rather than letting it size an order.
+
+Names of reverse-engineered items carry their V1 source, which section 18.3
+requires so that a hypothesis is never mistaken for a confirmed rule.
 """
 
 from __future__ import annotations
@@ -52,6 +62,25 @@ _RESEARCH_WEIGHTS: Mapping[str, int] = MappingProxyType(
 # Section 18.2 holds these at telemetry authority: recorded, but never allowed
 # to move a decision until a walk-forward promotion (section 18.3, rule 5).
 _TELEMETRY_ONLY = frozenset({V1_CERO_OSMOTICO})
+
+# Every indicator section 15.2 lists as undisclosed and reverse-engineered:
+# Secado, Cero osmótico, the reversal MIG, and the two that depend on a Big
+# Trades threshold the author never published. All are `score_only` there.
+#
+# The document's governing principle is that confirmed and estimated rules are
+# never mixed, and that an estimated one gets no order authority until it has
+# passed backtest and shadow trading. A mandatory indicator is order authority
+# in its strongest form - without it there is no entry at all - so a hypothesis
+# may contribute weight here and may not be required.
+HYPOTHESIS_CODES = frozenset(
+    {
+        V1_SECADO,
+        V1_CERO_OSMOTICO,
+        V1_MIG_REVERSAL,
+        SUPPORTING_BIG_TRADE_BEHIND,
+        BLOCKING_BIG_TRADE_AHEAD,
+    }
+)
 
 CANDIDATE_SCORE = 7
 HIGH_CONFIDENCE_SCORE = 9
@@ -118,6 +147,7 @@ __all__ = (
     "HIGHER_TIMEFRAME_BIAS",
     "HIGH_CONFIDENCE_SCORE",
     "HIGH_IMPACT_NEWS_RISK",
+    "HYPOTHESIS_CODES",
     "PROFILE_VALUE_CONFLUENCE",
     "REGULAR_HLIT_DIVERGENCE",
     "SUPPORTING_BIG_TRADE_BEHIND",

@@ -37,6 +37,12 @@ _CONFIGURATION_MANIFEST = {
             "NORMAL": "0.0015",
         },
         "ceros_authority": "TELEMETRY_ONLY",
+        # Section 21.3 is a research frame, not David's formula, and section
+        # 15.2 marks what it stands in for as `score_only`. Part of the
+        # manifest because decisions taken while the grade could not enlarge a
+        # position are decisions of a different build from decisions taken
+        # after it could.
+        "research_score_authority": "SCORE_ONLY",
         "fibonacci": {
             "25": "OBSERVATION_ONLY",
             "50": "RESEARCH_ONLY",
