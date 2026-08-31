@@ -521,13 +521,46 @@ compose 구조와 노출 성질은 테스트로 확인했고, 실제 빌드와 �
 
 ---
 
+---
+
+## Binance 라이브 키 확인과 수수료 (2026-08-31)
+
+자격증명 12개가 `finance_auto_trading_prod`에 저장된 뒤, **읽기 전용 호출만**으로
+라이브 계정을 확인했다. 전송 계층에 GET 3개 경로만 화이트리스트했으므로 주문
+경로는 쓰이지 않은 게 아니라 **도달 불가능**했다.
+
+**키는 실제로 읽기 전용이다.** `/sapi/v1/account/apiRestrictions`가
+`enableReading: true`, 나머지(`enableFutures`·`enableSpotAndMarginTrading`·
+`enableWithdrawals`·`enableInternalTransfer`·`permitsUniversalTransfer`) 전부
+false로 답했다. `/fapi/v2/account`의 `canTrade: true`는 **키가 아니라 계정**에
+대한 값이라 이 질문에 답하지 못한다 — 그것만 봤으면 반대로 읽었을 것이다.
+
+**두 가지가 남는다.**
+
+- `ipRestrict: false` — 키가 어느 IP에서나 쓰인다. 지금은 읽기 전용이라 노출
+  피해가 제한되지만, 주문 권한을 켜는 순간 이 설정이 유일한 방벽이 된다.
+- `totalWalletBalance: 0` — USD-M 선물 지갑이 비어 있다. `APPROVED_CAPITAL`은
+  2,000 USDT 증거금인데 아직 이체된 적이 없다.
+
+**수수료는 정의 문제가 아니라 인증 문제였다.** BTCUSDT maker 0.02%, taker 0.05%.
+`binance_commission.py`가 서명 호출로 읽고, 두 다리 모두 taker로 계산한다 —
+진입이 대기하면 maker를 벌지만 크로스하면 taker를 내고, 이 숫자는 거래가 자기
+비용을 넘는지 판정하는 필터에 들어간다. 리베이트를 가정하면 값을 매기지 않은
+거래가 통과한다.
+
+`--check`의 부족 항목이 셋에서 둘로 줄었다: `put_call_percentile`(60일 누적
+필요), 그리고 원저자 regime에 없는 `atr_ratio`/`range_efficiency`.
+
+---
+
 ## 미검증 항목
 
 이 계획을 시작하는 시점에 아래는 **한 번도 확인된 적이 없다.** 어느 것도 되어 있다고
 가정하지 않는다.
 
 - MySQL 스키마 적용 (마이그레이션이 실제 DB에 적용된 적 없음)
-- 실계좌 provider 호출 (KIS/Toss/Binance 어느 것도 실인증으로 호출된 적 없음)
+- 실계좌 provider 호출 — Binance는 읽기 전용으로 확인됨(2026-08-31). KIS/Toss는
+  아직 실인증으로 호출된 적 없음
 - Google OAuth
 - Docker Compose 기동과 브라우저 E2E
 - 전략의 실제 손익 특성 — 백테스트 하네스(`research/david_v6/backtest.py`)는 있지만
