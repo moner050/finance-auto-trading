@@ -121,6 +121,11 @@ VENUE_SOURCED = (
     "benchmark_returns",
     # Undisclosed by the author, telemetry only, and read by no decision.
     "order_flow_thresholds.ceros",
+    # Section 19.1 rejects picking a contract count and section 22.5 gives the
+    # crypto normalization instead: an aggregated event is big when it clears
+    # the 0.995 quantile of the window's own events, extreme at 0.999. So the
+    # two notionals an operator used to type are ranked rather than set.
+    "order_flow_thresholds.big_trade_notional",
     # A session boundary placed by measurement: the close sits where BTCUSDT
     # liquidity thins, so the forced flat happens before the drought rather
     # than in it.

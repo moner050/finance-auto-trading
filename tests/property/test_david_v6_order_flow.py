@@ -15,8 +15,6 @@ from autotrader.strategies.david_v6.order_flow import (
 START = datetime(2026, 8, 24, tzinfo=UTC)
 THRESHOLDS = OrderFlowThresholds(
     tick_size=Decimal("1"),
-    normal_big_trade_notional=Decimal("100"),
-    extreme_big_trade_notional=Decimal("200"),
     delta_p90_notional=Decimal("100"),
     atr_30s=Decimal("10"),
     ceros_near_zero_notional=Decimal("10"),

@@ -266,10 +266,14 @@ def derive_indicators(
     order_flow_hash = _digest_bytes(bundle.order_flow)
     if order_flow_hash is not None:
         flow = cast(OrderFlowFacts, bundle.order_flow.value)
-        if blocking_big_trade_ahead(flow, side=side, reference_price=price):
-            matched.append(_indicator(BLOCKING_BIG_TRADE_AHEAD, order_flow_hash))
-        elif flow.big_trades:
-            matched.append(_indicator(SUPPORTING_BIG_TRADE_BEHIND, order_flow_hash))
+        # An unmeasured window scores neither way. The engine turns it into a
+        # blocker; scoring it as though no obstacle was found would credit the
+        # setup for a look that never happened.
+        if flow.big_trades is not None:
+            if blocking_big_trade_ahead(flow, side=side, reference_price=price):
+                matched.append(_indicator(BLOCKING_BIG_TRADE_AHEAD, order_flow_hash))
+            elif flow.big_trades:
+                matched.append(_indicator(SUPPORTING_BIG_TRADE_BEHIND, order_flow_hash))
 
     calendar_hash = _digest_bytes(bundle.calendar)
     if calendar_hash is not None:

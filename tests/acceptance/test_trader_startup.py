@@ -317,3 +317,10 @@ def test_a_non_positive_operator_fact_is_refused(field: str) -> None:
 
     with pytest.raises(ValueError, match="positive"):
         OperatorFacts(**values)  # type: ignore[arg-type]
+
+
+def test_the_big_trade_threshold_is_ranked_rather_than_typed() -> None:
+    """Section 19.1 rejects picking a contract count - "고정값 하나를
+    선택하는 대신" - and section 22.5 gives the crypto normalization as a
+    rolling quantile of the window's own aggregated events."""
+    assert "order_flow_thresholds.big_trade_notional" in VENUE_SOURCED

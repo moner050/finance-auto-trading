@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 from enum import StrEnum
 from itertools import pairwise
 from typing import cast
@@ -66,11 +66,51 @@ class TradePrint:
         return self.price * self.quantity
 
 
+# What makes a Big Trade big, per section 22.5.
+#
+# ATAS marks these with an Auto Filter rather than a contract count, and
+# section 19.1 says so about picking one: "고정값 하나를 선택하는 대신 'RTH 한
+# 세션당 의미 있는 마커가 몇 개 나오는가'를 기준으로 조정하는 것이 낫다",
+# with the goal being "실제로 경로를 막는 소수의 이벤트만". A filter that keeps
+# the top of the distribution does that by construction; a typed notional stops
+# doing it the moment the market changes character.
+#
+# Section 22.5 gives the crypto normalization exactly:
+#
+#     normal_big_trade  = event_notional >= rolling_quantile(0.995)
+#     extreme_big_trade = event_notional >= rolling_quantile(0.999)
+#
+# taken over aggregated events, not over single prints.
+BIG_TRADE_NORMAL_QUANTILE = Decimal("0.995")
+BIG_TRADE_EXTREME_QUANTILE = Decimal("0.999")
+
+# Below this the quantile describes the sample rather than the market. At two
+# hundred events the top half-percent is one event, which is the fewest that
+# can still be called a selection; under it the "biggest of six" would be
+# marked an institutional obstacle.
+MINIMUM_BIG_TRADE_EVENTS = 200
+
+# Section 22.5's second control, in its own words: "고정 백분위도 시장 상태에
+# 따라 과다·과소 검출될 수 있으므로 세션당 이벤트 수를 함께 통제한다", with
+# `target_events_per_liquidity_session: [5, 10, 20]`.
+#
+# It matters where the distribution is flat. A quantile compares with `>=`, so
+# a window whose events are all the same size marks every one of them as an
+# institutional obstacle - the opposite of "실제로 경로를 막는 소수의 이벤트만".
+#
+# Twenty is the top of the documented grid, and the top is the right end for
+# this rule: these markers only ever refuse an entry, so a larger cap refuses
+# more, and a smaller one would trade the safety away for tidiness.
+MAXIMUM_BIG_TRADE_MARKERS = 20
+
+
+class BigTradesUnmeasured(RuntimeError):
+    """Raised when a window held too few events to rank one against them."""
+
+
 @dataclass(frozen=True, slots=True)
 class OrderFlowThresholds:
     tick_size: Decimal
-    normal_big_trade_notional: Decimal
-    extreme_big_trade_notional: Decimal
     delta_p90_notional: Decimal
     atr_30s: Decimal
     # Section 15.2 records Ceros osmóticos as undisclosed, confidence LOW, and
@@ -84,8 +124,6 @@ class OrderFlowThresholds:
     def __post_init__(self) -> None:
         for name in (
             "tick_size",
-            "normal_big_trade_notional",
-            "extreme_big_trade_notional",
             "delta_p90_notional",
             "atr_30s",
         ):
@@ -101,8 +139,6 @@ class OrderFlowThresholds:
             if value <= 0:
                 raise ValueError(f"{name} must be positive when present")
             object.__setattr__(self, name, value)
-        if self.extreme_big_trade_notional < self.normal_big_trade_notional:
-            raise ValueError("extreme Big Trade threshold cannot be below normal")
         if (self.ceros_near_zero_notional is None) != (
             self.ceros_large_notional is None
         ):
@@ -135,7 +171,9 @@ class OrderFlowFacts:
     buy_notional: Decimal
     sell_notional: Decimal
     delta_notional: Decimal | None
-    big_trades: tuple[BigTradeCluster, ...]
+    # None means the window held too few events for section 22.5's quantile
+    # to mean anything - not that there were no obstacles in it.
+    big_trades: tuple[BigTradeCluster, ...] | None
     reversal_mig: bool | None
     continuation_mig: bool | None
     secado: bool | None
@@ -197,6 +235,10 @@ def aggregate_order_flow(
     )
     unknown_count = len(deduplicated) - len(known)
     bars = _flow_bars(deduplicated, start, end)
+    # Only the Big Trades go missing when the sample is short. MIG, secado and
+    # the ceros are read off the bars and the prints, and none of them is
+    # ranked against anything, so taking the whole record down with the
+    # quantile would hide facts that were measured.
     return OrderFlowFacts(
         state=(EvidenceState.UNKNOWN if unknown_count else EvidenceState.AVAILABLE),
         trade_count=len(deduplicated),
@@ -228,9 +270,17 @@ def _deduplicate(trades: tuple[TradePrint, ...]) -> tuple[TradePrint, ...]:
     )
 
 
-def _big_trades(
+def _events(
     trades: tuple[TradePrint, ...], thresholds: OrderFlowThresholds
-) -> tuple[BigTradeCluster, ...]:
+) -> tuple[tuple[TradePrint, ...], ...]:
+    """Section 22.5's aggregation: same aggressor, 150ms apart, within 2 ticks.
+
+    ATAS calls this Cumulative Trades, and section 19.1 marks it the most
+    likely of the two calculation modes. It is what makes an event rather than
+    a print the thing being sized: an institution working an order leaves many
+    prints, and measuring them separately hides exactly the participant the
+    marker exists to find.
+    """
     groups: list[list[TradePrint]] = []
     for trade in trades:
         if not groups:
@@ -246,12 +296,53 @@ def _big_trades(
             group.append(trade)
         else:
             groups.append([trade])
+    return tuple(tuple(group) for group in groups)
+
+
+def _event_notional(group: tuple[TradePrint, ...]) -> Decimal:
+    return sum((cast(Decimal, trade.notional) for trade in group), start=Decimal(0))
+
+
+def big_trade_quantile(notionals: Sequence[Decimal], quantile: Decimal) -> Decimal:
+    """The nearest-rank value at `quantile` over the window's own events.
+
+    Nearest rank rather than an interpolated one: an interpolated quantile
+    invents a notional that no event had, and this number is compared against
+    event notionals to decide which of them is an obstacle.
+    """
+    ordered = sorted(notionals)
+    if not ordered:
+        raise ValueError("a quantile needs at least one value")
+    rank = (quantile * Decimal(len(ordered))).to_integral_value(rounding=ROUND_CEILING)
+    index = max(1, min(len(ordered), int(rank)))
+    return ordered[index - 1]
+
+
+def _big_trades(
+    trades: tuple[TradePrint, ...], thresholds: OrderFlowThresholds
+) -> tuple[BigTradeCluster, ...] | None:
+    """The window's obstacles, or None when the window cannot say.
+
+    None is not "no big trades". Reporting an empty tuple from too small a
+    sample would clear the path for an entry that nothing had actually looked
+    for an obstacle in, which is the one direction this must never fail.
+    """
+    groups = _events(trades, thresholds)
+    if len(groups) < MINIMUM_BIG_TRADE_EVENTS:
+        return None
+    notionals = tuple(_event_notional(group) for group in groups)
+    normal = big_trade_quantile(notionals, BIG_TRADE_NORMAL_QUANTILE)
+    extreme = big_trade_quantile(notionals, BIG_TRADE_EXTREME_QUANTILE)
+    selected = sorted(
+        ((summed, index) for index, summed in enumerate(notionals) if summed >= normal),
+        reverse=True,
+    )
+    # Largest first, then back into time order, so the cap keeps the biggest
+    # events rather than the earliest ones.
+    keep = {index for _, index in selected[:MAXIMUM_BIG_TRADE_MARKERS]}
     clusters: list[BigTradeCluster] = []
-    for group in groups:
-        summed = sum(
-            (cast(Decimal, trade.notional) for trade in group), start=Decimal(0)
-        )
-        if summed < thresholds.normal_big_trade_notional:
+    for index, (group, summed) in enumerate(zip(groups, notionals, strict=True)):
+        if index not in keep:
             continue
         prices = tuple(cast(Decimal, trade.price) for trade in group)
         side = group[0].side
@@ -266,9 +357,7 @@ def _big_trades(
                 trade_count=len(group),
                 summed_notional=summed,
                 classification=(
-                    BigTradeClass.EXTREME
-                    if summed >= thresholds.extreme_big_trade_notional
-                    else BigTradeClass.NORMAL
+                    BigTradeClass.EXTREME if summed >= extreme else BigTradeClass.NORMAL
                 ),
             )
         )
@@ -513,6 +602,10 @@ def blocking_big_trade_ahead(
     price = require_decimal(reference_price)
     if price <= 0:
         raise ValueError("reference_price must be positive")
+    if facts.big_trades is None:
+        # The caller has to decide what a window that cannot see means, and
+        # answering False here would clear the path on its behalf.
+        raise BigTradesUnmeasured("this window held too few events to rank")
     opposing = AggressorSide.SELL if side is Side.BUY else AggressorSide.BUY
     return any(
         cluster.side is opposing
@@ -526,12 +619,18 @@ def blocking_big_trade_ahead(
 
 
 __all__ = (
+    "BIG_TRADE_EXTREME_QUANTILE",
+    "BIG_TRADE_NORMAL_QUANTILE",
+    "MAXIMUM_BIG_TRADE_MARKERS",
+    "MINIMUM_BIG_TRADE_EVENTS",
     "AggressorSide",
     "BigTradeClass",
     "BigTradeCluster",
+    "BigTradesUnmeasured",
     "OrderFlowFacts",
     "OrderFlowThresholds",
     "TradePrint",
     "aggregate_order_flow",
+    "big_trade_quantile",
     "blocking_big_trade_ahead",
 )

@@ -29,6 +29,7 @@ from autotrader.strategies.david_v6.models import (
     V6Market,
 )
 from autotrader.strategies.david_v6.order_flow import (
+    BigTradesUnmeasured,
     OrderFlowFacts,
     blocking_big_trade_ahead,
 )
@@ -340,12 +341,22 @@ def _hlit_blockers(
             blockers.append("EXHAUSTION_UNCONFIRMED")
 
     order_flow = valid_values.get("order_flow")
-    if order_flow is not None and blocking_big_trade_ahead(
-        cast(OrderFlowFacts, order_flow),
-        side=side,
-        reference_price=entry_price,
-    ):
-        blockers.append("BLOCKING_BIG_TRADE_AHEAD")
+    if order_flow is not None:
+        try:
+            obstacle = blocking_big_trade_ahead(
+                cast(OrderFlowFacts, order_flow),
+                side=side,
+                reference_price=entry_price,
+            )
+        except BigTradesUnmeasured:
+            # A window too thin to rank an event against has not looked for an
+            # obstacle, and section 12 forbids fighting one. Not finding and
+            # not having looked are different answers, and only the second one
+            # may not be read as a clear path.
+            blockers.append("BIG_TRADE_SAMPLE_INSUFFICIENT")
+        else:
+            if obstacle:
+                blockers.append("BLOCKING_BIG_TRADE_AHEAD")
 
 
 def _session_size_multiplier(facts: dict[str, EvidenceItem[object]]) -> Decimal:

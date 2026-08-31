@@ -140,8 +140,6 @@ def _trades() -> tuple[TradePrint, ...]:
 def _thresholds() -> OrderFlowThresholds:
     return OrderFlowThresholds(
         tick_size=Decimal("0.1"),
-        normal_big_trade_notional=Decimal("1000"),
-        extreme_big_trade_notional=Decimal("5000"),
         delta_p90_notional=Decimal("500"),
         atr_30s=Decimal("1"),
         ceros_near_zero_notional=Decimal("10"),
