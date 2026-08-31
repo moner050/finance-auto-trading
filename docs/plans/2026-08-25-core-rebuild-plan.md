@@ -721,6 +721,62 @@ telemetry 액션은 order_style·quantity·stop_price·account_halt를 가질 �
 
 ---
 
+---
+
+## 원저자 방식 전면 재검토 (2026-08-31)
+
+§12(A0 코어 설정)를 기준으로 구현 전체를 문서와 대조했다. §12는 `prohibited`
+목록과 엔진별 고정값을 함께 담고 있어 대조 기준으로 쓸 수 있다.
+
+### 일치 확인된 것
+
+| 문서 | 코드 |
+|---|---|
+| SMA 6/70/200, MACD 12/26/9 | `metodo.py` 그대로 |
+| `regime: slope(sma200)>0 AND sma70>sma200 AND slope(sma70)>0` | `trend_up` 동일 |
+| `signal_a/b/c`, `exit: cross_down(sma6, sma70)` | `normal_technical_confirmation`, `metodo_exit_signal` |
+| `sector_rank_max: 3`, `exclude_sectors: [real_estate, financials, energy]` | `universe.py` |
+| HLIT 앵커 `A = max(high) between low1..low2 ; B = low2` | `hlit.py:_setup` 그대로 (약세는 거울) |
+| `fib_levels [0.25,0.50,0.66]`, `target 0.66` | `FIB_LEVELS`, `TARGET_LEVEL` |
+| `precondition: regular_divergence_required` | 히든 다이버전스는 setup을 만들지 않음 |
+| `exhaustion_def: 연속 3+ 극점 갱신 + 계단식 거래량 감소` | `len(pivot_history) >= 3` + `price_extends and volume_decreases` |
+| `open_first_15min size_multiplier 0.5`, `monday score_penalty -1` | `_OPEN_WINDOW_MULTIPLIER`, 월요일 강등 |
+| `news: 10분/120분/NFP 전 세션` | `calendar.py` |
+| `trade_frequency.hard_upper_bound: 8` | `SESSION_TRADE_UPPER_BOUND` |
+| `stop.order_type STOP_MARKET`, `percentage_based: forbidden` | 구조적 스톱 + trigger_price, limit 없음 |
+| `never_add_while_losing`, `never_widen_stop` | `favorable <= 0` 거부, `_non_widening_stop` |
+| `add_threshold: 0.35 × ATR(14, 5m)` (§14.2 정규화) | `_add_action` 임계 |
+| `BE +1.5포인트 → 왕복 수수료 + 슬리피지 + 버퍼로 재계산` (§14.2) | `_break_even_stop` |
+
+`blind_limit_entry_at_zone`·`range_breakout_entry`·`fighting_big_trades`·
+`martingale`·`stop_limit_protective`·`fixed_daily_trade_count`는 해당 코드가
+아예 없거나 반대 동작으로 구현되어 있다.
+
+### 고친 것: `permanent_long_only`
+
+§12의 `prohibited`에 `permanent_long_only`가 있고, §2.2는 숏을 롱의 정확한
+거울(`downtrend_regime and cross_down(sma6, sma70)`)로 주며 §2.4는 Baxter를 숏
+대상으로 든다. **원저자는 숏을 한다.**
+
+엔진은 시장 코드에 대고 `CASH_SHORT_UNSUPPORTED`를 냈다. 이건 "현금 시장에서
+메소드가 롱 전용"으로 읽힌다. 사실이 아니다 — 그 두 계좌가 **현물이라 차입을 못
+할 뿐**이다. `SPOT_ONLY_MARKETS` / `SPOT_VENUE_CANNOT_SHORT`로 바꿨다. 증거금
+가능한 현금 거래소가 생기면 그 선의 반대편에 놓이지, 원저자가 취한 적 없는 자세를
+물려받지 않는다. 동작은 그대로다. Binance USD-M에서 거울이 실제로 도달 가능한지도
+테스트가 고정한다.
+
+### 앞선 세 건과 함께
+
+이번 재검토로 원저자 정합성 작업은 다음 다섯 건이 됐다.
+
+1. regime에서 원저자 규칙에 없는 게이트 제거 (느슨해짐)
+2. 비관 극단을 커리큘럼 3종 전부가 아니라 측정된 것으로 판단 (느슨해짐)
+3. 연구용 점수표에서 주문 권한 회수 — 등급이 포지션을 키우지 못함 (조여짐)
+4. `telemetry_only`를 검증으로 (조여짐)
+5. 롱 전용을 거래소 제약으로 정정 (동작 불변)
+
+---
+
 ## 미검증 항목
 
 이 계획을 시작하는 시점에 아래는 **한 번도 확인된 적이 없다.** 어느 것도 되어 있다고
