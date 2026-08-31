@@ -105,6 +105,78 @@ def test_a_missing_pessimism_component_leaves_the_regime_available() -> None:
     facts = _evaluate(pessimism=_pessimism(put_call_percentile=None))
 
     assert facts.state is EvidenceState.AVAILABLE
+
+
+def test_two_measured_components_are_judged_without_the_third() -> None:
+    """Section 2.3 marks the quantitative triple as curriculum and the
+    detector the author actually used as a newspaper. Waiting for the one
+    percentile with no history to rank against was a stricter condition than
+    he ever applied."""
+    both_extreme = _evaluate(
+        pessimism=_pessimism(
+            put_call_percentile=None,
+            volatility_percentile=Decimal("0.95"),
+            breadth_percentile=Decimal("0.05"),
+        )
+    )
+    one_extreme = _evaluate(
+        pessimism=_pessimism(
+            put_call_percentile=None,
+            volatility_percentile=Decimal("0.95"),
+            breadth_percentile=Decimal("0.50"),
+        )
+    )
+
+    assert both_extreme.pessimism_extreme is True
+    assert one_extreme.pessimism_extreme is False
+
+
+def test_the_threshold_does_not_soften_when_a_component_is_missing() -> None:
+    """Two of three is a majority; two of two is unanimity. Dropping to "one
+    of the two present" would make an extreme easier to call every time a
+    measurement went missing, which is backwards."""
+    facts = _evaluate(
+        pessimism=_pessimism(
+            put_call_percentile=None,
+            volatility_percentile=Decimal("0.99"),
+            breadth_percentile=Decimal("0.50"),
+        )
+    )
+
+    assert facts.pessimism_extreme is False
+
+
+def test_one_measured_component_cannot_call_an_extreme() -> None:
+    """Not "no extreme" — nothing to judge. One agreeing component was never
+    two."""
+    facts = _evaluate(
+        pessimism=_pessimism(
+            put_call_percentile=None,
+            breadth_percentile=None,
+            volatility_percentile=Decimal("0.99"),
+        )
+    )
+
+    assert facts.pessimism_extreme is None
+
+
+def test_all_three_present_is_unchanged() -> None:
+    """The rule that ran until the third component had a history still runs
+    once it has one."""
+    facts = _evaluate(
+        pessimism=_pessimism(
+            volatility_percentile=Decimal("0.95"),
+            put_call_percentile=Decimal("0.95"),
+            breadth_percentile=Decimal("0.50"),
+        )
+    )
+
+    assert facts.pessimism_extreme is True
+
+
+def test_a_day_the_market_has_not_finished_is_not_judged() -> None:
+    facts = _evaluate(pessimism=_pessimism(completed_date=None))
+
     assert facts.pessimism_extreme is None
 
 

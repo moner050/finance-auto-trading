@@ -238,11 +238,7 @@ def test_the_unsourced_inputs_are_named_rather_than_counted() -> None:
     missing = unsourced_inputs()
 
     assert missing == UNSOURCED_INPUTS
-    assert {item.name for item in missing} >= {
-        # Named down to the one percentile still without a source, rather than
-        # the whole of pessimism: two of its three are measured now.
-        "pessimism.put_call_percentile",
-    }
+    assert {item.name for item in missing} == {"range_efficiency", "atr_ratio"}
     assert all(item.reason for item in missing)
 
 
@@ -268,6 +264,17 @@ def test_the_fee_is_read_from_the_account_rather_than_a_rate_card() -> None:
     trades it has not actually priced."""
     assert "fee_schedule" not in {item.name for item in unsourced_inputs()}
     assert "fee_schedule" in VENUE_SOURCED
+
+
+def test_the_put_call_percentile_is_no_longer_waited_on() -> None:
+    """It cannot be backfilled - Deribit's public tape retains about a day and
+    its volume endpoint is rolling - but section 2.3 marks the quantitative
+    triple as curriculum and the detector the author used as a newspaper. Two
+    measured components decide; this one joins them once it has a history."""
+    assert "pessimism.put_call_percentile" not in {
+        item.name for item in unsourced_inputs()
+    }
+    assert "pessimism.put_call_percentile" in VENUE_SOURCED
 
 
 def test_telemetry_the_author_never_published_is_not_demanded() -> None:

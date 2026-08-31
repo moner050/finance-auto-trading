@@ -79,13 +79,6 @@ class ResolvedAccount:
 # refusal names all of them at once and the list is a work item.
 UNSOURCED_INPUTS = (
     MissingInput(
-        name="pessimism.put_call_percentile",
-        reason=(
-            "measured daily from Deribit, but a percentile needs sixty days "
-            "and no venue publishes a history of the ratio to backfill from"
-        ),
-    ),
-    MissingInput(
         name="range_efficiency",
         reason=(
             "a percentile the author's regime does not use; section 2.1 gives "
@@ -115,6 +108,13 @@ VENUE_SOURCED = (
     # advancing, ranked against its own history. Measured, not configured.
     "pessimism.breadth_percentile",
     "pessimism.volatility_percentile",
+    # Measured daily from Deribit, and its history can only accumulate: the
+    # public trade tape retains about a day and the volume endpoint is
+    # rolling, so there is nothing to backfill from. It is no longer required
+    # either - section 2.3 marks the quantitative triple as curriculum and the
+    # detector the author used as a newspaper, so two measured components
+    # decide, and this one joins them once it has sixty days.
+    "pessimism.put_call_percentile",
     # Section 2.1's regime is SMA 6/70/200 on the instrument itself, and a
     # moving average is linear under rebasing, so the instrument's own daily
     # returns are the author's rule rather than a stand-in for it.

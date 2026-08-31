@@ -176,19 +176,44 @@ def _trend(returns: tuple[Decimal, ...]) -> RegimeLabel | None:
 
 
 def _pessimism_extreme(inputs: PessimismInputs) -> bool | None:
-    values = (
-        inputs.volatility_percentile,
-        inputs.put_call_percentile,
-        inputs.breadth_percentile,
-    )
-    if inputs.completed_date is None or any(value is None for value in values):
+    """Whether the market is at a pessimism extreme, from what was measured.
+
+    Section 2.3 splits this in two. The quantitative triple - put-call ratio,
+    a VIX percentile and breadth - is marked "커리큘럼 M3", the curriculum. The
+    detector marked "(A0) 실제로 사용", what the author actually used, is
+    `media_panic_signal`, which is qualitative and which this system cannot
+    read and must not invent.
+
+    So the composite here is a stand-in, and it is treated as one. Requiring
+    all three of a curriculum triple made a signal wait on the one percentile
+    with no history to rank against, which is a stricter condition than the
+    author ever applied - he read a newspaper.
+
+    Two things this deliberately keeps. The threshold does not soften: an
+    extreme still needs two agreeing components, so with two measured they
+    must both agree, and one component alone is never enough to call an
+    extreme. And what is measured is still ranked - a missing percentile is
+    skipped, never filled, because a filled one would be counted in every
+    rank thereafter.
+
+    The volatility component is the instrument's own realised volatility. The
+    author's second component is a VIX percentile, so this is a substitution
+    as well, and it is named here rather than hidden behind the word
+    "volatility".
+    """
+    if inputs.completed_date is None:
         return None
-    volatility, put_call, breadth = cast(tuple[Decimal, Decimal, Decimal], values)
-    matches = (
-        volatility >= _UPPER_DECILE,
-        put_call >= _UPPER_DECILE,
-        breadth <= _LOWER_DECILE,
-    )
+    matches = [
+        percentile >= _UPPER_DECILE
+        for percentile in (inputs.volatility_percentile, inputs.put_call_percentile)
+        if percentile is not None
+    ]
+    if inputs.breadth_percentile is not None:
+        matches.append(inputs.breadth_percentile <= _LOWER_DECILE)
+    # Fewer than two measured components cannot produce two that agree, so
+    # there is nothing to judge rather than an extreme that is absent.
+    if len(matches) < 2:
+        return None
     return sum(matches) >= 2
 
 
