@@ -239,7 +239,6 @@ def test_the_unsourced_inputs_are_named_rather_than_counted() -> None:
 
     assert missing == UNSOURCED_INPUTS
     assert {item.name for item in missing} >= {
-        "calendar",
         "fee_schedule",
         # Named down to the one percentile still without a source, rather than
         # the whole of pessimism: two of its three are measured now.
@@ -255,6 +254,13 @@ def test_the_authors_own_regime_needs_nothing_chosen() -> None:
     choice to make."""
     assert "benchmark_returns" not in {item.name for item in unsourced_inputs()}
     assert "benchmark_returns" in VENUE_SOURCED
+
+
+def test_the_session_boundary_was_measured_rather_than_left_open() -> None:
+    """A perpetual venue has no close, so one was placed where liquidity
+    thins. It is a decision, but it is made."""
+    assert "calendar" not in {item.name for item in unsourced_inputs()}
+    assert "calendar" in VENUE_SOURCED
 
 
 def test_telemetry_the_author_never_published_is_not_demanded() -> None:

@@ -79,14 +79,6 @@ class ResolvedAccount:
 # refusal names all of them at once and the list is a work item.
 UNSOURCED_INPUTS = (
     MissingInput(
-        name="calendar",
-        reason=(
-            "the strategy is intraday and flattens before the close; a "
-            "perpetual venue has no close, so which hour stands in for one "
-            "is a decision the author never had to make"
-        ),
-    ),
-    MissingInput(
         name="fee_schedule",
         reason=(
             "the schedule is per unit, so it needs a commission rate and a "
@@ -137,6 +129,10 @@ VENUE_SOURCED = (
     "benchmark_returns",
     # Undisclosed by the author, telemetry only, and read by no decision.
     "order_flow_thresholds.ceros",
+    # A session boundary placed by measurement: the close sits where BTCUSDT
+    # liquidity thins, so the forced flat happens before the drought rather
+    # than in it.
+    "calendar",
 )
 
 
