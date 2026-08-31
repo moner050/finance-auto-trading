@@ -17,10 +17,28 @@ from autotrader.strategies.david_v6.models import (
     V6Market,
 )
 
+# Section 5's spread guard: control by spread rather than by size.
 _MAX_SPREAD_TICKS = Decimal(3)
 # Section 6 refuses a fixed daily trade count and marks this bound as an
 # anti-overtrading safety candidate rather than one of David's values.
 SESSION_TRADE_UPPER_BOUND = 8
+
+# The stop-distance window, and where it comes from, because the number alone
+# reads like a measurement.
+#
+# Section 15.2 lists 초기 손절 거리 as 공식 산식 미공개 - the author never
+# published the formula - and section 20 says of these two outright: "0.40~1.50
+# ATR은 David의 공개 산식이 아니라 지나치게 좁거나 넓은 거래를 제거하기 위한
+# 연구 경계다." Section 12 carries them at `source_status: C`, analyst
+# inference.
+#
+# They stay, and they stay only as a filter. No formula is invented here: the
+# stop is placed at the caller's structural reference and these bounds only
+# refuse it for being implausibly tight or wide. An estimated rule that can
+# decline and never authorise takes no order authority, which is the thing
+# the document's governing principle protects.
+STOP_DISTANCE_MINIMUM_ATR = Decimal("0.40")
+STOP_DISTANCE_MAXIMUM_ATR = Decimal("1.50")
 # A ceiling, not a setting. Section 21 approves seven for Binance USD-M, and a
 # policy row that could raise it would turn the approved limit into a default.
 MAX_LEVERAGE = 7
@@ -285,9 +303,9 @@ def evaluate_v6_risk(
 
     stop_distance = abs(request.entry_price - stop_price)
     distance_atr = stop_distance / request.atr_5m
-    if distance_atr < Decimal("0.40"):
+    if distance_atr < STOP_DISTANCE_MINIMUM_ATR:
         blockers.append("STOP_DISTANCE_BELOW_0_40_ATR5M")
-    if distance_atr > Decimal("1.50"):
+    if distance_atr > STOP_DISTANCE_MAXIMUM_ATR:
         blockers.append("STOP_DISTANCE_ABOVE_1_50_ATR5M")
 
     if request.daily_net_pnl <= -(risk_base * policy.daily_loss_fraction):
@@ -375,6 +393,8 @@ __all__ = (
     "RESEARCH_SCORE_AUTHORITY",
     "SCORE_ONLY",
     "SESSION_TRADE_UPPER_BOUND",
+    "STOP_DISTANCE_MAXIMUM_ATR",
+    "STOP_DISTANCE_MINIMUM_ATR",
     "TRADE_RISK_CEILING",
     "ApprovedCapital",
     "V6RiskAuthority",
