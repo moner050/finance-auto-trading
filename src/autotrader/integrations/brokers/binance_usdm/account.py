@@ -218,7 +218,7 @@ async def capture_binance_usdm_account(
     reader: BinanceUsdmAccountReader,
     as_of: datetime,
 ) -> BinanceUsdmAccountSnapshot:
-    as_of = _require_utc(as_of, "account capture as_of")
+    as_of = _truncate_to_milliseconds(_require_utc(as_of, "account capture as_of"))
     start_at = as_of - _WINDOW
     history_query = urlencode(
         (
@@ -496,6 +496,22 @@ def _merge_exact[ValueT](
             raise ValueError("Binance USD-M order projections conflict")
         result[key] = value
     return tuple(result.values())
+
+
+def _truncate_to_milliseconds(value: datetime) -> datetime:
+    """The capture's own instant, at the resolution the venue speaks in.
+
+    Binance takes `startTime` and `endTime` as whole milliseconds, and a real
+    clock does not produce those. Demanding them of the caller made this
+    function reachable only from a hand-written constant, which is why it had
+    never been run against the live venue.
+
+    Truncating rather than rounding, so the window never claims to have read
+    an instant that had not arrived, and the truncated value is what the
+    snapshot reports: the snapshot then says exactly which instant it queried
+    instead of one a fraction of a millisecond later.
+    """
+    return value.replace(microsecond=(value.microsecond // 1000) * 1000)
 
 
 def _epoch_ms(value: datetime) -> int:

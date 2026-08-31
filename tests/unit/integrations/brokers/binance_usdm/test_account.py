@@ -308,3 +308,19 @@ async def test_rejects_non_utc_capture_before_any_read() -> None:
         )
 
     assert reader.requests == []
+
+
+@pytest.mark.asyncio
+async def test_a_real_clock_can_capture() -> None:
+    """The window is milliseconds because that is what Binance takes, but
+    requiring the caller to supply whole milliseconds made this reachable only
+    from a hand-written constant. It had never been run against the venue."""
+    moment = datetime(2026, 8, 31, 12, 0, 0, 123_456, tzinfo=UTC)
+
+    snapshot = await capture_binance_usdm_account(
+        reader=Reader(complete_payloads()), as_of=moment
+    )
+
+    # Truncated, not rounded: the snapshot never claims to have read an
+    # instant that had not arrived.
+    assert snapshot.as_of == moment.replace(microsecond=123_000)
