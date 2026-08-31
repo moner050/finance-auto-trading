@@ -12,7 +12,16 @@ from pathlib import Path
 from typing import Annotated, cast
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request, Response
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
@@ -97,10 +106,24 @@ from autotrader.apps.backoffice.secrets import (
     SecretReferenceError,
     SecretScope,
 )
+from autotrader.apps.backoffice.universe_commands import (
+    ActivationFacts,
+    MySqlUniverseCommands,
+    UniverseUploadRefused,
+    new_activation_command,
+    read_upload,
+)
+from autotrader.apps.backoffice.universe_commands import (
+    approval_for as universe_approval_for,
+)
+from autotrader.apps.backoffice.universe_read_model import UniverseReadModel
 from autotrader.execution.promotion.models import PromotionMode
 from autotrader.persistence.mysql.models.bindings import ProviderAccountBinding
 from autotrader.persistence.mysql.models.david_v6 import DavidV6ManifestRow
 from autotrader.persistence.mysql.repositories.promotion import PromotionSessions
+from autotrader.persistence.mysql.repositories.universe import (
+    UniverseAuthorityError,
+)
 from autotrader.security.secret_crypto import MasterKeyRing
 from autotrader.shared.ids import new_uuid7
 
@@ -149,6 +172,8 @@ def create_app(
     policy_reader = PoliciesReadModel(sessions)
     evidence_reader = EvidenceReadModel(sessions)
     promotion_reader = PromotionReadModel(sessions)
+    universe_reader = UniverseReadModel(sessions)
+    universe_commands = MySqlUniverseCommands(sessions=sessions, approvals=approvals)
     policy_commands = MySqlPolicyCommands(sessions=sessions, approvals=approvals)
     binding_commands = MySqlBindingCommands(sessions=sessions, approvals=approvals)
     account_commands = MySqlAccountCommands(sessions=sessions, approvals=approvals)
@@ -612,6 +637,106 @@ def create_app(
             await store.commit()
         return await _render_promotion(request, session, templates, promotion_reader)
 
+    async def universe_page(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+    ) -> Response:
+        return await _render_universe(request, session, templates, universe_reader)
+
+    async def stage_universe(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        manifest: Annotated[UploadFile, File()],
+        csrf_token: str = Form(...),
+        claimed_digest: str | None = Form(None),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        # Staging changes nothing in force, so it does not ask for the second
+        # password. Section 9 puts that on activation, which is the moment the
+        # strategy's filter changes underneath a running loop.
+        try:
+            document = read_upload(await manifest.read(), claimed_digest=claimed_digest)
+            await universe_commands.stage(
+                document,
+                operator=session.operator,
+                source_ip=_source_ip(request),
+                now=datetime.now(UTC),
+            )
+        except (UniverseUploadRefused, UniverseAuthorityError) as error:
+            return await _render_universe(
+                request, session, templates, universe_reader, error=str(error)
+            )
+        return await _render_universe(request, session, templates, universe_reader)
+
+    async def approve_universe(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        csrf_token: str = Form(...),
+        snapshot_id: str = Form(...),
+        second_password: str | None = Form(None),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        facts = await universe_commands.facts(
+            _uuid(snapshot_id, "unknown universe snapshot")
+        )
+        if second_password is None:
+            # First press: show what moves, so the password is typed against
+            # the symbols that change rather than against a snapshot id.
+            return await _render_universe(
+                request, session, templates, universe_reader, facts=facts
+            )
+        session_id = _session_id(request)
+        source_ip = _source_ip(request)
+        await approvals.require_attempts_left(
+            session_id=session_id, source_ip=source_ip
+        )
+        verifier = await passwords.active()
+        if not check_password(verifier, second_password):
+            await approvals.record_failure(session_id=session_id, source_ip=source_ip)
+            return await _render_universe(
+                request,
+                session,
+                templates,
+                universe_reader,
+                facts=facts,
+                error=PASSWORD_MISMATCH,
+            )
+        await approvals.clear_failures(session_id=session_id, source_ip=source_ip)
+        approval_id = await approvals.issue(
+            universe_approval_for(
+                session_id=session_id, operator=session.operator, facts=facts
+            )
+        )
+        return await _render_universe(
+            request,
+            session,
+            templates,
+            universe_reader,
+            facts=facts,
+            approval_id=approval_id,
+        )
+
+    async def activate_universe(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        csrf_token: str = Form(...),
+        snapshot_id: str = Form(...),
+        approval_id: str = Form(...),
+    ) -> Response:
+        require_csrf(session, csrf_token)
+        await universe_commands.activate(
+            new_activation_command(
+                snapshot_id=_uuid(snapshot_id, "unknown universe snapshot"),
+                operator=session.operator,
+                source_ip=_source_ip(request),
+                correlation_id=_session_id(request),
+                approval_id=approval_id,
+                requested_at=datetime.now(UTC),
+            ),
+            session_id=_session_id(request),
+        )
+        return await _render_universe(request, session, templates, universe_reader)
+
     async def evidence_page(
         request: Request,
         session: Annotated[Session, Depends(require_session)],
@@ -959,6 +1084,27 @@ def create_app(
         response_class=HTMLResponse,
     )
     app.add_api_route(
+        "/universe", universe_page, methods=["GET"], response_class=HTMLResponse
+    )
+    app.add_api_route(
+        "/universe/stage",
+        stage_universe,
+        methods=["POST"],
+        response_class=HTMLResponse,
+    )
+    app.add_api_route(
+        "/universe/approve",
+        approve_universe,
+        methods=["POST"],
+        response_class=HTMLResponse,
+    )
+    app.add_api_route(
+        "/universe/activate",
+        activate_universe,
+        methods=["POST"],
+        response_class=HTMLResponse,
+    )
+    app.add_api_route(
         "/evidence", evidence_page, methods=["GET"], response_class=HTMLResponse
     )
     app.add_api_route(
@@ -1082,6 +1228,29 @@ async def _render_accounts(
             "error": error,
             "enable": enable,
             "provider": provider,
+            "approval_id": approval_id,
+        },
+    )
+
+
+async def _render_universe(
+    request: Request,
+    session: Session,
+    templates: Jinja2Templates,
+    reader: UniverseReadModel,
+    *,
+    error: str | None = None,
+    facts: ActivationFacts | None = None,
+    approval_id: str | None = None,
+) -> Response:
+    return templates.TemplateResponse(
+        request=request,
+        name="universe.html",
+        context={
+            "session": session,
+            "view": await reader.load(),
+            "error": error,
+            "facts": facts,
             "approval_id": approval_id,
         },
     )

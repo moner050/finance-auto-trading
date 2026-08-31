@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <title>유니버스 권위</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; }
+      h1 { font-size: 1.3rem; }
+      h2 { font-size: 1rem; margin-top: 2rem; }
+      h3 { font-size: .95rem; margin-top: 1.5rem; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border-bottom: 1px solid #ddd; padding: .35rem .6rem; text-align: left; }
+      th { color: #555; font-weight: 500; }
+      .code { font-family: ui-monospace, monospace; font-size: .85rem; color: #555; }
+      .ok { color: #00701a; font-weight: 600; }
+      .danger { color: #b00020; font-weight: 600; }
+      .empty { color: #777; }
+      .note { color: #777; font-size: .85rem; }
+      .panel { border: 1px solid #ccc; padding: 1rem 1.25rem; margin: 1rem 0; }
+      .added { color: #00701a; }
+      .removed { color: #b00020; }
+      input, select { padding: .35rem; font-size: .95rem; }
+      button { padding: .4rem .8rem; font-size: .95rem; cursor: pointer; }
+      .go { background: #00701a; color: #fff; border: 1px solid #005414; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <h1>유니버스 권위 <span class="code">{{ session.operator.email }}</span></h1>
+    <p><a href="/">← 운영 화면</a></p>
+
+    {% if error %}<p class="danger">{{ error }}</p>{% endif %}
+    {% if notice %}<p class="ok">{{ notice }}</p>{% endif %}
+
+    <p class="note">
+      유니버스는 개별 종목의 모음이 아니라 <strong>특정 날짜의 발표된 목록 하나</strong>입니다.
+      그래서 이 화면에는 종목을 한 개 추가하는 방법이 없습니다 — 손으로 넣은 종목은
+      아무도 발표하지 않은 유니버스를 만듭니다. 올리는 단위는 매니페스트 전체입니다.
+    </p>
+    <p class="note">
+      활성화는 이전 목록을 <strong>덮어쓰지 않고 supersede</strong> 합니다.
+      "그 거래를 결정한 날 이 종목이 KOSPI 200 보통주였는가"는 답이 있는 질문이고,
+      어제 목록을 덮어쓰는 순간 답이 사라집니다.
+    </p>
+
+    {% if view.missing_authorities %}
+    <p class="danger">
+      권위가 없는 유니버스:
+      <span class="code">{{ view.missing_authorities | join(', ') }}</span>.
+      권위가 없다는 것은 종목이 제외되었다는 뜻이 아닙니다 — 전략은 그 차이를
+      구분해서 판단합니다.
+    </p>
+    {% endif %}
+
+    <h2>매니페스트 업로드</h2>
+    <form method="post" action="/universe/stage" enctype="multipart/form-data" class="panel">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
+      <p><label>매니페스트 파일 (JSON)
+        <input type="file" name="manifest" accept="application/json,.json" required />
+      </label></p>
+      <p><label>다이제스트 (선택, SHA-256 64자리 16진수)
+        <input type="text" name="claimed_digest" size="68" autocomplete="off" />
+      </label></p>
+      <p class="note">
+        다이제스트를 넣으면 여기서 계산한 값과 대조합니다. 두 값이 같다는 것이
+        받은 파일과 가지고 있는 파일이 같다는 유일한 증거입니다. 다이제스트는
+        구성원과 날짜만 덮고 출처는 덮지 않습니다 — 같은 목록을 다른 곳에서
+        받아도 같은 유니버스입니다.
+      </p>
+      <button type="submit">스테이징</button>
+      <span class="note">스테이징은 아무것도 사용되게 만들지 않습니다.</span>
+    </form>
+
+    {% for authority in view.authorities %}
+    <h2>
+      {{ authority.universe_code }}
+      {% if authority.active %}
+      <span class="ok">활성 {{ authority.active.effective_date }}</span>
+      <span class="code">{{ authority.active.member_count }}종목 · {{ authority.active.digest }}</span>
+      {% else %}
+      <span class="danger">권위 없음</span>
+      {% endif %}
+    </h2>
+
+    {% if authority.difference %}
+    <div class="panel">
+      <h3>활성 대비 변경</h3>
+      {% if authority.difference.identical %}
+      <p class="note">구성원이 같습니다. 날짜만 달라집니다.</p>
+      {% else %}
+      <p>
+        <span class="added">추가 {{ authority.difference.added | length }}</span> ·
+        <span class="removed">제외 {{ authority.difference.removed | length }}</span> ·
+        <span>재분류 {{ authority.difference.changed | length }}</span>
+      </p>
+      {% if authority.difference.added %}
+      <p class="added code">+ {{ authority.difference.added | join(', ') }}</p>
+      {% endif %}
+      {% if authority.difference.removed %}
+      <p class="removed code">− {{ authority.difference.removed | join(', ') }}</p>
+      {% endif %}
+      {% if authority.difference.changed %}
+      <p class="code">~ {{ authority.difference.changed | join(', ') }}</p>
+      <p class="note">
+        재분류는 종목 수로는 보이지 않습니다. 섹터나 보통주 여부가 바뀐 것입니다.
+      </p>
+      {% endif %}
+      {% endif %}
+    </div>
+    {% elif authority.staged | length > 1 %}
+    <p class="note">
+      스테이징된 스냅샷이 둘 이상이라 무엇과 비교할지 정해지지 않습니다.
+      하나를 활성화한 뒤 다시 보세요.
+    </p>
+    {% endif %}
+
+    {% if authority.history %}
+    <table>
+      <tr>
+        <th>기준일</th><th>상태</th><th>종목</th><th>다이제스트</th>
+        <th>출처</th><th>발표</th><th>올린 사람</th><th>활성화</th><th></th>
+      </tr>
+      {% for row in authority.history %}
+      <tr>
+        <td class="code">{{ row.effective_date }}</td>
+        <td class="{{ 'ok' if row.state == 'ACTIVE' else 'empty' }}">{{ row.state }}</td>
+        <td>{{ row.member_count }}</td>
+        <td class="code">{{ row.digest }}</td>
+        <td>{{ row.source_name }}<br /><span class="code">{{ row.source_reference }}</span></td>
+        <td class="code">{{ row.published_at }}</td>
+        <td class="code">{{ row.staged_by }}</td>
+        <td class="code">
+          {% if row.activated_at %}
+          {{ row.activated_at }}<br />{{ row.activated_by }}
+          {% if row.superseded_at %}<br />→ {{ row.superseded_at }}{% endif %}
+          {% else %}-{% endif %}
+        </td>
+        <td>
+          {% if row.activatable %}
+          <form method="post" action="/universe/approve">
+            <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
+            <input type="hidden" name="snapshot_id" value="{{ row.snapshot_id }}" />
+            <button type="submit">활성화</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="empty">저장된 스냅샷이 없습니다.</p>
+    {% endif %}
+    {% endfor %}
+
+    {% if facts %}
+    <h2>확인</h2>
+    <div class="panel">
+      <p>
+        <span class="code">{{ facts.universe_code }}</span> 의 권위를
+        {{ facts.current_effective_date or '없음' }} 에서
+        <strong>{{ facts.effective_date }}</strong> 로 바꿉니다.
+        다음 평가부터 전략은 이 목록으로 걸러집니다.
+      </p>
+      <p>
+        종목 {{ facts.current_member_count if facts.current_member_count is not none else 0 }}
+        → <strong>{{ facts.member_count }}</strong> ·
+        <span class="added">추가 {{ facts.added | length }}</span> ·
+        <span class="removed">제외 {{ facts.removed | length }}</span> ·
+        재분류 {{ facts.changed | length }}
+      </p>
+      {% if facts.added %}<p class="added code">+ {{ facts.added | join(', ') }}</p>{% endif %}
+      {% if facts.removed %}<p class="removed code">− {{ facts.removed | join(', ') }}</p>{% endif %}
+      {% if facts.changed %}<p class="code">~ {{ facts.changed | join(', ') }}</p>{% endif %}
+      <p class="note">다이제스트 <span class="code">{{ facts.digest }}</span></p>
+
+      {% if approval_id %}
+      <form method="post" action="/universe/activate">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
+        <input type="hidden" name="approval_id" value="{{ approval_id }}" />
+        <input type="hidden" name="snapshot_id" value="{{ facts.snapshot_id }}" />
+        <button class="go" type="submit">활성화</button>
+        <span class="note">승인은 60초 후 만료되며 한 번만 사용됩니다.</span>
+      </form>
+      {% else %}
+      <form method="post" action="/universe/approve">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
+        <input type="hidden" name="snapshot_id" value="{{ facts.snapshot_id }}" />
+        <p><label>2차 비밀번호
+          <input type="password" name="second_password" autocomplete="off" required />
+        </label></p>
+        <button type="submit">승인</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endif %}
+  </body>
+</html>

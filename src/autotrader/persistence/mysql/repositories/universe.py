@@ -210,6 +210,28 @@ class UniverseAuthorities:
         ).all()
         return tuple(_stored(row) for row in rows)
 
+    async def snapshot(self, snapshot_id: UUID) -> StoredSnapshot | None:
+        """One snapshot by id, whatever state it is in."""
+        row = await self._session.get(UniverseSnapshotRow, snapshot_id)
+        return None if row is None else _stored(row)
+
+    async def manifest(self, snapshot_id: UUID) -> UniverseManifest | None:
+        """A stored snapshot back in the shape a comparison speaks.
+
+        Rebuilt from the rows rather than kept from the upload, so a
+        comparison runs over what the table actually holds and not over what
+        an upload claimed it would hold.
+        """
+        stored = await self.snapshot(snapshot_id)
+        if stored is None:
+            return None
+        return UniverseManifest(
+            universe_code=stored.universe_code,
+            effective_date=stored.effective_date,
+            provenance=stored.provenance,
+            members=await self.members(snapshot_id),
+        )
+
     async def members(self, snapshot_id: UUID) -> tuple[UniverseMember, ...]:
         """One snapshot's list, in symbol order."""
         rows = (
