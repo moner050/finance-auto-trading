@@ -26,6 +26,7 @@ from autotrader.strategies.david_v6.exhaustion import (
     ExhaustionSequence,
 )
 from autotrader.strategies.david_v6.grading import (
+    BLOCKING_BIG_TRADE_AHEAD,
     DIRECTION_LONG,
     DIRECTION_SHORT,
     FIBONACCI_EXTENSION_CLUSTER,
@@ -33,7 +34,9 @@ from autotrader.strategies.david_v6.grading import (
     HYPOTHESIS_CODES,
     PROFILE_VALUE_CONFLUENCE,
     REGULAR_HLIT_DIVERGENCE,
+    SUPPORTING_BIG_TRADE_BEHIND,
     V1_SECADO,
+    indicator_weight,
 )
 from autotrader.strategies.david_v6.manifest import (
     V6_DESIGN_SHA256,
@@ -881,3 +884,23 @@ def test_the_strategy_is_not_long_only_where_the_venue_can_short() -> None:
 
     assert "SPOT_VENUE_CANNOT_SHORT" not in decision.blockers
     assert V6Market.BINANCE_USDM not in SPOT_ONLY_MARKETS
+
+
+def test_a_blocking_big_trade_is_both_scored_and_refused() -> None:
+    """Section 9.2 sanctions both: "진행 방향 앞의 Big Trade → 진입 감점 또는
+    거부". The -4 is section 21.3's research weight and it is applied; the
+    refusal comes from stronger sources and is applied too.
+
+    Those sources are the reason the refusal is not traded away for the score.
+    The same block says outright `never: "Big Trade와 맞서 진입하지 않는다"`,
+    section 12 lists `fighting_big_trades` among the prohibitions, section
+    21.2 puts `no_blocking_big_trade_before_1_5r` in the mandatory set, and
+    section 0 records v6.0 correcting v5.0 from "확인 신호(+1점)" to "회피
+    대상. 맞서 싸우지 않는다".
+
+    Dropping the refusal to leave only the weight would delete the rule
+    rather than soften it: section 21.3 is held at SCORE_ONLY, so the -4
+    currently changes no outcome at all.
+    """
+    assert indicator_weight(BLOCKING_BIG_TRADE_AHEAD) == -4
+    assert indicator_weight(SUPPORTING_BIG_TRADE_BEHIND) == 1
