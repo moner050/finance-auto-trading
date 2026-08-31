@@ -70,6 +70,10 @@ from autotrader.persistence.mysql.models.toss_us_reconciliation import (
     TossUsReconciliationRunRow,
     TossUsRecoveryLeaseRow,
 )
+from autotrader.persistence.mysql.models.universe import (
+    UniverseSnapshotMemberRow,
+    UniverseSnapshotRow,
+)
 
 metadata = CoreBase.metadata
 
@@ -94,5 +98,7 @@ __all__ = [
     "TossUsPositionFactRow",
     "TossUsReconciliationRunRow",
     "TossUsRecoveryLeaseRow",
+    "UniverseSnapshotMemberRow",
+    "UniverseSnapshotRow",
     "metadata",
 ]
