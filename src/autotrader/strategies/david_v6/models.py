@@ -42,6 +42,21 @@ class V6Market(StrEnum):
     BINANCE_USDM = "BINANCE_USDM"
 
 
+# Markets whose accounts hold the instrument itself, so a position can only be
+# opened by buying it.
+#
+# This is a fact about the venue, and saying so matters: section 12 lists
+# `permanent_long_only` among the prohibitions, and section 2.2 gives the short
+# rule as the exact mirror of the long one - `downtrend_regime and
+# cross_down(sma6, sma70)` - with section 2.4 naming Baxter a short candidate.
+# The strategy shorts. These two accounts are spot, and spot cannot.
+#
+# So the refusal is the broker's, not the method's, and a margin-capable cash
+# venue would belong on the other side of this line rather than inheriting a
+# stance the author never took.
+SPOT_ONLY_MARKETS = frozenset({V6Market.KRX_CASH, V6Market.US_CASH})
+
+
 @dataclass(frozen=True, slots=True)
 class MatchedIndicator:
     key: str

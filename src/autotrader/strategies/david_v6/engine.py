@@ -20,6 +20,7 @@ from autotrader.strategies.david_v6.grading import (
 from autotrader.strategies.david_v6.manifest import V6Manifest
 from autotrader.strategies.david_v6.metodo import MetodoFacts
 from autotrader.strategies.david_v6.models import (
+    SPOT_ONLY_MARKETS,
     EvidenceState,
     MatchedIndicator,
     SetupGrade,
@@ -91,11 +92,14 @@ def evaluate_v6(
         and bundle.market is V6Market.BINANCE_USDM
     ):
         blockers.append("METODO_CASH_ONLY")
+    # The venue's refusal, not the method's. Section 2.2 gives the short rule
+    # as the exact mirror of the long one and section 12 prohibits
+    # `permanent_long_only`; these two accounts are spot and cannot borrow.
     if (
-        bundle.market in {V6Market.KRX_CASH, V6Market.US_CASH}
+        bundle.market in SPOT_ONLY_MARKETS
         and risk_context.risk_request.side is Side.SELL
     ):
-        blockers.append("CASH_SHORT_UNSUPPORTED")
+        blockers.append("SPOT_VENUE_CANNOT_SHORT")
 
     required = _required_keys(bundle.market, risk_context.family)
     for key in sorted(required):

@@ -43,6 +43,7 @@ from autotrader.strategies.david_v6.manifest import (
 )
 from autotrader.strategies.david_v6.metodo import MetodoFacts
 from autotrader.strategies.david_v6.models import (
+    SPOT_ONLY_MARKETS,
     EvidenceState,
     MatchedIndicator,
     SetupGrade,
@@ -407,7 +408,11 @@ def _context(
     )
 
 
-def test_cash_is_long_only_and_never_emits_a_candidate() -> None:
+def test_a_spot_venue_refuses_a_short_and_never_emits_a_candidate() -> None:
+    """The refusal is the broker's, not the method's. Section 2.2 gives the
+    short rule as the exact mirror of the long one and section 2.4 names
+    Baxter a short candidate, while section 12 prohibits
+    `permanent_long_only`. These two accounts are spot and cannot borrow."""
     bundle = _bundle(market=V6Market.KRX_CASH)
     manifest = _manifest()
 
@@ -429,7 +434,7 @@ def test_cash_is_long_only_and_never_emits_a_candidate() -> None:
 
     assert long_decision.grade is SetupGrade.A
     assert short_decision.grade is SetupGrade.REJECT
-    assert "CASH_SHORT_UNSUPPORTED" in short_decision.blockers
+    assert "SPOT_VENUE_CANNOT_SHORT" in short_decision.blockers
 
 
 @pytest.mark.parametrize("side", (Side.BUY, Side.SELL))
@@ -861,3 +866,18 @@ def test_the_confirmed_indicators_may_still_be_required() -> None:
     )
 
     assert REGULAR_HLIT_DIVERGENCE in context.mandatory_indicator_codes
+
+
+def test_the_strategy_is_not_long_only_where_the_venue_can_short() -> None:
+    """Section 12 prohibits `permanent_long_only`, so the mirror has to be
+    reachable somewhere. Binance USD-M is where it is."""
+    bundle = _bundle(market=V6Market.BINANCE_USDM)
+
+    decision = evaluate_v6(
+        bundle,
+        manifest=_manifest(),
+        risk_context=_context(bundle, family=StrategyFamily.HLIT, side=Side.SELL),
+    )
+
+    assert "SPOT_VENUE_CANNOT_SHORT" not in decision.blockers
+    assert V6Market.BINANCE_USDM not in SPOT_ONLY_MARKETS
