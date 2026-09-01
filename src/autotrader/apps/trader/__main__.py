@@ -3,9 +3,14 @@
     python -m autotrader.apps.trader --account <alias> --check
 
 `--check` resolves everything and reports, without connecting to a venue or
-placing anything. It is the useful mode today: six of the loop's inputs have no
-producer anywhere in the system, so the honest output of this program is the
-list of them rather than a running loop.
+placing anything. It is the only mode: there is no running loop yet, and an
+entry point that started one and fell over after connecting to a venue would
+be worse than one that does not offer to.
+
+What is left without a producer no longer blocks anything. `range_efficiency`
+and `atr_ratio` are observations section 2.1's regime does not consult, so
+they are reported as absent rather than as reasons - saying the loop cannot
+start because of them would be untrue about both them and the loop.
 
 Only the Binance USD-M paper loop is wired. It is the one composition that is
 complete end to end; an entry point that offered all three markets would refuse
@@ -71,16 +76,14 @@ async def _report(alias: str) -> int:
     missing = unsourced_inputs()
     if not missing:
         return 0
-    # Reported on stderr and with a non-zero exit, because this is the reason
-    # the loop is not running, not a footnote to a successful resolution.
-    print("", file=sys.stderr)
-    print(
-        f"the loop cannot start; {len(missing)} inputs have no producer:",
-        file=sys.stderr,
-    )
+    # Named, not counted against the account. These are observations with no
+    # producer, and none of them is consulted by a decision, so the resolution
+    # above succeeded and this is what will be absent from it.
+    print()
+    print(f"{len(missing)} observations have no producer and will be absent:")
     for item in missing:
-        print(f"  - {item.name}: {item.reason}", file=sys.stderr)
-    return 1
+        print(f"  - {item.name}: {item.reason}")
+    return 0
 
 
 def main(argv: tuple[str, ...]) -> int:

@@ -269,9 +269,19 @@ async def resolve_account(
                     ),
                 )
             )
+        # Every value read out before the session goes away. A rollback
+        # expires the instances, and a detached one raises on attribute access
+        # rather than returning what it last held.
+        #
+        # The binding and the manifest were read after it. That only reaches
+        # the operator once nothing else is missing, so the refusal path -
+        # which is all this had ever done - never touched them, and the first
+        # account complete enough to start crashed instead of starting.
         account_id = account.id
         environment = account.environment
         enabled = account.enabled
+        binding_id = None if binding is None else binding.id
+        manifest_id = None if manifest is None else manifest.id
         await session.rollback()
 
     policy_version_id: UUID | None = None
@@ -292,8 +302,8 @@ async def resolve_account(
 
     if missing:
         raise StartupRefusedError(tuple(missing))
-    assert binding is not None
-    assert manifest is not None
+    assert binding_id is not None
+    assert manifest_id is not None
     assert instrument_id is not None
     assert policy_version_id is not None
     return ResolvedAccount(
@@ -306,9 +316,9 @@ async def resolve_account(
             policy_key="david-v6",
             policy_active=True,
         ),
-        binding_id=binding.id,
+        binding_id=binding_id,
         instrument_id=instrument_id,
-        manifest_id=manifest.id,
+        manifest_id=manifest_id,
         policy_version_id=policy_version_id,
         market=market,
     )
