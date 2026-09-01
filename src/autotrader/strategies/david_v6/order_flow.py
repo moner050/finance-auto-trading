@@ -103,6 +103,22 @@ MINIMUM_BIG_TRADE_EVENTS = 200
 # more, and a smaller one would trade the safety away for tidiness.
 MAXIMUM_BIG_TRADE_MARKERS = 20
 
+# What counts as an extreme delta, and why it is not a typed notional either.
+#
+# The name says it: `delta_p90` is the ninetieth percentile of delta. It gates
+# the MIG and secado observations, both of which section 15.2 holds at
+# `score_only`, and a fixed notional stops describing "extreme for this tape"
+# the moment volume changes character - the same objection section 19.1 raises
+# to picking a contract count for Big Trades.
+#
+# Ranked over the window's own thirty-second bars, so it moves with the tape.
+DELTA_QUANTILE = Decimal("0.90")
+
+# Under twenty bars a ninetieth percentile is the second largest of a handful.
+# Below it the MIG and secado observations are absent rather than computed
+# against a threshold that describes the sample.
+MINIMUM_DELTA_BARS = 20
+
 
 class BigTradesUnmeasured(RuntimeError):
     """Raised when a window held too few events to rank one against them."""
@@ -111,7 +127,6 @@ class BigTradesUnmeasured(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class OrderFlowThresholds:
     tick_size: Decimal
-    delta_p90_notional: Decimal
     atr_30s: Decimal
     # Section 15.2 records Ceros osmóticos as undisclosed, confidence LOW, and
     # `telemetry_only`. Nothing here reads the result, so requiring these
@@ -124,7 +139,6 @@ class OrderFlowThresholds:
     def __post_init__(self) -> None:
         for name in (
             "tick_size",
-            "delta_p90_notional",
             "atr_30s",
         ):
             value = require_decimal(getattr(self, name))
@@ -235,6 +249,7 @@ def aggregate_order_flow(
     )
     unknown_count = len(deduplicated) - len(known)
     bars = _flow_bars(deduplicated, start, end)
+    delta_threshold = _delta_threshold(bars)
     # Only the Big Trades go missing when the sample is short. MIG, secado and
     # the ceros are read off the bars and the prints, and none of them is
     # ranked against anything, so taking the whole record down with the
@@ -247,9 +262,9 @@ def aggregate_order_flow(
         sell_notional=sell_notional,
         delta_notional=(None if unknown_count else buy_notional - sell_notional),
         big_trades=_big_trades(known, thresholds),
-        reversal_mig=_reversal_mig(bars, thresholds),
-        continuation_mig=_continuation_mig(bars, thresholds),
-        secado=_secado(bars, thresholds),
+        reversal_mig=_reversal_mig(bars, thresholds, delta_threshold),
+        continuation_mig=_continuation_mig(bars, thresholds, delta_threshold),
+        secado=_secado(bars, thresholds, delta_threshold),
         ceros=_ceros(deduplicated, thresholds),
         telemetry_only=True,
     )
@@ -417,16 +432,30 @@ def _flow_bars(
     return tuple(bars)
 
 
+def _delta_threshold(bars: tuple[_FlowBar, ...]) -> Decimal | None:
+    """What an extreme delta is on this tape, or None when it cannot say."""
+    magnitudes = tuple(abs(bar.delta) for bar in bars if bar.delta is not None)
+    if len(magnitudes) < MINIMUM_DELTA_BARS:
+        return None
+    return big_trade_quantile(magnitudes, DELTA_QUANTILE)
+
+
 def _reversal_mig(
-    bars: tuple[_FlowBar, ...], thresholds: OrderFlowThresholds
+    bars: tuple[_FlowBar, ...],
+    thresholds: OrderFlowThresholds,
+    delta_threshold: Decimal | None,
 ) -> bool | None:
+    if delta_threshold is None:
+        # Too few bars to say what an extreme delta is here, so the
+        # observation is absent rather than measured against a guess.
+        return None
     if len(bars) < 2 or any(bar.delta is None for bar in bars):
         return None
     for event, confirmation in pairwise(bars):
         if confirmation.index != event.index + 1 or event.delta is None:
             continue
         span = event.high - event.low
-        if span <= 0 or abs(event.delta) < thresholds.delta_p90_notional:
+        if span <= 0 or abs(event.delta) < delta_threshold:
             continue
         progress = abs(event.close - event.open)
         if progress > Decimal("0.15") * thresholds.atr_30s:
@@ -453,9 +482,11 @@ def _reversal_mig(
 
 
 def _continuation_mig(
-    bars: tuple[_FlowBar, ...], thresholds: OrderFlowThresholds
+    bars: tuple[_FlowBar, ...],
+    thresholds: OrderFlowThresholds,
+    delta_threshold: Decimal | None,
 ) -> bool | None:
-    del thresholds
+    del thresholds, delta_threshold
     if len(bars) < 2 or any(bar.delta is None for bar in bars):
         return None
     for event, confirmation in pairwise(bars):
@@ -482,7 +513,13 @@ def _continuation_mig(
     return False
 
 
-def _secado(bars: tuple[_FlowBar, ...], thresholds: OrderFlowThresholds) -> bool | None:
+def _secado(
+    bars: tuple[_FlowBar, ...],
+    thresholds: OrderFlowThresholds,
+    delta_threshold: Decimal | None,
+) -> bool | None:
+    if delta_threshold is None:
+        return None
     if len(bars) < 2 or any(bar.delta is None for bar in bars):
         return None
     for index, event in enumerate(bars[:-1]):
@@ -498,7 +535,7 @@ def _secado(bars: tuple[_FlowBar, ...], thresholds: OrderFlowThresholds) -> bool
             Decimal("0.15") * thresholds.atr_30s,
         )
         if (
-            abs(event.delta) < thresholds.delta_p90_notional
+            abs(event.delta) < delta_threshold
             or abs(event.close - event.open) > progress_limit
             or abs(second.delta) > Decimal("0.65") * abs(event.delta)
             or second.volume > Decimal("0.75") * event.volume
@@ -621,8 +658,10 @@ def blocking_big_trade_ahead(
 __all__ = (
     "BIG_TRADE_EXTREME_QUANTILE",
     "BIG_TRADE_NORMAL_QUANTILE",
+    "DELTA_QUANTILE",
     "MAXIMUM_BIG_TRADE_MARKERS",
     "MINIMUM_BIG_TRADE_EVENTS",
+    "MINIMUM_DELTA_BARS",
     "AggressorSide",
     "BigTradeClass",
     "BigTradeCluster",

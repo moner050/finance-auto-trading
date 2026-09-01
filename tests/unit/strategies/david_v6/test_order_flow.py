@@ -10,8 +10,10 @@ from autotrader.strategies.david_v6.models import EvidenceState
 from autotrader.strategies.david_v6.order_flow import (
     BIG_TRADE_EXTREME_QUANTILE,
     BIG_TRADE_NORMAL_QUANTILE,
+    DELTA_QUANTILE,
     MAXIMUM_BIG_TRADE_MARKERS,
     MINIMUM_BIG_TRADE_EVENTS,
+    MINIMUM_DELTA_BARS,
     AggressorSide,
     BigTradeClass,
     BigTradeCluster,
@@ -30,7 +32,6 @@ START = datetime(2026, 8, 24, tzinfo=UTC)
 def _thresholds(**changes: object) -> OrderFlowThresholds:
     values: dict[str, object] = {
         "tick_size": Decimal("1"),
-        "delta_p90_notional": Decimal("100"),
         "atr_30s": Decimal("10"),
         "ceros_near_zero_notional": Decimal("10"),
         "ceros_large_notional": Decimal("40"),
@@ -85,8 +86,23 @@ def test_big_trades_dedupe_by_provider_id_and_retain_unknown_aggressor() -> None
     assert facts.big_trades is None
 
 
+def _quiet_bars(count: int, *, first_second: int) -> tuple[TradePrint, ...]:
+    """One small trade per thirty-second bar, so a delta quantile has a tape
+    to rank against."""
+    return tuple(
+        _trade(
+            f"q{index}",
+            seconds=first_second + index * 30,
+            price="100",
+            quantity="0.5",
+            buyer_maker=index % 2 == 0,
+        )
+        for index in range(count)
+    )
+
+
 def test_reversal_mig_and_secado_use_completed_30_second_bars() -> None:
-    trades = (
+    event = (
         _trade("e1", seconds=0, price="100", quantity="10", buyer_maker=True),
         _trade("e2", seconds=5, price="90", quantity="10", buyer_maker=True),
         _trade("e3", seconds=20, price="99", quantity="10", buyer_maker=True),
@@ -94,17 +110,44 @@ def test_reversal_mig_and_secado_use_completed_30_second_bars() -> None:
         _trade("s2", seconds=50, price="101", quantity="3", buyer_maker=True),
         _trade("r1", seconds=61, price="101", quantity="1", buyer_maker=False),
     )
+    # An extreme delta is extreme relative to something, so the window needs
+    # enough ordinary bars for the ninetieth percentile to mean anything.
+    trades = (*event, *_quiet_bars(MINIMUM_DELTA_BARS, first_second=90))
 
     facts = aggregate_order_flow(
         trades,
         window_start=START,
-        window_end=START + timedelta(seconds=90),
+        window_end=START + timedelta(seconds=90 + MINIMUM_DELTA_BARS * 30),
         thresholds=_thresholds(),
     )
 
     assert facts.reversal_mig is True
     assert facts.secado is True
     assert facts.telemetry_only is True
+
+
+def test_a_short_window_cannot_say_what_an_extreme_delta_is() -> None:
+    """`delta_p90` is a percentile by name. Under twenty bars it is the second
+    largest of a handful, so the observations it gates are absent rather than
+    measured against a threshold that describes the sample."""
+    facts = aggregate_order_flow(
+        _quiet_bars(MINIMUM_DELTA_BARS - 1, first_second=0),
+        window_start=START,
+        window_end=START + timedelta(seconds=MINIMUM_DELTA_BARS * 30),
+        thresholds=_thresholds(),
+    )
+
+    assert facts.reversal_mig is None
+    assert facts.secado is None
+
+
+def test_the_delta_threshold_is_no_longer_typed() -> None:
+    """Section 19.1 rejects picking a fixed number for Big Trades for the same
+    reason: it stops describing "extreme for this tape" as volume changes."""
+    fields = set(OrderFlowThresholds.__dataclass_fields__)
+
+    assert "delta_p90_notional" not in fields
+    assert Decimal("0.90") == DELTA_QUANTILE
 
 
 def test_ceros_requires_two_adjacent_outer_levels_with_extreme_imbalance() -> None:

@@ -96,7 +96,6 @@ def _inputs() -> BinanceLoopInputs:
         calendar=_calendar(),
         order_flow_thresholds=OrderFlowThresholds(
             tick_size=Decimal("0.1"),
-            delta_p90_notional=Decimal("500"),
             atr_30s=Decimal("1"),
             ceros_near_zero_notional=Decimal("10"),
             ceros_large_notional=Decimal("100"),
