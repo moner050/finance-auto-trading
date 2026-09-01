@@ -18,6 +18,10 @@ dependencies = [
   "sqlalchemy[asyncio]>=2.0.51,<3",
   "tzdata>=2025.2,<2027",
   "uvicorn[standard]>=0.35,<1",
+  # The aggregate-trade stream. It arrives with uvicorn[standard] today,
+  # and a feed the strategy reads order flow from should not depend on
+  # another package continuing to want it.
+  "websockets>=15,<18",
 ]
 
 [build-system]
