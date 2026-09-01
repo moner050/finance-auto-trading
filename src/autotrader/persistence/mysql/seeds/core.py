@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
+from autotrader.persistence.mysql.models.accounts import Broker
 from autotrader.persistence.mysql.models.core import (
     CoreBase,
     CoreDataSource,
@@ -23,8 +24,25 @@ NYSE_EXCHANGE_ID = UUID("01989400-0000-7000-8000-000000000014")
 CRYPTO_MARKET_ID = UUID("019d0000-0000-7000-8000-000000000001")
 BINANCE_USDM_EXCHANGE_ID = UUID("019d0000-0000-7000-8000-000000000002")
 
+KIS_BROKER_ID = UUID("019d0000-0000-7000-8000-000000000003")
+TOSS_BROKER_ID = UUID("019d0000-0000-7000-8000-000000000004")
+BINANCE_BROKER_ID = UUID("019d0000-0000-7000-8000-000000000005")
+
 CRYPTO_MARKET_CODE = "CRYPTO"
 BINANCE_USDM_EXCHANGE_CODE = "BINANCE_USDM"
+
+# The three this system talks to, and the codes the secret store and the
+# provider bindings already use. Reference data like the exchanges above:
+# fixed by what has been implemented, not by anything an operator decides.
+#
+# They had no producer. The accounts screen offers a broker to pick and reads
+# `exec_broker`, nothing wrote to it, and the first account could not be
+# created - a screen requiring a table nobody filled.
+BROKERS = (
+    (KIS_BROKER_ID, "KIS", "한국투자증권"),
+    (TOSS_BROKER_ID, "TOSS", "토스증권"),
+    (BINANCE_BROKER_ID, "BINANCE", "Binance"),
+)
 
 
 async def seed_core_reference(uow: SqlAlchemyUnitOfWork) -> None:
@@ -105,6 +123,13 @@ async def seed_core_reference_session(session: AsyncSession) -> None:
             CoreExchange.code == BINANCE_USDM_EXCHANGE_CODE,
         ),
     )
+    for broker_id, code, name in BROKERS:
+        await ensure_exact_seed_row(
+            session,
+            Broker,
+            {"id": broker_id, "code": code, "name": name},
+            (Broker.code == code,),
+        )
 
 
 async def ensure_exact_seed_row[SeedModel: CoreBase](
