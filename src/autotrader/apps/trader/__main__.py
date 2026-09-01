@@ -63,8 +63,17 @@ async def _run_shadow(alias: str, leverage: int) -> int:
     """Evaluate real bars and record real decisions, placing nothing."""
     from autotrader.apps.trader.composition import bound_policy
     from autotrader.apps.trader.loop import SystemClock, run_forever
-    from autotrader.apps.trader.run_shadow import ShadowStartupError, build_shadow_loop
+    from autotrader.apps.trader.run_shadow import (
+        ShadowStartupError,
+        build_shadow_loop,
+        run_together,
+    )
     from autotrader.apps.trader.shadow import SHADOW
+    from autotrader.integrations.market_data.binance_trade_stream import (
+        STREAM_URL,
+        BinanceUsdmTradeStream,
+        websockets_connect,
+    )
 
     settings = Settings()
     engine = create_engine(settings)
@@ -92,22 +101,35 @@ async def _run_shadow(alias: str, leverage: int) -> int:
             print(str(error), file=sys.stderr)
             return 1
 
+        stream = BinanceUsdmTradeStream(
+            market_data=loop.market_data, connect=websockets_connect
+        )
         print(f"mode          {SHADOW}")
         print(f"account       {alias} ({resolved.account.environment})")
         print(f"equity        {loop.equity} USDT")
         print(f"tick size     {loop.tick_size}")
+        print(f"tape          {STREAM_URL}")
         print("orders        none; this loop has no execution port to submit to")
         print("stop with Ctrl-C")
+        stop = asyncio.Event()
         try:
-            await run_forever(
-                ports=loop.ports,
-                clock=SystemClock(),
-                interval=HLIT_TIMEFRAME,
-                stop=asyncio.Event(),
+            # Together, because neither is useful alone: without the tape
+            # every pass quietly produces nothing, and without the loop the
+            # tape fills a table nobody reads.
+            await run_together(
+                stream=stream.run(stop=stop),
+                loop=run_forever(
+                    ports=loop.ports,
+                    clock=SystemClock(),
+                    interval=HLIT_TIMEFRAME,
+                    stop=stop,
+                ),
+                stop=stop,
             )
         except KeyboardInterrupt:
             print("stopped")
         finally:
+            print(f"frames        {stream.frames} ({stream.reconnects} reconnects)")
             await loop.rest.aclose()
     finally:
         await engine.dispose()

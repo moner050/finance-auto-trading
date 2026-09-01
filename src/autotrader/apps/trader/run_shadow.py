@@ -16,7 +16,9 @@ the program refuses - the same rule `OperatorFacts` states for the money.
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
@@ -87,12 +89,44 @@ class StoredPessimism:
 
 @dataclass(frozen=True, slots=True)
 class ShadowLoop:
-    """The ports, and the client that has to be closed after."""
+    """The ports, the tape the loop reads, and the client to close after."""
 
     ports: LoopPorts
     rest: BinancePublicRest
+    market_data: BinanceUsdmMarketData
     equity: Decimal
     tick_size: Decimal
+
+
+async def run_together(
+    *,
+    stream: Awaitable[None],
+    loop: Awaitable[None],
+    stop: asyncio.Event,
+) -> None:
+    """Run the stream and the loop, and stop both when either ends.
+
+    Neither is useful alone. Without the stream the tape stops advancing and
+    every pass quietly produces nothing - the inputs cannot rank a delta or an
+    ATR over an empty window - so a loop left running would look alive and
+    decide nothing. Without the loop the stream is filling a table nobody
+    reads.
+
+    So whichever ends first ends both, and its exception is the run's. A
+    correction conflict from the stream has to reach the operator rather than
+    leave a loop evaluating a tape that stopped being trustworthy.
+    """
+    tasks = {asyncio.ensure_future(stream), asyncio.ensure_future(loop)}
+    try:
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        stop.set()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    for task in done:
+        # Raises whichever finished first, if it finished by failing.
+        task.result()
 
 
 async def _manifest(
@@ -270,6 +304,7 @@ async def build_shadow_loop(
         ),
     )
     return ShadowLoop(
+        market_data=market_data,
         ports=shadow_ports(
             sessions=sessions,
             source=source,
@@ -297,4 +332,5 @@ __all__ = (
     "ShadowStartupError",
     "StoredPessimism",
     "build_shadow_loop",
+    "run_together",
 )
