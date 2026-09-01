@@ -21,7 +21,18 @@ from autotrader.config.settings import Settings
 from autotrader.persistence.mysql.engine import create_engine
 from autotrader.persistence.mysql.models.accounts import Broker
 from autotrader.persistence.mysql.models.core import CoreExchange, CoreMarket
-from autotrader.persistence.mysql.seeds.core import BROKERS
+from autotrader.persistence.mysql.models.david_v6 import DavidV6ManifestRow
+from autotrader.persistence.mysql.models.strategy import StrategyVersion
+from autotrader.persistence.mysql.repositories.core import CoreInstrumentRegistry
+from autotrader.persistence.mysql.seeds.core import BINANCE_USDM_EXCHANGE_CODE, BROKERS
+from autotrader.persistence.mysql.seeds.david_v6 import (
+    DAVID_V6_VERSION_ID,
+    SHADOW,
+)
+from autotrader.strategies.david_v6.manifest import (
+    STRATEGY_VERSION,
+    v6_configuration_hash,
+)
 
 
 def _drive(scenario: object) -> None:
@@ -92,3 +103,72 @@ def test_the_broker_codes_are_the_ones_the_secret_store_uses() -> None:
     from autotrader.apps.backoffice.provider_secrets import BINANCE, KIS, TOSS
 
     assert {code for _, code, _ in BROKERS} == {KIS, TOSS, BINANCE}
+
+
+@pytest.mark.integration
+def test_the_seed_registers_the_instrument_and_the_build() -> None:
+    """`--check` named both and neither had an operational producer: the
+    paper harness registered them and nothing else did, so a real database
+    answered "no strategy manifest is registered" with no way to fix it."""
+
+    async def scenario(
+        settings: Settings, sessions: async_sessionmaker[AsyncSession]
+    ) -> None:
+        await apply_reference_seed(settings)
+
+        async with sessions() as session:
+            instrument = await CoreInstrumentRegistry(session).resolve(
+                BINANCE_USDM_EXCHANGE_CODE, "BTCUSDT"
+            )
+            manifest = await session.scalar(select(DavidV6ManifestRow))
+
+        assert instrument is not None
+        assert manifest is not None
+        assert manifest.strategy_version == STRATEGY_VERSION
+        assert manifest.configuration_hash == v6_configuration_hash()
+
+    _drive(scenario)
+
+
+@pytest.mark.integration
+def test_registering_the_same_build_twice_writes_one_manifest() -> None:
+    """A build is a build. A second row for the same source and configuration
+    would split the decisions taken under it across two ids."""
+
+    async def scenario(
+        settings: Settings, sessions: async_sessionmaker[AsyncSession]
+    ) -> None:
+        await apply_reference_seed(settings)
+        await apply_reference_seed(settings)
+
+        async with sessions() as session:
+            assert (
+                await session.scalar(
+                    select(func.count()).select_from(DavidV6ManifestRow)
+                )
+                == 1
+            )
+
+    _drive(scenario)
+
+
+@pytest.mark.integration
+def test_the_registered_version_starts_in_shadow() -> None:
+    """Promotion to LIVE is section 11.8's job, behind two Shadow and two
+    Paper sessions. A version registered as approved would skip all of it."""
+
+    async def scenario(
+        settings: Settings, sessions: async_sessionmaker[AsyncSession]
+    ) -> None:
+        await apply_reference_seed(settings)
+
+        async with sessions() as session:
+            version = await session.scalar(
+                select(StrategyVersion).where(StrategyVersion.id == DAVID_V6_VERSION_ID)
+            )
+
+        assert version is not None
+        assert version.status == SHADOW
+        assert version.research_only is False
+
+    _drive(scenario)

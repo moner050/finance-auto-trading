@@ -19,12 +19,16 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from autotrader.apps.trader.binance_paper import BTCUSDT
 from autotrader.config.settings import Settings
 from autotrader.persistence.mysql.engine import create_engine
+from autotrader.persistence.mysql.repositories.core import CoreInstrumentRegistry
 from autotrader.persistence.mysql.seeds.core import seed_core_reference_session
+from autotrader.persistence.mysql.seeds.david_v6 import register_david_v6_build
 
 USAGE = "usage: python -m autotrader.apps.backoffice.seed_reference"
 
@@ -35,9 +39,18 @@ async def apply_reference_seed(settings: Settings) -> None:
         sessions = async_sessionmaker(bind=engine, expire_on_commit=False)
         async with sessions() as session:
             await seed_core_reference_session(session)
+            # The one instrument this system trades. `--check` names it as
+            # BINANCE_USDM:BTCUSDT and nothing outside the paper harness ever
+            # registered it.
+            await CoreInstrumentRegistry(session).register(BTCUSDT)
+            # The build a decision is recorded under. Derived from the code,
+            # not chosen: source, design and configuration hashes all come
+            # from the manifest module and the repository re-checks each one.
+            manifest_id = await register_david_v6_build(session, now=datetime.now(UTC))
             # One transaction: a half-seeded reference set is a database that
             # looks prepared and is not.
             await session.commit()
+        print(f"strategy manifest {manifest_id}")
     finally:
         await engine.dispose()
 
