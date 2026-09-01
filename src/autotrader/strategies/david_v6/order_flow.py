@@ -432,6 +432,48 @@ def _flow_bars(
     return tuple(bars)
 
 
+THIRTY_SECOND_ATR_WINDOW = 14
+
+
+def thirty_second_atr(
+    trades: Sequence[TradePrint],
+    *,
+    window_start: datetime,
+    window_end: datetime,
+    window: int = THIRTY_SECOND_ATR_WINDOW,
+) -> Decimal | None:
+    """The average true range of the thirty-second bars, or None.
+
+    The order-flow rules measure progress against this, and the thirty-second
+    bar is defined here rather than anywhere else - built from the trade tape,
+    because the venue publishes no kline shorter than a minute. Exposed so a
+    caller does not have to rebuild the same aggregation and get a slightly
+    different one.
+    """
+    start = _require_utc(window_start, "window_start")
+    end = _require_utc(window_end, "window_end")
+    if end <= start:
+        raise ValueError("the thirty-second window must be positive")
+    selected = tuple(
+        trade
+        for trade in trades
+        if type(trade) is TradePrint and start <= trade.occurred_at < end
+    )
+    bars = _flow_bars(_deduplicate(selected), start, end)
+    if len(bars) <= window:
+        return None
+    ranges = [
+        max(
+            current.high - current.low,
+            abs(current.high - previous.close),
+            abs(current.low - previous.close),
+        )
+        for previous, current in pairwise(bars[-window - 1 :])
+    ]
+    average = sum(ranges, start=Decimal(0)) / Decimal(len(ranges))
+    return average if average > 0 else None
+
+
 def _delta_threshold(bars: tuple[_FlowBar, ...]) -> Decimal | None:
     """What an extreme delta is on this tape, or None when it cannot say."""
     magnitudes = tuple(abs(bar.delta) for bar in bars if bar.delta is not None)
@@ -662,6 +704,7 @@ __all__ = (
     "MAXIMUM_BIG_TRADE_MARKERS",
     "MINIMUM_BIG_TRADE_EVENTS",
     "MINIMUM_DELTA_BARS",
+    "THIRTY_SECOND_ATR_WINDOW",
     "AggressorSide",
     "BigTradeClass",
     "BigTradeCluster",
@@ -672,4 +715,5 @@ __all__ = (
     "aggregate_order_flow",
     "big_trade_quantile",
     "blocking_big_trade_ahead",
+    "thirty_second_atr",
 )
