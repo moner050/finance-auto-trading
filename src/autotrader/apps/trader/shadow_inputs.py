@@ -26,6 +26,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Protocol
 from uuid import UUID
 
 from autotrader.apps.trader.market_data import BinanceLoopInputs
@@ -61,13 +62,13 @@ class FixedFacts:
     minimum_quantity: Decimal
 
 
-class PessimismSource:
+class PessimismSource(Protocol):
     """Whatever can answer the day's percentiles."""
 
     async def pessimism(self, *, through: date) -> PessimismInputs: ...
 
 
-class SpreadSource:
+class SpreadSource(Protocol):
     """The current best bid and ask, as a distance."""
 
     async def spread(self) -> Decimal: ...
