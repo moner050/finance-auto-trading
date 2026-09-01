@@ -844,6 +844,64 @@ extreme_big_trade = event_notional >= rolling_quantile(0.999)
 
 ---
 
+---
+
+## Shadow 루프가 돈다, 그리고 어디서 멈추는가 (2026-09-01)
+
+`--run --shadow --leverage <n>`이 실계좌에 대해 실제로 시작한다. 자격증명 호출은
+전부 진입점에서 한 번만 일어나고 루프는 값만 받는다 — 수수료와 잔고를 읽는 키는
+주문도 낼 수 있는 키이고, 그 키를 든 루프는 쓰는 것과 한 import 거리다.
+
+```
+mode          SHADOW
+account       lmhml0237 (LIVE)
+equity        352.78276087 USDT
+tick size     0.10
+orders        none; this loop has no execution port to submit to
+```
+
+### 돌려보고 찾은 것
+
+**프로덕션이 4개 테이블 뒤처져 있었다.** 통합 마이그레이션을 모델에서 재생성하는
+방식은 테스트 DB가 매번 새로 만들어져서 동작하고, **이미 스탬프된 DB에서는 조용히
+동작하지 않는다.** `apply_schema`가 드리프트를 보고하고 없는 테이블을 만든다.
+컬럼 드리프트는 손대지 않는다 — 고치려면 기존 행이 무엇을 담을지 정해야 하고,
+그건 사람이 쓰고 읽는 마이그레이션이다.
+
+**전체 계좌 캡처가 원인을 지운다.** 잔고 하나에 8개 엔드포인트를 부르고 하나만
+실패해도 `"snapshot is incomplete"`에 `from None`으로 원인을 버린다. 진입점은
+`/fapi/v3/balance` 하나만 읽는다 — 질문 하나, 엔드포인트 하나.
+
+**`NOT_LEADER`.** 결정이 안 쓰인 첫 이유는 리스였다. 매 실행이 새
+`runtime_instance_id`를 만들고 TTL이 2분이라 짧은 반복 실행이 자기 전임자의 리스에
+걸렸다. 리스가 정확히 제 일을 한 것이다.
+
+### 지금 막고 있는 것: 체결 스트림이 없다
+
+리스를 잡은 뒤에도 결정이 0인 이유가 나왔다.
+
+```
+5m bars        : 1499     ✓
+risk context   : built    ✓
+daily bars     : 1499     ✓
+trade prints   : 0        ← 여기
+loop inputs    : None
+```
+
+`BinanceUsdmMarketData.trade_prints`는 **스토어에서 읽기만 한다.** 쓰는 쪽은
+`ingest_agg_trade`이고 그것은 **웹소켓 이벤트**를 받는다. 그리고 웹소켓
+클라이언트가 `src/` 어디에도 없다 — `ingest_agg_trade`를 부르는 것은 테스트뿐이고,
+`pyproject.toml`에 웹소켓 의존성도 없다.
+
+그래서 order-flow 절반(Big Trades, MIG, secado, ceros, 30초 ATR, extreme delta)은
+프로덕션에서 데이터 출처가 없다. `_recover_gap`이 REST로 빈 구간을 메우도록 이미
+쓰여 있는 걸 보면 설계는 스트림을 전제하고 있었다.
+
+이것이 다음 작업이고, 작은 일이 아니다: 재연결, 순서 보장, 갭 복구, 그리고 그
+전부가 이미 있는 체크포인트 규약과 맞아야 한다.
+
+---
+
 ## 미검증 항목
 
 이 계획을 시작하는 시점에 아래는 **한 번도 확인된 적이 없다.** 어느 것도 되어 있다고
