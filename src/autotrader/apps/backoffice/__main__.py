@@ -13,7 +13,8 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 import uvicorn
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from fastapi import FastAPI
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from autotrader.apps.backoffice.composition import build_backoffice
 from autotrader.config.settings import Settings
@@ -51,6 +52,30 @@ def require_reachable_public_url(settings: Settings) -> None:
         )
 
 
+async def prepare(
+    *, settings: Settings, engine: AsyncEngine, account_id: UUID
+) -> FastAPI:
+    """Build the application, leaving nothing open on this event loop.
+
+    Building it reads the configuration out of MySQL, which fills the pool
+    with connections belonging to the loop that opened them. `asyncio.run`
+    then closes that loop and uvicorn starts its own, so the first request
+    reaches for a connection whose transport is gone and fails with an
+    AttributeError about a proactor - a database error that names no database.
+
+    Disposing here empties the pool. The engine is still good; the first
+    request opens a fresh connection on the loop that will serve it.
+    """
+    try:
+        return await build_backoffice(
+            settings=settings,
+            sessions=async_sessionmaker(bind=engine, expire_on_commit=False),
+            account_id=account_id,
+        )
+    finally:
+        await engine.dispose()
+
+
 def main(argv: tuple[str, ...]) -> int:
     if len(argv) != 1:
         print(USAGE, file=sys.stderr)
@@ -64,11 +89,9 @@ def main(argv: tuple[str, ...]) -> int:
     # touches the database and a server that binds first would be listening
     # while it discovered it could not authenticate.
     app = asyncio.run(
-        build_backoffice(
+        prepare(
             settings=settings,
-            sessions=async_sessionmaker(
-                bind=create_engine(settings), expire_on_commit=False
-            ),
+            engine=create_engine(settings),
             account_id=UUID(argv[0]),
         )
     )

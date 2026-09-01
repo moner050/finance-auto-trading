@@ -13,10 +13,12 @@ where the public URL is loopback, which is what says there is no proxy.
 from __future__ import annotations
 
 from base64 import b64encode
+from unittest.mock import patch
+from uuid import UUID
 
 import pytest
 
-from autotrader.apps.backoffice.__main__ import require_reachable_public_url
+from autotrader.apps.backoffice.__main__ import prepare, require_reachable_public_url
 from autotrader.config.settings import Settings
 
 
@@ -55,3 +57,62 @@ def test_a_bare_loopback_url_is_read_as_its_default_port() -> None:
         require_reachable_public_url(
             _settings(public_url="http://localhost", bind_port=8000)
         )
+
+
+class _RecordingEngine:
+    """Stands in for the engine, so disposal can be observed."""
+
+    def __init__(self) -> None:
+        self.disposed = 0
+
+    async def dispose(self) -> None:
+        self.disposed += 1
+
+
+@pytest.mark.asyncio
+async def test_preparing_leaves_no_connection_on_the_building_loop() -> None:
+    """Building reads the configuration out of MySQL, which fills the pool
+    with connections belonging to whatever loop opened them. `asyncio.run`
+    then closes that loop and uvicorn starts its own, so the first request
+    reaches for a connection whose transport is gone.
+
+    It surfaces as `AttributeError: 'NoneType' object has no attribute 'send'`
+    from deep inside asyncio - a database failure that names no database, on
+    the operations page, immediately after a sign-in that worked. Which is
+    exactly how it was found.
+    """
+    engine = _RecordingEngine()
+
+    async def _build(**_: object) -> object:
+        return object()
+
+    with patch("autotrader.apps.backoffice.__main__.build_backoffice", _build):
+        await prepare(
+            settings=_settings(public_url="http://127.0.0.1:6086", bind_port=6086),
+            engine=engine,  # type: ignore[arg-type]
+            account_id=UUID(int=0),
+        )
+
+    assert engine.disposed == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failed_build_still_leaves_nothing_open() -> None:
+    """A half-built process must not leave a connection behind for a loop
+    that will never own it."""
+    engine = _RecordingEngine()
+
+    async def _fail(**_: object) -> object:
+        raise RuntimeError("configuration unavailable")
+
+    with (
+        patch("autotrader.apps.backoffice.__main__.build_backoffice", _fail),
+        pytest.raises(RuntimeError, match="configuration unavailable"),
+    ):
+        await prepare(
+            settings=_settings(public_url="http://127.0.0.1:6086", bind_port=6086),
+            engine=engine,  # type: ignore[arg-type]
+            account_id=UUID(int=0),
+        )
+
+    assert engine.disposed == 1
