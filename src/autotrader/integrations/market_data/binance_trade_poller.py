@@ -18,9 +18,10 @@ and reads a thirty-minute trade window. What it must not do is fetch faster
 than the venue's weight budget allows, which is why the interval is stated and
 not tuned down to feel live.
 
-Ordering is not this module's problem. `ingest_rest_agg_trade` refuses a trade
+Ordering is not this module's problem. `ingest_rest_agg_trades` refuses a trade
 that arrives out of sequence, recovers a gap when ids skip, and advances the
-checkpoint - the same path the stream used.
+checkpoint - the same path the stream used. The page goes over whole, because
+a page stored one commit at a time is slower than the tape that produced it.
 """
 
 from __future__ import annotations
@@ -48,7 +49,9 @@ class AggregateTradeRest(Protocol):
 
 
 class RestTradeIngest(Protocol):
-    async def ingest_rest_agg_trade(self, row: Mapping[str, object]) -> None: ...
+    async def ingest_rest_agg_trades(
+        self, rows: Sequence[Mapping[str, object]]
+    ) -> None: ...
 
     async def checkpoint_trade_id(self) -> int | None: ...
 
@@ -117,9 +120,12 @@ class BinanceUsdmTradePoller:
             symbol=self._symbol, from_id=from_id, limit=self._limit
         )
         self.polls += 1
-        for row in _rows(rows):
-            await self._market_data.ingest_rest_agg_trade(row)
-            self.trades += 1
+        page = _rows(rows)
+        if not page:
+            # A quiet interval is not something to open a transaction over.
+            return 0
+        await self._market_data.ingest_rest_agg_trades(page)
+        self.trades += len(page)
         return len(rows)
 
 

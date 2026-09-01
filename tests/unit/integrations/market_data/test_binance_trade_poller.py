@@ -9,7 +9,7 @@ the wrong contents while everything reports healthy.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 import pytest
 
@@ -64,14 +64,19 @@ class _Store:
     def __init__(self, checkpoint: int | None = None) -> None:
         self.checkpoint = checkpoint
         self.seen: list[int] = []
+        self.pages = 0
 
     async def checkpoint_trade_id(self) -> int | None:
         return self.checkpoint
 
-    async def ingest_rest_agg_trade(self, row: Mapping[str, object]) -> None:
-        trade_id = int(str(row["a"]))
-        self.seen.append(trade_id)
-        self.checkpoint = trade_id
+    async def ingest_rest_agg_trades(
+        self, rows: Sequence[Mapping[str, object]]
+    ) -> None:
+        self.pages += 1
+        for row in rows:
+            trade_id = int(str(row["a"]))
+            self.seen.append(trade_id)
+            self.checkpoint = trade_id
 
 
 class _Sleeps:
@@ -164,7 +169,9 @@ async def test_an_out_of_sequence_trade_is_not_swallowed() -> None:
     stop = asyncio.Event()
 
     class _Refusing(_Store):
-        async def ingest_rest_agg_trade(self, row: Mapping[str, object]) -> None:
+        async def ingest_rest_agg_trades(
+            self, rows: Sequence[Mapping[str, object]]
+        ) -> None:
             raise ValueError("Binance USD-M aggregate trade sequence is broken")
 
     store = _Refusing(checkpoint=1)
@@ -194,3 +201,33 @@ def test_a_page_larger_than_the_venue_allows_is_refused() -> None:
             rest=_Rest(),  # type: ignore[arg-type]
             limit=PAGE_LIMIT + 1,
         )
+
+
+@pytest.mark.asyncio
+async def test_a_page_is_handed_over_whole() -> None:
+    """One page, one call. Ingesting a page a trade at a time costs a select,
+    an insert and a commit each, which against a live tape is slower than the
+    tape - and a store falling behind reports nothing: the counts keep rising
+    while the newest trade stored keeps getting older."""
+    stop = asyncio.Event()
+    store = _Store(checkpoint=0)
+    page = tuple(_row(index) for index in range(1, 251))
+    rest = _Rest(page)
+
+    await _poller(store, rest, _Sleeps(stop)).run(stop=stop)
+
+    assert store.pages == 1
+    assert len(store.seen) == 250
+
+
+@pytest.mark.asyncio
+async def test_an_empty_page_is_not_handed_over() -> None:
+    """A quiet interval is not something for the store to open a transaction
+    over."""
+    stop = asyncio.Event()
+    store = _Store(checkpoint=7)
+    rest = _Rest(())
+
+    await _poller(store, rest, _Sleeps(stop)).run(stop=stop)
+
+    assert store.pages == 0

@@ -15,6 +15,10 @@ _SYMBOL = "BTCUSDT"
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _REST_LIMIT = 1500
 _GAP_LIMIT = 1000
+
+# Enough head of the tape to answer a correction without a round trip.
+# Corrections arrive near the head; anything older the store answers for.
+_TRADE_CACHE_SIZE = 10_000
 _AGGREGATION_LOOKBACK = timedelta(days=1)
 _TIMEFRAMES = {
     timedelta(minutes=1): "1m",
@@ -139,53 +143,118 @@ class BinanceUsdmMarketData:
         the sequence check and the checkpoint all key on the aggregate-trade
         id, which is the same number either way.
         """
-        await self._ingest(_decode_aggregate_trade(row, websocket=False))
+        await self.ingest_rest_agg_trades((row,))
+
+    async def ingest_rest_agg_trades(
+        self, rows: Sequence[Mapping[str, object]]
+    ) -> None:
+        """A whole page of aggregate trades, stored in one transaction.
+
+        The same trades and the same refusals as ingesting them one at a
+        time. What changes is the cost: a page arrives already contiguous and
+        ordered, and putting each row back through a single-trade path made
+        the store re-derive that one row at a time - a select, an insert and
+        a commit each.
+
+        Against a live tape that is slower than the tape itself, and a store
+        that cannot keep up does not announce it. Every count still rises,
+        the checkpoint still advances, and nothing reports an error; the only
+        symptom is that the newest trade stored keeps getting older, so the
+        window the strategy reads drifts into the past and eventually holds
+        nothing at all.
+        """
+        await self._ingest_page(
+            tuple(_decode_aggregate_trade(row, websocket=False) for row in rows)
+        )
 
     async def _ingest(self, incoming: TradePrint) -> None:
-        incoming_id = _trade_id(incoming)
+        await self._ingest_page((incoming,))
+
+    async def _ingest_page(self, incoming: tuple[TradePrint, ...]) -> None:
+        """One or many, by the same rules.
+
+        A single trade is a page of one, so the websocket path and the REST
+        path cannot drift apart in what they refuse.
+        """
+        if not incoming:
+            return
         async with self._ingest_lock:
             await self._load_checkpoint()
-            cached = self._trades.get(incoming_id)
-            if cached is not None:
-                if cached != incoming:
-                    raise BinanceUsdmMarketDataError(
-                        "Binance USD-M aggregate trade correction conflict"
-                    )
-                return
             checkpoint = self._checkpoint
-            if (
-                checkpoint is not None
-                and incoming_id <= checkpoint.last_aggregate_trade_id
-            ):
-                persisted = await self._store.find_trade(
-                    _SYMBOL,
-                    incoming.provider_trade_id,
-                )
-                if persisted is not None and persisted != incoming:
-                    raise BinanceUsdmMarketDataError(
-                        "Binance USD-M aggregate trade correction conflict"
-                    )
+            fresh: list[TradePrint] = []
+            for trade in incoming:
+                if await self._already_stored(trade, checkpoint=checkpoint):
+                    continue
+                fresh.append(trade)
+            if not fresh:
                 return
 
             recovered: tuple[TradePrint, ...] = ()
+            first_id = _trade_id(fresh[0])
             if (
                 checkpoint is not None
-                and incoming_id > checkpoint.last_aggregate_trade_id + 1
+                and first_id > checkpoint.last_aggregate_trade_id + 1
             ):
                 recovered = await self._recover_gap(
                     checkpoint.last_aggregate_trade_id + 1,
-                    incoming_id,
+                    first_id,
                 )
-            new_trades = (*recovered, incoming)
+            new_trades = (*recovered, *fresh)
             _require_trade_sequence(new_trades, after=checkpoint)
+            last = new_trades[-1]
             next_checkpoint = BinanceUsdmMarketCheckpoint(
                 symbol=_SYMBOL,
-                last_aggregate_trade_id=incoming_id,
-                last_trade_at=incoming.occurred_at,
+                last_aggregate_trade_id=_trade_id(last),
+                last_trade_at=last.occurred_at,
             )
             await self._store.persist(_SYMBOL, new_trades, next_checkpoint)
             self._checkpoint = next_checkpoint
-            self._trades.update({_trade_id(trade): trade for trade in new_trades})
+            self._remember(new_trades)
+
+    async def _already_stored(
+        self,
+        incoming: TradePrint,
+        *,
+        checkpoint: BinanceUsdmMarketCheckpoint | None,
+    ) -> bool:
+        """Whether this trade is one we hold, refusing a changed one.
+
+        The venue re-sending a trade is ordinary. The venue re-sending it
+        with different contents is not: it means our record of the tape has
+        stopped matching the tape, and storing either version would leave
+        nothing able to tell which one the strategy decided against.
+        """
+        incoming_id = _trade_id(incoming)
+        cached = self._trades.get(incoming_id)
+        if cached is not None:
+            if cached != incoming:
+                raise BinanceUsdmMarketDataError(
+                    "Binance USD-M aggregate trade correction conflict"
+                )
+            return True
+        if checkpoint is None or incoming_id > checkpoint.last_aggregate_trade_id:
+            return False
+        persisted = await self._store.find_trade(_SYMBOL, incoming.provider_trade_id)
+        if persisted is not None and persisted != incoming:
+            raise BinanceUsdmMarketDataError(
+                "Binance USD-M aggregate trade correction conflict"
+            )
+        return True
+
+    def _remember(self, trades: tuple[TradePrint, ...]) -> None:
+        """Keep the most recent ids, and only those.
+
+        The cache exists to catch a correction without a round trip, and a
+        correction arrives near the tape's head. Keeping every trade a
+        session ever saw would grow without bound over the hours a Shadow
+        session runs, to answer for ids the store already answers for.
+        """
+        self._trades.update({_trade_id(trade): trade for trade in trades})
+        excess = len(self._trades) - _TRADE_CACHE_SIZE
+        if excess <= 0:
+            return
+        for trade_id in sorted(self._trades)[:excess]:
+            del self._trades[trade_id]
 
     async def completed_bars(
         self,
