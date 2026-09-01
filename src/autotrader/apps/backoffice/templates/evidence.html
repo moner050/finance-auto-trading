@@ -1,125 +1,104 @@
-<!doctype html>
-<html lang="ko">
-  <head>
-    <meta charset="utf-8" />
-    <title>Provider 증거</title>
-    <style>
-      body { font-family: system-ui, sans-serif; margin: 2rem; }
-      h1 { font-size: 1.3rem; }
-      h2 { font-size: 1rem; margin-top: 2rem; }
-      table { border-collapse: collapse; width: 100%; }
-      th, td { border-bottom: 1px solid #ddd; padding: .35rem .6rem; text-align: left; }
-      th { color: #555; font-weight: 500; }
-      .code { font-family: ui-monospace, monospace; font-size: .85rem; color: #555; }
-      .ok { color: #00701a; font-weight: 600; }
-      .danger { color: #b00020; font-weight: 600; }
-      .empty { color: #777; }
-      .note { color: #777; font-size: .85rem; }
-      .warn td { background: #fff6e0; }
-    </style>
-  </head>
-  <body>
-    <h1>Provider 증거 <span class="code">{{ session.operator.email }}</span></h1>
-    <p><a href="/">← 운영 화면</a></p>
+{% extends "_layout.html" %}
+{% block title %}Provider 증거{% endblock %}
+{% block content %}
+<h2>미해결 불일치</h2>
+<p class="note">
+  종류와 양쪽 id만 보여줍니다. provider 응답 원문과 비밀값은 어디에도 나오지
+  않습니다. 미해결 항목이 있으면 루프는 신규 노출을 막습니다.
+</p>
+{% if view.mismatches %}
+<table>
+  <tr>
+    <th>종류</th><th>심각도</th><th>내부 주문</th><th>브로커 주문</th>
+    <th>종목</th><th>기록 시각</th>
+  </tr>
+  {% for item in view.mismatches %}
+  <tr class="{{ 'warn' if item.blocking else '' }}">
+    <td class="code">{{ item.kind }}</td>
+    <td class="{{ 'danger' if item.blocking else 'empty' }}">{{ item.severity }}</td>
+    <td class="code">{{ item.internal_order_id or '-' }}</td>
+    <td class="code">{{ item.broker_order_id or '-' }}</td>
+    <td class="code">{{ item.instrument_id or '-' }}</td>
+    <td class="code">{{ item.created_at }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="ok">미해결 불일치가 없습니다.</p>
+{% endif %}
 
-    <h2>미해결 불일치</h2>
-    <p class="note">
-      종류와 양쪽 id만 보여줍니다. provider 응답 원문과 비밀값은 어디에도 나오지
-      않습니다. 미해결 항목이 있으면 루프는 신규 노출을 막습니다.
-    </p>
-    {% if view.mismatches %}
-    <table>
-      <tr>
-        <th>종류</th><th>심각도</th><th>내부 주문</th><th>브로커 주문</th>
-        <th>종목</th><th>기록 시각</th>
-      </tr>
-      {% for item in view.mismatches %}
-      <tr class="{{ 'warn' if item.blocking else '' }}">
-        <td class="code">{{ item.kind }}</td>
-        <td class="{{ 'danger' if item.blocking else 'empty' }}">{{ item.severity }}</td>
-        <td class="code">{{ item.internal_order_id or '-' }}</td>
-        <td class="code">{{ item.broker_order_id or '-' }}</td>
-        <td class="code">{{ item.instrument_id or '-' }}</td>
-        <td class="code">{{ item.created_at }}</td>
-      </tr>
-      {% endfor %}
-    </table>
-    {% else %}
-    <p class="ok">미해결 불일치가 없습니다.</p>
-    {% endif %}
+<h2>정산 실행</h2>
+<p class="note">
+  루프와 브로커별 캡처 파이프라인의 실행을 시각순으로 함께 보여줍니다.
+  경과는 지금 기준이며, 오래된 실행은 오래된 답을 뜻합니다.
+</p>
+{% if view.runs %}
+<table>
+  <tr>
+    <th>출처</th><th>계정</th><th>결과</th><th>완전</th><th>차단</th>
+    <th>경과</th><th>시작</th><th>지문</th>
+  </tr>
+  {% for run in view.runs %}
+  <tr>
+    <td class="code">{{ run.source }}</td>
+    <td>{{ run.account_alias or '-' }}</td>
+    <td class="{{ 'ok' if run.clean else 'danger' }}">{{ run.result }}</td>
+    <td class="{{ 'ok' if run.complete else 'danger' }}">
+      {{ '예' if run.complete else '아니오' }}
+    </td>
+    <td class="{{ 'danger' if run.blocking_diffs else 'empty' }}">
+      {{ run.blocking_diffs }}
+    </td>
+    <td>{{ run.age }} 전</td>
+    <td class="code">{{ run.started_at }}</td>
+    <td class="code">{{ run.digest_prefix or '-' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="empty">기록된 정산 실행이 없습니다.</p>
+{% endif %}
 
-    <h2>정산 실행</h2>
-    <p class="note">
-      루프와 브로커별 캡처 파이프라인의 실행을 시각순으로 함께 보여줍니다.
-      경과는 지금 기준이며, 오래된 실행은 오래된 답을 뜻합니다.
-    </p>
-    {% if view.runs %}
-    <table>
-      <tr>
-        <th>출처</th><th>계정</th><th>결과</th><th>완전</th><th>차단</th>
-        <th>경과</th><th>시작</th><th>지문</th>
-      </tr>
-      {% for run in view.runs %}
-      <tr>
-        <td class="code">{{ run.source }}</td>
-        <td>{{ run.account_alias or '-' }}</td>
-        <td class="{{ 'ok' if run.clean else 'danger' }}">{{ run.result }}</td>
-        <td class="{{ 'ok' if run.complete else 'danger' }}">
-          {{ '예' if run.complete else '아니오' }}
-        </td>
-        <td class="{{ 'danger' if run.blocking_diffs else 'empty' }}">
-          {{ run.blocking_diffs }}
-        </td>
-        <td>{{ run.age }} 전</td>
-        <td class="code">{{ run.started_at }}</td>
-        <td class="code">{{ run.digest_prefix or '-' }}</td>
-      </tr>
-      {% endfor %}
-    </table>
-    {% else %}
-    <p class="empty">기록된 정산 실행이 없습니다.</p>
-    {% endif %}
+<h2>Binance 키 권한</h2>
+<p class="note">
+  provider가 이 키에 대해 답한 사실입니다. <strong>출금 가능</strong>이
+  켜져 있으면 매매용 키가 자금을 거래소 밖으로 옮길 수 있다는 뜻이며,
+  이것은 provider만이 답할 수 있는 사실입니다.
+</p>
+{% if view.permissions %}
+<table>
+  <tr>
+    <th>캡처</th><th>경과</th><th>매매 가능</th><th>출금 가능</th>
+    <th>포지션 모드</th><th>마진</th><th>레버리지</th><th>자동 증거금</th>
+  </tr>
+  {% for item in view.permissions %}
+  <tr class="{{ 'warn' if item.transfer_out_enabled else '' }}">
+    <td class="code">{{ item.captured_at }}</td>
+    <td>{{ item.age }} 전</td>
+    <td class="{{ 'ok' if item.can_trade else 'empty' }}">
+      {{ '예' if item.can_trade else '아니오' }}
+    </td>
+    <td class="{{ 'danger' if item.transfer_out_enabled else 'ok' }}">
+      {{ '예' if item.transfer_out_enabled else '아니오' }}
+    </td>
+    <td class="code">{{ item.position_mode }}</td>
+    <td class="code">{{ item.margin_type }}</td>
+    <td>{{ item.leverage }}</td>
+    <td class="{{ 'danger' if item.auto_add_margin else 'empty' }}">
+      {{ '예' if item.auto_add_margin else '아니오' }}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="empty">캡처된 권한 증거가 없습니다.</p>
+{% endif %}
 
-    <h2>Binance 키 권한</h2>
-    <p class="note">
-      provider가 이 키에 대해 답한 사실입니다. <strong>출금 가능</strong>이
-      켜져 있으면 매매용 키가 자금을 거래소 밖으로 옮길 수 있다는 뜻이며,
-      이것은 provider만이 답할 수 있는 사실입니다.
-    </p>
-    {% if view.permissions %}
-    <table>
-      <tr>
-        <th>캡처</th><th>경과</th><th>매매 가능</th><th>출금 가능</th>
-        <th>포지션 모드</th><th>마진</th><th>레버리지</th><th>자동 증거금</th>
-      </tr>
-      {% for item in view.permissions %}
-      <tr class="{{ 'warn' if item.transfer_out_enabled else '' }}">
-        <td class="code">{{ item.captured_at }}</td>
-        <td>{{ item.age }} 전</td>
-        <td class="{{ 'ok' if item.can_trade else 'empty' }}">
-          {{ '예' if item.can_trade else '아니오' }}
-        </td>
-        <td class="{{ 'danger' if item.transfer_out_enabled else 'ok' }}">
-          {{ '예' if item.transfer_out_enabled else '아니오' }}
-        </td>
-        <td class="code">{{ item.position_mode }}</td>
-        <td class="code">{{ item.margin_type }}</td>
-        <td>{{ item.leverage }}</td>
-        <td class="{{ 'danger' if item.auto_add_margin else 'empty' }}">
-          {{ '예' if item.auto_add_margin else '아니오' }}
-        </td>
-      </tr>
-      {% endfor %}
-    </table>
-    {% else %}
-    <p class="empty">캡처된 권한 증거가 없습니다.</p>
-    {% endif %}
-
-    <h2>여기서 볼 수 없는 것</h2>
-    <ul class="note">
-      {% for reason in view.unavailable %}
-      <li>{{ reason }}</li>
-      {% endfor %}
-    </ul>
-  </body>
-</html>
+<h2>여기서 볼 수 없는 것</h2>
+<ul class="note">
+  {% for reason in view.unavailable %}
+  <li>{{ reason }}</li>
+  {% endfor %}
+</ul>
+  
+{% endblock %}

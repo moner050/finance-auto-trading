@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}자동매매{% endblock %}</title>
+    <style>
+      /* Section 12: desktop-first with a persistent navigation rail and a
+         narrow-screen fallback. Eight screens had eight copies of a style
+         block, so the same table looked different depending on where the
+         operator had clicked. One stylesheet, defined once. */
+      :root {
+        --ink: #1a1a1a;
+        --muted: #6b6b6b;
+        --line: #e0e0e0;
+        --line-strong: #c8c8c8;
+        --page: #ffffff;
+        --rail: #f7f7f8;
+        --danger: #b00020;
+        --danger-ink: #8a0018;
+        --ok: #00701a;
+        --accent: #1a4fa0;
+        --warn-bg: #fff8e1;
+      }
+      * { box-sizing: border-box; }
+      html { -webkit-text-size-adjust: 100%; }
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--page);
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        font-size: 15px;
+        line-height: 1.55;
+      }
+
+      .shell { display: flex; min-height: 100vh; align-items: stretch; }
+
+      /* The rail. Present on every screen so the operator always knows what
+         else exists and where they are. */
+      .rail {
+        flex: 0 0 216px;
+        background: var(--rail);
+        border-right: 1px solid var(--line);
+        padding: 1.25rem 0;
+      }
+      .rail .brand {
+        font-weight: 700;
+        font-size: .95rem;
+        padding: 0 1.25rem 1rem;
+        letter-spacing: -.01em;
+      }
+      .rail a {
+        display: block;
+        padding: .5rem 1.25rem;
+        color: var(--ink);
+        text-decoration: none;
+        border-left: 3px solid transparent;
+        font-size: .92rem;
+      }
+      .rail a:hover { background: #efeff1; }
+      .rail a[aria-current="page"] {
+        border-left-color: var(--accent);
+        background: #fff;
+        font-weight: 600;
+      }
+      .rail .group {
+        margin-top: 1rem;
+        padding: 0 1.25rem .25rem;
+        font-size: .72rem;
+        letter-spacing: .08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .main { flex: 1 1 auto; min-width: 0; padding: 1.5rem 2rem 4rem; }
+      .topline {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 1rem;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: .75rem;
+        margin-bottom: 1.5rem;
+        flex-wrap: wrap;
+      }
+      h1 { font-size: 1.25rem; margin: 0; letter-spacing: -.01em; }
+      h2 { font-size: 1rem; margin: 2rem 0 .6rem; }
+      h3 { font-size: .92rem; margin: 1.4rem 0 .5rem; }
+
+      /* Read-only summaries are plain; anything that mutates sits in a
+         bordered panel. Section 12 asks for the two to be distinguishable
+         without reading them. */
+      table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+      th, td {
+        border-bottom: 1px solid var(--line);
+        padding: .45rem .6rem;
+        text-align: left;
+        vertical-align: top;
+      }
+      th { color: var(--muted); font-weight: 600; font-size: .8rem; }
+      tbody tr:hover td { background: #fafafa; }
+      td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+      .panel {
+        border: 1px solid var(--line-strong);
+        border-radius: 4px;
+        padding: 1rem 1.25rem;
+        margin: 1rem 0;
+        background: #fcfcfd;
+      }
+      .panel h2, .panel h3 { margin-top: 0; }
+
+      .code {
+        font-family: ui-monospace, "Cascadia Mono", monospace;
+        font-size: .82rem;
+        color: var(--muted);
+      }
+      .ok { color: var(--ok); font-weight: 600; }
+      .danger { color: var(--danger); font-weight: 600; }
+      .empty { color: var(--muted); }
+      .note { color: var(--muted); font-size: .85rem; }
+      .added { color: var(--ok); }
+      .removed { color: var(--danger); }
+
+      input, select, textarea {
+        padding: .4rem .5rem;
+        font: inherit;
+        font-size: .9rem;
+        border: 1px solid var(--line-strong);
+        border-radius: 3px;
+        background: #fff;
+      }
+      label { font-size: .9rem; }
+      button {
+        padding: .45rem .9rem;
+        font: inherit;
+        font-size: .9rem;
+        cursor: pointer;
+        border: 1px solid var(--line-strong);
+        border-radius: 3px;
+        background: #f2f2f4;
+        color: var(--ink);
+      }
+      button:hover { background: #e8e8ec; }
+      /* Exposure-enabling actions are never the quiet default: they are
+         deliberate and green, and they always follow a confirmation panel. */
+      .go {
+        background: var(--ok);
+        color: #fff;
+        border-color: #005414;
+        font-weight: 600;
+      }
+      .go:hover { background: #005f16; }
+      /* Safety actions. Section 12 keeps them prominent and out of the
+         dangerous-action dialog: one click, always reachable. */
+      .stop {
+        background: var(--danger);
+        color: #fff;
+        border-color: var(--danger-ink);
+        font-weight: 600;
+      }
+      .stop:hover { background: #970019; }
+      .quiet { background: #f2f2f4; }
+
+      .safety {
+        display: flex;
+        gap: .6rem;
+        align-items: center;
+        flex-wrap: wrap;
+        padding: .8rem 1rem;
+        border: 1px solid var(--line-strong);
+        border-left: 4px solid var(--danger);
+        border-radius: 4px;
+        background: #fffafa;
+        margin-bottom: 1.5rem;
+      }
+      .safety button { padding: .55rem 1.1rem; }
+
+      .flash { padding: .7rem 1rem; border-radius: 4px; margin-bottom: 1rem; }
+      .flash.bad { background: #fdecef; border: 1px solid #f3c2cc; }
+      .flash.good { background: #edf7ef; border: 1px solid #bfe0c6; }
+
+      a { color: var(--accent); }
+
+      @media (max-width: 900px) {
+        .shell { display: block; }
+        .rail {
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+          padding: .75rem 0;
+          display: flex;
+          flex-wrap: wrap;
+          gap: .25rem;
+          align-items: center;
+        }
+        .rail .brand { padding: 0 1rem; }
+        .rail .group { display: none; }
+        .rail a {
+          border-left: 0;
+          border-bottom: 3px solid transparent;
+          padding: .35rem .7rem;
+        }
+        .rail a[aria-current="page"] {
+          border-left: 0;
+          border-bottom-color: var(--accent);
+        }
+        .main { padding: 1rem 1rem 3rem; }
+        table { display: block; overflow-x: auto; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <nav class="rail">
+        <div class="brand">자동매매</div>
+        {% set here = request.url.path %}
+        <a href="/" {% if here == '/' %}aria-current="page"{% endif %}>운영</a>
+        <div class="group">권위</div>
+        <a href="/accounts" {% if here.startswith('/accounts') %}aria-current="page"{% endif %}>계정과 자격증명</a>
+        <a href="/secrets" {% if here.startswith('/secrets') %}aria-current="page"{% endif %}>비밀값</a>
+        <a href="/policies" {% if here.startswith('/policies') %}aria-current="page"{% endif %}>리스크 정책</a>
+        <a href="/universe" {% if here.startswith('/universe') %}aria-current="page"{% endif %}>유니버스 권위</a>
+        <div class="group">증거</div>
+        <a href="/evidence" {% if here.startswith('/evidence') %}aria-current="page"{% endif %}>Provider 증거</a>
+        <a href="/promotion" {% if here.startswith('/promotion') %}aria-current="page"{% endif %}>승격</a>
+      </nav>
+      <main class="main">
+        <div class="topline">
+          <h1>{% block heading %}{{ self.title() }}{% endblock %}</h1>
+          <span class="code">{{ session.operator.email }}</span>
+        </div>
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </body>
+</html>

@@ -1,122 +1,97 @@
-<!doctype html>
-<html lang="ko">
-  <head>
-    <meta charset="utf-8" />
-    <title>Shadow · Paper 승격</title>
-    <style>
-      body { font-family: system-ui, sans-serif; margin: 2rem; }
-      h1 { font-size: 1.3rem; }
-      h2 { font-size: 1rem; margin-top: 2rem; }
-      h3 { font-size: .95rem; margin-top: 1.5rem; }
-      table { border-collapse: collapse; width: 100%; }
-      th, td { border-bottom: 1px solid #ddd; padding: .35rem .6rem; text-align: left; }
-      th { color: #555; font-weight: 500; }
-      .code { font-family: ui-monospace, monospace; font-size: .85rem; color: #555; }
-      .ok { color: #00701a; font-weight: 600; }
-      .danger { color: #b00020; font-weight: 600; }
-      .empty { color: #777; }
-      .note { color: #777; font-size: .85rem; }
-      .panel { border: 1px solid #ccc; padding: 1rem 1.25rem; margin: 1rem 0; }
-      input, select { padding: .35rem; font-size: .95rem; }
-      button { padding: .4rem .8rem; font-size: .95rem; cursor: pointer; }
-      .go { background: #00701a; color: #fff; border: 1px solid #005414; font-weight: 600; }
-    </style>
-  </head>
-  <body>
-    <h1>Shadow · Paper 승격 <span class="code">{{ session.operator.email }}</span></h1>
-    <p><a href="/">← 운영 화면</a></p>
+{% extends "_layout.html" %}
+{% block title %}Shadow · Paper 승격{% endblock %}
+{% block content %}
+{% if error %}<p class="danger">{{ error }}</p>{% endif %}
 
-    {% if error %}<p class="danger">{{ error }}</p>{% endif %}
+<p class="note">
+  LIVE 승격에는 <strong>서로 다른 날짜의 Shadow {{ view.required }}회</strong>와
+  <strong>서로 다른 날짜의 Paper {{ view.required }}회</strong>가 필요합니다.
+  같은 날짜를 두 번 청구하는 것은 하루를 두 번 본 것이지 이틀이 아닙니다.
+  세션은 실행된 전략 manifest에 고정되며, 소스나 설정 해시가 바뀌면 이전
+  세션은 다른 것에 대한 세션입니다.
+</p>
+<p class="note">
+  이 화면은 승격 상태를 만들지 않습니다. 완료는 루프가 남긴 증거를 세어
+  확인되었을 때만 되고, 확인되지 않으면 이유가 보입니다.
+</p>
 
-    <p class="note">
-      LIVE 승격에는 <strong>서로 다른 날짜의 Shadow {{ view.required }}회</strong>와
-      <strong>서로 다른 날짜의 Paper {{ view.required }}회</strong>가 필요합니다.
-      같은 날짜를 두 번 청구하는 것은 하루를 두 번 본 것이지 이틀이 아닙니다.
-      세션은 실행된 전략 manifest에 고정되며, 소스나 설정 해시가 바뀌면 이전
-      세션은 다른 것에 대한 세션입니다.
-    </p>
-    <p class="note">
-      이 화면은 승격 상태를 만들지 않습니다. 완료는 루프가 남긴 증거를 세어
-      확인되었을 때만 되고, 확인되지 않으면 이유가 보입니다.
-    </p>
+{% if view.manifest_missing %}
+<p class="danger">
+  등록된 전략 manifest가 없습니다. 세션은 어떤 정확한 빌드에 대한 세션이므로,
+  가리킬 manifest 없이는 청구할 수 없습니다.
+</p>
+{% endif %}
 
-    {% if view.manifest_missing %}
-    <p class="danger">
-      등록된 전략 manifest가 없습니다. 세션은 어떤 정확한 빌드에 대한 세션이므로,
-      가리킬 manifest 없이는 청구할 수 없습니다.
-    </p>
-    {% endif %}
+{% if view.bindings %}
+{% for item in view.bindings %}
+<h2>
+  {{ item.account_alias }}
+  <span class="code">{{ item.provider_code }} · {{ item.environment }}</span>
+  <span class="{{ 'ok' if item.ready else 'empty' }}">
+    {{ 'LIVE 요건 충족' if item.ready else '요건 미충족' }}
+  </span>
+</h2>
+<p class="note">
+  manifest <span class="code">{{ item.manifest_version or '없음' }}</span> 기준 ·
+  Shadow {{ item.shadow_dates | length }}/{{ view.required }}
+  {% if item.shadow_dates %}({{ item.shadow_dates | join(', ') }}){% endif %} ·
+  Paper {{ item.paper_dates | length }}/{{ view.required }}
+  {% if item.paper_dates %}({{ item.paper_dates | join(', ') }}){% endif %}
+</p>
 
-    {% if view.bindings %}
-    {% for item in view.bindings %}
-    <h2>
-      {{ item.account_alias }}
-      <span class="code">{{ item.provider_code }} · {{ item.environment }}</span>
-      <span class="{{ 'ok' if item.ready else 'empty' }}">
-        {{ 'LIVE 요건 충족' if item.ready else '요건 미충족' }}
-      </span>
-    </h2>
-    <p class="note">
-      manifest <span class="code">{{ item.manifest_version or '없음' }}</span> 기준 ·
-      Shadow {{ item.shadow_dates | length }}/{{ view.required }}
-      {% if item.shadow_dates %}({{ item.shadow_dates | join(', ') }}){% endif %} ·
-      Paper {{ item.paper_dates | length }}/{{ view.required }}
-      {% if item.paper_dates %}({{ item.paper_dates | join(', ') }}){% endif %}
-    </p>
+{% if item.sessions %}
+<table>
+  <tr>
+    <th>모드</th><th>거래일</th><th>상태</th><th>결정</th><th>주문</th>
+    <th>차단 사유</th><th></th>
+  </tr>
+  {% for row in item.sessions %}
+  <tr>
+    <td class="code">{{ row.mode }}</td>
+    <td class="code">{{ row.exchange_date }}</td>
+    <td class="{{ 'ok' if row.complete else 'empty' }}">{{ row.status }}</td>
+    <td>{{ row.decision_count }}</td>
+    <td>{{ row.order_count }}</td>
+    <td class="{{ 'danger' if row.blockers else 'empty' }}">
+      {{ row.blockers | join(', ') if row.blockers else '-' }}
+    </td>
+    <td>
+      {% if row.completable %}
+      <form method="post" action="/promotion/complete">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
+        <input type="hidden" name="session_id" value="{{ row.session_id }}" />
+        <button class="go" type="submit">완료</button>
+      </form>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="empty">청구된 세션이 없습니다.</p>
+{% endif %}
 
-    {% if item.sessions %}
-    <table>
-      <tr>
-        <th>모드</th><th>거래일</th><th>상태</th><th>결정</th><th>주문</th>
-        <th>차단 사유</th><th></th>
-      </tr>
-      {% for row in item.sessions %}
-      <tr>
-        <td class="code">{{ row.mode }}</td>
-        <td class="code">{{ row.exchange_date }}</td>
-        <td class="{{ 'ok' if row.complete else 'empty' }}">{{ row.status }}</td>
-        <td>{{ row.decision_count }}</td>
-        <td>{{ row.order_count }}</td>
-        <td class="{{ 'danger' if row.blockers else 'empty' }}">
-          {{ row.blockers | join(', ') if row.blockers else '-' }}
-        </td>
-        <td>
-          {% if row.completable %}
-          <form method="post" action="/promotion/complete">
-            <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
-            <input type="hidden" name="session_id" value="{{ row.session_id }}" />
-            <button class="go" type="submit">완료</button>
-          </form>
-          {% endif %}
-        </td>
-      </tr>
+{% if not view.manifest_missing %}
+<form method="post" action="/promotion/claim" class="panel">
+  <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
+  <input type="hidden" name="binding_id" value="{{ item.binding_id }}" />
+  <label>모드
+    <select name="mode" required>
+      {% for mode in view.modes %}
+      <option value="{{ mode }}">{{ mode }}</option>
       {% endfor %}
-    </table>
-    {% else %}
-    <p class="empty">청구된 세션이 없습니다.</p>
-    {% endif %}
-
-    {% if not view.manifest_missing %}
-    <form method="post" action="/promotion/claim" class="panel">
-      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
-      <input type="hidden" name="binding_id" value="{{ item.binding_id }}" />
-      <label>모드
-        <select name="mode" required>
-          {% for mode in view.modes %}
-          <option value="{{ mode }}">{{ mode }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label>거래일 <input type="date" name="exchange_date" required /></label>
-      <button type="submit">세션 청구</button>
-    </form>
-    {% endif %}
-    {% endfor %}
-    {% else %}
-    <p class="empty">
-      활성 provider 바인딩이 없습니다. 승격은 바인딩 단위이므로
-      <a href="/accounts">계정 화면</a>에서 먼저 바인딩하세요.
-    </p>
-    {% endif %}
-  </body>
-</html>
+    </select>
+  </label>
+  <label>거래일 <input type="date" name="exchange_date" required /></label>
+  <button type="submit">세션 청구</button>
+</form>
+{% endif %}
+{% endfor %}
+{% else %}
+<p class="empty">
+  활성 provider 바인딩이 없습니다. 승격은 바인딩 단위이므로
+  <a href="/accounts">계정 화면</a>에서 먼저 바인딩하세요.
+</p>
+{% endif %}
+  
+{% endblock %}
