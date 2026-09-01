@@ -69,10 +69,9 @@ async def _run_shadow(alias: str, leverage: int) -> int:
         run_together,
     )
     from autotrader.apps.trader.shadow import SHADOW
-    from autotrader.integrations.market_data.binance_trade_stream import (
-        STREAM_URL,
-        BinanceUsdmTradeStream,
-        websockets_connect,
+    from autotrader.integrations.market_data.binance_trade_poller import (
+        POLL_INTERVAL_SECONDS,
+        BinanceUsdmTradePoller,
     )
 
     settings = Settings()
@@ -101,14 +100,15 @@ async def _run_shadow(alias: str, leverage: int) -> int:
             print(str(error), file=sys.stderr)
             return 1
 
-        stream = BinanceUsdmTradeStream(
-            market_data=loop.market_data, connect=websockets_connect
-        )
+        # Fetched rather than pushed: `btcusdt@aggTrade` accepts a
+        # subscription and then sends nothing, while this endpoint returns the
+        # same rows with the same ids. See binance_trade_poller.
+        tape = BinanceUsdmTradePoller(market_data=loop.market_data, rest=loop.rest)
         print(f"mode          {SHADOW}")
         print(f"account       {alias} ({resolved.account.environment})")
         print(f"equity        {loop.equity} USDT")
         print(f"tick size     {loop.tick_size}")
-        print(f"tape          {STREAM_URL}")
+        print(f"tape          /fapi/v1/aggTrades every {POLL_INTERVAL_SECONDS:g}s")
         print("orders        none; this loop has no execution port to submit to")
         print("stop with Ctrl-C")
         stop = asyncio.Event()
@@ -117,7 +117,7 @@ async def _run_shadow(alias: str, leverage: int) -> int:
             # every pass quietly produces nothing, and without the loop the
             # tape fills a table nobody reads.
             await run_together(
-                stream=stream.run(stop=stop),
+                stream=tape.run(stop=stop),
                 loop=run_forever(
                     ports=loop.ports,
                     clock=SystemClock(),
@@ -129,7 +129,10 @@ async def _run_shadow(alias: str, leverage: int) -> int:
         except KeyboardInterrupt:
             print("stopped")
         finally:
-            print(f"frames        {stream.frames} ({stream.reconnects} reconnects)")
+            print(
+                f"tape          {tape.trades} trades over {tape.polls} polls "
+                f"({tape.failures} failures)"
+            )
             await loop.rest.aclose()
     finally:
         await engine.dispose()

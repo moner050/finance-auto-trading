@@ -63,12 +63,19 @@ class BinancePublicRest:
         )
 
     async def aggregate_trades(
-        self, *, symbol: str, from_id: int, limit: int
+        self, *, symbol: str, from_id: int | None, limit: int
     ) -> tuple[object, ...]:
-        return await self._get(
-            _AGG_TRADES,
-            {"symbol": symbol, "fromId": str(from_id), "limit": str(limit)},
-        )
+        """Aggregate trades from an id, or the most recent when none is given.
+
+        `fromId` is omitted rather than sent as zero when there is nowhere to
+        resume from. Zero is a real id at the beginning of the venue's
+        history, so asking for it would start the tape in 2019 and page
+        forward for a very long time before reaching today.
+        """
+        query = {"symbol": symbol, "limit": str(limit)}
+        if from_id is not None:
+            query["fromId"] = str(from_id)
+        return await self._get(_AGG_TRADES, query)
 
     async def exchange_info(self, *, symbol: str) -> dict[str, object]:
         """The venue's own filters for one symbol.

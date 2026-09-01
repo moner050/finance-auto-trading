@@ -110,8 +110,38 @@ class BinanceUsdmMarketData:
         self._trades: dict[int, TradePrint] = {}
         self._ingest_lock = asyncio.Lock()
 
+    async def checkpoint_trade_id(self) -> int | None:
+        """The last aggregate-trade id stored, or None when there is none.
+
+        A poller resumes from the next one. None means the tape has never
+        been read, which is a different thing from having read it and found
+        nothing.
+        """
+        async with self._ingest_lock:
+            await self._load_checkpoint()
+            checkpoint = self._checkpoint
+        return None if checkpoint is None else checkpoint.last_aggregate_trade_id
+
     async def ingest_agg_trade(self, event: Mapping[str, object]) -> None:
-        incoming = _decode_aggregate_trade(event, websocket=True)
+        """One aggregate trade as the websocket sends it."""
+        await self._ingest(_decode_aggregate_trade(event, websocket=True))
+
+    async def ingest_rest_agg_trade(self, row: Mapping[str, object]) -> None:
+        """One aggregate trade as `/fapi/v1/aggTrades` returns it.
+
+        The same trade, in the shape the REST endpoint uses: no event type and
+        no symbol, because the request already named both. Decoding it as a
+        websocket frame would mean synthesising those two fields onto it, and
+        a decoder that has been handed a forged shape stops being able to
+        refuse a real one.
+
+        Everything after the decode is shared - the dedup, the gap recovery,
+        the sequence check and the checkpoint all key on the aggregate-trade
+        id, which is the same number either way.
+        """
+        await self._ingest(_decode_aggregate_trade(row, websocket=False))
+
+    async def _ingest(self, incoming: TradePrint) -> None:
         incoming_id = _trade_id(incoming)
         async with self._ingest_lock:
             await self._load_checkpoint()
