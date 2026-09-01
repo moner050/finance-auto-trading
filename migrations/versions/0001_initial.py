@@ -24,6 +24,8 @@ TABLES: tuple[str, ...] = (
     "exec_order_intent",
     "exec_order_intent_legacy_strategy_link",
     "exec_reconciliation_diff",
+    "market_binance_usdm_checkpoint",
+    "market_binance_usdm_trade",
     "market_pessimism_daily",
     "ops_audit_log",
     "ops_inbox_dead_letter",
@@ -262,6 +264,28 @@ _CREATE: tuple[str, ...] = (
     CONSTRAINT ck_exec_reconciliation_diff_severity CHECK (severity in ('INFO','WARNING','BLOCKING')),
     CONSTRAINT ck_exec_reconciliation_diff_status CHECK (status in ('OPEN','RESOLVED')),
     CONSTRAINT uq_exec_reconciliation_diff_identity UNIQUE (run_id, diff_key)
+)""",
+    """CREATE TABLE market_binance_usdm_checkpoint (
+    id BINARY(16) NOT NULL,
+    symbol VARCHAR(32) COLLATE ascii_bin NOT NULL,
+    last_aggregate_trade_id BIGINT NOT NULL,
+    last_trade_at DATETIME(6) NOT NULL,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_market_binance_usdm_checkpoint_symbol UNIQUE (symbol),
+    CONSTRAINT ck_market_binance_usdm_checkpoint_id CHECK (last_aggregate_trade_id >= 0)
+)""",
+    """CREATE TABLE market_binance_usdm_trade (
+    id BINARY(16) NOT NULL,
+    symbol VARCHAR(32) COLLATE ascii_bin NOT NULL,
+    provider_trade_id VARCHAR(64) COLLATE ascii_bin NOT NULL,
+    occurred_at DATETIME(6) NOT NULL,
+    price NUMERIC(38, 18) NOT NULL,
+    quantity NUMERIC(38, 18) NOT NULL,
+    buyer_maker BOOL,
+    PRIMARY KEY (id),
+    CONSTRAINT uq_market_binance_usdm_trade_id UNIQUE (symbol, provider_trade_id),
+    CONSTRAINT ck_market_binance_usdm_trade_text CHECK (CHAR_LENGTH(symbol) > 0 AND symbol = TRIM(symbol) AND CHAR_LENGTH(provider_trade_id) > 0 AND provider_trade_id = TRIM(provider_trade_id)),
+    CONSTRAINT ck_market_binance_usdm_trade_amounts CHECK (price > 0 AND quantity > 0)
 )""",
     """CREATE TABLE market_pessimism_daily (
     id BINARY(16) NOT NULL,
@@ -1450,6 +1474,7 @@ _CREATE: tuple[str, ...] = (
     """CREATE INDEX ix_backoffice_command_actor_started ON backoffice_command (actor_email, started_at)""",
     """CREATE INDEX ix_backoffice_command_target_started ON backoffice_command (target_type, target_key, started_at)""",
     """CREATE INDEX ix_backoffice_secret_version_history ON backoffice_secret_version (logical_name, created_at)""",
+    """CREATE INDEX ix_market_binance_usdm_trade_window ON market_binance_usdm_trade (symbol, occurred_at)""",
     """CREATE INDEX ix_ops_audit_log_scope_occurred_at ON ops_audit_log (scope_type, scope_key, occurred_at)""",
     """CREATE INDEX ix_ops_incident_scope ON ops_incident (scope_type, scope_key)""",
     """CREATE INDEX ix_ops_incident_severity_status ON ops_incident (severity, status)""",
