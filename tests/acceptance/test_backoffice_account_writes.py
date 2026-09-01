@@ -43,9 +43,6 @@ from autotrader.config.settings import Settings
 from autotrader.persistence.mysql.engine import create_engine
 from autotrader.persistence.mysql.models.accounts import Account, Broker
 from autotrader.persistence.mysql.models.bindings import ProviderAccountBinding
-from autotrader.persistence.mysql.repositories.provider_binding import (
-    ProviderBindingRefusedError,
-)
 from autotrader.security.secret_crypto import MasterKeyRing
 
 ALLOWED = SOLE_OPERATOR_EMAIL
@@ -442,17 +439,22 @@ def test_a_provider_that_is_not_the_account_broker_is_refused() -> None:
                     "second_password": PASSWORD,
                 },
             )
-            with pytest.raises(ProviderBindingRefusedError, match="브로커는"):
-                await http.post(
-                    "/accounts/provider/apply",
-                    data={
-                        "csrf_token": CSRF,
-                        "account_id": str(account_id),
-                        "provider_code": "TOSS",
-                        "account_seq": "7",
-                        "approval_id": _approval_id(bound.text),
-                    },
-                )
+            refused = await http.post(
+                "/accounts/provider/apply",
+                data={
+                    "csrf_token": CSRF,
+                    "account_id": str(account_id),
+                    "provider_code": "TOSS",
+                    "account_seq": "7",
+                    "approval_id": _approval_id(bound.text),
+                },
+            )
+
+        # Rendered, not raised. This used to escape as an unhandled exception,
+        # which the operator saw as "Internal Server Error" - a page naming
+        # neither the field nor the rule.
+        assert refused.status_code == 200
+        assert "브로커는" in refused.text
 
     _drive(scenario)
 
@@ -480,5 +482,130 @@ def test_an_alias_that_looks_like_an_account_number_is_refused() -> None:
                         "secret_reference": "secret://kis/paper",
                     },
                 )
+
+    _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_a_sequence_on_a_provider_that_has_none_is_refused_before_the_password() -> (
+    None
+):
+    """The rule lived only in the repository, so the panel accepted a BINANCE
+    binding carrying an account_seq, took the second password, and refused
+    afterwards - spending an approval on a change that could never happen and
+    rendering it as Internal Server Error.
+
+    Toss identifies an account by a sequence; KIS and Binance have none to
+    give, so a number there names nothing.
+    """
+
+    async def scenario(
+        sessions: async_sessionmaker[AsyncSession], approvals: object
+    ) -> None:
+        await MySqlSecondPasswords(sessions).establish(PASSWORD, now=NOW)
+        await _broker(sessions, "BINANCE")
+        app, session_id = await _signed_in(sessions, approvals)
+        await _create(app, session_id, alias="seq-refusal", code="BINANCE")
+        account_id, _ = await _account(sessions, "seq-refusal")
+
+        async with _client(app, session_id) as http:
+            refused = await http.post(
+                "/accounts/provider/approve",
+                data={
+                    "csrf_token": CSRF,
+                    "account_id": str(account_id),
+                    "provider_code": "BINANCE",
+                    "account_seq": "1",
+                },
+            )
+
+        # Readable, and before anything was spent.
+        assert refused.status_code == 200
+        assert "account_seq" in refused.text
+        assert 'name="second_password"' not in refused.text
+        assert 'name="approval_id"' not in refused.text
+
+    _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_a_refusal_is_rendered_rather_than_raised() -> None:
+    """An unknown provider is an answer the operator has to be able to read.
+    Letting it escape rendered "Internal Server Error", which names neither
+    the field nor the rule."""
+
+    async def scenario(
+        sessions: async_sessionmaker[AsyncSession], approvals: object
+    ) -> None:
+        await MySqlSecondPasswords(sessions).establish(PASSWORD, now=NOW)
+        await _broker(sessions, "BINANCE")
+        app, session_id = await _signed_in(sessions, approvals)
+        await _create(app, session_id, alias="unknown-provider", code="BINANCE")
+        account_id, _ = await _account(sessions, "unknown-provider")
+
+        async with _client(app, session_id) as http:
+            refused = await http.post(
+                "/accounts/provider/approve",
+                data={
+                    "csrf_token": CSRF,
+                    "account_id": str(account_id),
+                    "provider_code": "NOT_A_PROVIDER",
+                    "account_seq": "",
+                },
+            )
+
+        assert refused.status_code == 200
+        assert "provider" in refused.text
+
+    _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_binance_binds_when_the_sequence_is_left_blank() -> None:
+    async def scenario(
+        sessions: async_sessionmaker[AsyncSession], approvals: object
+    ) -> None:
+        await MySqlSecondPasswords(sessions).establish(PASSWORD, now=NOW)
+        await _broker(sessions, "BINANCE")
+        app, session_id = await _signed_in(sessions, approvals)
+        await _create(app, session_id, alias="binance-bind", code="BINANCE")
+        account_id, _ = await _account(sessions, "binance-bind")
+
+        async with _client(app, session_id) as http:
+            approved = await http.post(
+                "/accounts/provider/approve",
+                data={
+                    "csrf_token": CSRF,
+                    "account_id": str(account_id),
+                    "provider_code": "BINANCE",
+                    "account_seq": "",
+                    "second_password": PASSWORD,
+                },
+            )
+            applied = await http.post(
+                "/accounts/provider/apply",
+                data={
+                    "csrf_token": CSRF,
+                    "account_id": str(account_id),
+                    "provider_code": "BINANCE",
+                    "account_seq": "",
+                    "approval_id": _approval_id(approved.text),
+                },
+            )
+
+        assert applied.status_code == 200
+        async with sessions() as session:
+            binding = await session.scalar(
+                select(ProviderAccountBinding).where(
+                    ProviderAccountBinding.account_id == account_id,
+                    ProviderAccountBinding.active.is_(True),
+                )
+            )
+        assert binding is not None
+        assert binding.provider_code == "BINANCE"
+        assert binding.account_seq is None
 
     _drive(scenario)

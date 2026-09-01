@@ -32,6 +32,24 @@ SEQUENCED_PROVIDERS = frozenset({"TOSS"})
 PROVIDERS = frozenset({"TOSS", "KIS", "BINANCE"})
 
 
+def require_sequence_rule(provider_code: str, account_seq: int | None) -> None:
+    """Toss identifies an account by a sequence; the other two do not have one.
+
+    A number against KIS or Binance names nothing, and a missing one against
+    Toss names no account at all. Exported so the back office can refuse the
+    same thing before it asks for a second password, rather than after.
+    """
+    needs_sequence = provider_code in SEQUENCED_PROVIDERS
+    if needs_sequence and (account_seq is None or account_seq <= 0):
+        raise ProviderBindingRefusedError(
+            "Toss 바인딩에는 양수 account_seq가 필요합니다."
+        )
+    if not needs_sequence and account_seq is not None:
+        raise ProviderBindingRefusedError(
+            f"{provider_code} 바인딩에는 account_seq를 둘 수 없습니다."
+        )
+
+
 class ProviderBindingRefusedError(RuntimeError):
     """Raised when a provider cannot be bound to an account as asked."""
 
@@ -104,15 +122,9 @@ class ProviderBindings:
         moment = require_utc(now)
         if provider_code not in PROVIDERS:
             raise ProviderBindingRefusedError("승인된 provider가 아닙니다.")
-        needs_sequence = provider_code in SEQUENCED_PROVIDERS
-        if needs_sequence and (account_seq is None or account_seq <= 0):
-            raise ProviderBindingRefusedError(
-                "Toss 바인딩에는 양수 account_seq가 필요합니다."
-            )
-        if not needs_sequence and account_seq is not None:
-            raise ProviderBindingRefusedError(
-                f"{provider_code} 바인딩에는 account_seq를 둘 수 없습니다."
-            )
+        # The same rule the confirmation panel applies. Kept here too: a
+        # screen is not the only way into this repository.
+        require_sequence_rule(provider_code, account_seq)
 
         account = await self._session.scalar(
             select(Account).where(Account.id == account_id).with_for_update()
@@ -192,4 +204,5 @@ __all__ = (
     "ProviderBinding",
     "ProviderBindingRefusedError",
     "ProviderBindings",
+    "require_sequence_rule",
 )

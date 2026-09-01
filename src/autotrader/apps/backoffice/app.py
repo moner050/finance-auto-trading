@@ -28,6 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from autotrader.apps.backoffice.account_commands import (
+    AccountCommandRefusedError,
     EnableFacts,
     MySqlAccountCommands,
     ProviderBindingFacts,
@@ -121,6 +122,9 @@ from autotrader.execution.promotion.models import PromotionMode
 from autotrader.persistence.mysql.models.bindings import ProviderAccountBinding
 from autotrader.persistence.mysql.models.david_v6 import DavidV6ManifestRow
 from autotrader.persistence.mysql.repositories.promotion import PromotionSessions
+from autotrader.persistence.mysql.repositories.provider_binding import (
+    ProviderBindingRefusedError,
+)
 from autotrader.persistence.mysql.repositories.universe import (
     UniverseAuthorityError,
 )
@@ -510,11 +514,19 @@ def create_app(
         second_password: str | None = Form(None),
     ) -> Response:
         require_csrf(session, csrf_token)
-        facts = await account_commands.binding_facts(
-            account_id=_uuid(account_id, "unknown account"),
-            provider_code=provider_code,
-            account_seq=_account_seq(account_seq),
-        )
+        try:
+            facts = await account_commands.binding_facts(
+                account_id=_uuid(account_id, "unknown account"),
+                provider_code=provider_code,
+                account_seq=_account_seq(account_seq),
+            )
+        except (ProviderBindingRefusedError, AccountCommandRefusedError) as error:
+            # A refusal is an answer, and the operator has to be able to read
+            # it. Letting it escape rendered "Internal Server Error", which
+            # names neither the field nor the rule.
+            return await _render_accounts(
+                request, session, templates, account_reader, error=str(error)
+            )
         if second_password is None:
             return await _render_accounts(
                 request, session, templates, account_reader, provider=facts
@@ -560,17 +572,22 @@ def create_app(
         approval_id: str = Form(...),
     ) -> Response:
         require_csrf(session, csrf_token)
-        await account_commands.bind_provider(
-            account_id=_uuid(account_id, "unknown account"),
-            provider_code=provider_code,
-            account_seq=_account_seq(account_seq),
-            operator=session.operator,
-            source_ip=_source_ip(request),
-            correlation_id=request.headers.get("x-request-id", str(new_uuid7())),
-            approval_id=approval_id,
-            session_id=_session_id(request),
-            now=datetime.now(UTC),
-        )
+        try:
+            await account_commands.bind_provider(
+                account_id=_uuid(account_id, "unknown account"),
+                provider_code=provider_code,
+                account_seq=_account_seq(account_seq),
+                operator=session.operator,
+                source_ip=_source_ip(request),
+                correlation_id=request.headers.get("x-request-id", str(new_uuid7())),
+                approval_id=approval_id,
+                session_id=_session_id(request),
+                now=datetime.now(UTC),
+            )
+        except (ProviderBindingRefusedError, AccountCommandRefusedError) as error:
+            return await _render_accounts(
+                request, session, templates, account_reader, error=str(error)
+            )
         return await _render_accounts(request, session, templates, account_reader)
 
     async def promotion_page(

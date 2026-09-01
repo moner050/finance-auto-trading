@@ -33,6 +33,7 @@ from autotrader.persistence.mysql.repositories.provider_binding import (
     PROVIDERS,
     ProviderBindingRefusedError,
     ProviderBindings,
+    require_sequence_rule,
 )
 from autotrader.shared.ids import new_uuid7
 from autotrader.shared.time import require_utc
@@ -315,8 +316,19 @@ class MySqlAccountCommands:
     async def binding_facts(
         self, *, account_id: UUID, provider_code: str, account_seq: int | None
     ) -> ProviderBindingFacts:
+        """What the panel shows, refusing anything the bind would refuse.
+
+        Checked here and not only in the repository. `bind` held the
+        account_seq rule alone, so a BINANCE binding carrying one passed the
+        panel, took the operator's second password, and was refused afterwards
+        - spending an approval on a change that could never happen and
+        reporting it as a 500. Section 11.4's policy binding already says why:
+        learning after the fact that it was never bindable tells the operator
+        nothing they could not have been told first.
+        """
         if provider_code not in PROVIDERS:
             raise ProviderBindingRefusedError("승인된 provider가 아닙니다.")
+        require_sequence_rule(provider_code, account_seq)
         async with self._sessions() as session:
             account = await session.scalar(
                 select(Account).where(Account.id == account_id)
