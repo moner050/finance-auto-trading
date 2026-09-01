@@ -14,11 +14,15 @@ from __future__ import annotations
 
 from base64 import b64encode
 from unittest.mock import patch
-from uuid import UUID
+from uuid import UUID, uuid7
 
 import pytest
 
-from autotrader.apps.backoffice.__main__ import prepare, require_reachable_public_url
+from autotrader.apps.backoffice.__main__ import (
+    prepare,
+    require_account_id,
+    require_reachable_public_url,
+)
 from autotrader.config.settings import Settings
 
 
@@ -116,3 +120,23 @@ async def test_a_failed_build_still_leaves_nothing_open() -> None:
         )
 
     assert engine.disposed == 1
+
+
+def test_a_non_v7_account_id_is_refused_before_the_server_starts() -> None:
+    """Every id in this schema is a UUIDv7 and the column type enforces it, so
+    the nil UUID reached the database and was refused there - as a bind error
+    while rendering a page, which surfaces as a 500 naming a SELECT rather
+    than the argument that was wrong."""
+    with pytest.raises(SystemExit, match="not a UUIDv7"):
+        require_account_id("00000000-0000-0000-0000-000000000000")
+
+
+def test_text_that_is_not_a_uuid_is_refused() -> None:
+    with pytest.raises(SystemExit, match="not a UUID"):
+        require_account_id("the-account")
+
+
+def test_a_v7_is_accepted() -> None:
+    generated = uuid7()
+
+    assert require_account_id(str(generated)) == generated

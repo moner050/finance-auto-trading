@@ -76,10 +76,37 @@ async def prepare(
         await engine.dispose()
 
 
+def require_account_id(value: str) -> UUID:
+    """The account the operations screen reports on, or a refusal.
+
+    Every id in this schema is a UUIDv7 and the column type enforces it, so a
+    v4 or the nil UUID reaches the database and is refused there - as a bind
+    error in the middle of rendering a page, which surfaces as a 500 that
+    names a SELECT rather than the argument that was wrong.
+
+    A fresh install has no account yet, because accounts are created in the
+    back office. Starting with an unused id is the way in: the operations
+    screen reports on nothing until there is something, and the accounts
+    screen is reachable meanwhile.
+    """
+    try:
+        account_id = UUID(value)
+    except ValueError:
+        raise SystemExit(f"{value} is not a UUID") from None
+    if account_id.version != 7:
+        raise SystemExit(
+            f"{value} is not a UUIDv7, which every id in this schema is. "
+            'Generate one with: python -c "from uuid import uuid7; '
+            'print(uuid7())"'
+        )
+    return account_id
+
+
 def main(argv: tuple[str, ...]) -> int:
     if len(argv) != 1:
         print(USAGE, file=sys.stderr)
         return 2
+    account_id = require_account_id(argv[0])
     settings = Settings()
     require_public_origin(
         str(settings.backoffice_public_url), name="BACKOFFICE_PUBLIC_URL"
@@ -92,7 +119,7 @@ def main(argv: tuple[str, ...]) -> int:
         prepare(
             settings=settings,
             engine=create_engine(settings),
-            account_id=UUID(argv[0]),
+            account_id=account_id,
         )
     )
     # The public URL is validated because it has to match what is registered
