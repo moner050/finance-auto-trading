@@ -68,10 +68,14 @@ class BinanceLoopInputs:
     spread: Decimal
     stop_slippage_q95: Decimal
     quantity: Decimal
-    atr_ratio: Decimal
-    range_efficiency: Decimal
     pessimism: PessimismInputs
     benchmark_returns: tuple[Decimal, ...]
+    # Optional, because `evaluate_regime` treats them as optional. Section
+    # 2.1 gives the regime as SMA 6/70/200 alone and consults neither, so
+    # demanding them here made the loop unstartable over two observations
+    # nothing reads.
+    atr_ratio: Decimal | None = None
+    range_efficiency: Decimal | None = None
     events: EventCalendar | None = None
     trade_window: timedelta = field(default=timedelta(minutes=30))
 
