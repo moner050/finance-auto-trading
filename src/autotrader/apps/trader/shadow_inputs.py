@@ -35,6 +35,7 @@ from autotrader.integrations.market_data.binance_session import (
     binance_usdm_calendar,
     session_date_for,
 )
+from autotrader.strategies.david_v6.calendar import EventCalendar
 from autotrader.strategies.david_v6.costs import FeeSchedule, stop_slippage_from_bars
 from autotrader.strategies.david_v6.manifest import V6Manifest
 from autotrader.strategies.david_v6.order_flow import (
@@ -74,6 +75,12 @@ class SpreadSource(Protocol):
     async def spread(self) -> Decimal: ...
 
 
+class EventCalendarSource(Protocol):
+    """The economic calendar in force, or None when there is none."""
+
+    async def calendar(self, now: datetime) -> EventCalendar | None: ...
+
+
 class LiveBinanceInputs:
     """Assemble one pass's inputs, or refuse the pass."""
 
@@ -83,10 +90,12 @@ class LiveBinanceInputs:
         fixed: FixedFacts,
         spreads: SpreadSource,
         pessimism: PessimismSource,
+        events: EventCalendarSource,
     ) -> None:
         self._fixed = fixed
         self._spreads = spreads
         self._pessimism = pessimism
+        self._events = events
 
     async def build(
         self,
@@ -121,6 +130,13 @@ class LiveBinanceInputs:
             ),
             fee_schedule=fixed.fee_schedule,
             tick_size=fixed.tick_size,
+            # None is passed through rather than refusing the pass. The other
+            # inputs are measurements, and a missing one means the pass cannot
+            # say anything; a missing calendar means the opposite - the answer
+            # is known, and it is do not open a position. That belongs on
+            # record as a refusal with its reason, not as a pass that never
+            # happened.
+            events=await self._events.calendar(now),
             spread=await self._spreads.spread(),
             stop_slippage_q95=slippage,
             # The venue's smallest order. Only the reported round-trip total
@@ -134,6 +150,7 @@ class LiveBinanceInputs:
 
 
 __all__ = (
+    "EventCalendarSource",
     "FixedFacts",
     "LiveBinanceInputs",
     "PessimismSource",

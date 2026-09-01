@@ -20,7 +20,7 @@ import asyncio
 import json
 from collections.abc import Awaitable
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import cast
 
@@ -47,7 +47,14 @@ from autotrader.integrations.market_data.binance_instrument import (
     read_spread,
 )
 from autotrader.integrations.market_data.binance_public_rest import BinancePublicRest
+from autotrader.integrations.market_data.binance_session import (
+    binance_usdm_calendar,
+    session_date_for,
+)
 from autotrader.integrations.market_data.binance_usdm import BinanceUsdmMarketData
+from autotrader.integrations.market_data.economic_calendar import (
+    ForexFactoryCalendars,
+)
 from autotrader.persistence.mysql.models.david_v6 import DavidV6ManifestRow
 from autotrader.persistence.mysql.repositories.market_tape import MySqlMarketTape
 from autotrader.persistence.mysql.repositories.pessimism import MarketPessimism
@@ -94,6 +101,7 @@ class ShadowLoop:
     ports: LoopPorts
     rest: BinancePublicRest
     market_data: BinanceUsdmMarketData
+    events: ForexFactoryCalendars
     equity: Decimal
     tick_size: Decimal
 
@@ -242,6 +250,26 @@ async def _usdt_balance(transport: BinanceUsdmAccountReader) -> Decimal:
     raise ShadowStartupError("the account reports no USDT balance")
 
 
+def _session_close_for(moment: datetime) -> datetime:
+    """When the session containing `moment` closes.
+
+    Only the monthly employment report needs this: section 8 blocks it for the
+    whole session rather than for a fixed number of minutes. A perpetual venue
+    has no close of its own, so the boundary is the measured one the rest of
+    the system already uses.
+    """
+    close = binance_usdm_calendar(
+        session_date=session_date_for(moment), captured_at=moment
+    ).session_close_at
+    if close is None:
+        # A calendar may report a day the market never opened, and that is a
+        # real answer for an exchange with holidays. This venue has none, so
+        # the absence would mean the session helper had changed underneath
+        # the one rule that depends on it.
+        raise ShadowStartupError("the venue calendar reports no session close")
+    return close
+
+
 async def build_shadow_loop(
     *,
     settings: Settings,
@@ -281,12 +309,14 @@ async def build_shadow_loop(
         minimum_quantity=specification.minimum_quantity,
     )
     market_data = BinanceUsdmMarketData(rest=rest, store=MySqlMarketTape(sessions))
+    events = ForexFactoryCalendars(session_close_for=_session_close_for)
     source = ShadowContextSource(
         market_data=market_data,
         inputs=LiveBinanceInputs(
             fixed=fixed,
             spreads=RestSpreads(rest),
             pessimism=StoredPessimism(sessions),
+            events=events,
         ),
         risk=BinanceRiskContexts(
             budget=AccountBudget(
@@ -305,6 +335,7 @@ async def build_shadow_loop(
     )
     return ShadowLoop(
         market_data=market_data,
+        events=events,
         ports=shadow_ports(
             sessions=sessions,
             source=source,

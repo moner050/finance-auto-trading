@@ -73,6 +73,7 @@ async def _run_shadow(alias: str, leverage: int) -> int:
         POLL_INTERVAL_SECONDS,
         BinanceUsdmTradePoller,
     )
+    from autotrader.integrations.market_data.economic_calendar import FEED_URL
 
     settings = Settings()
     engine = create_engine(settings)
@@ -109,6 +110,7 @@ async def _run_shadow(alias: str, leverage: int) -> int:
         print(f"equity        {loop.equity} USDT")
         print(f"tick size     {loop.tick_size}")
         print(f"tape          /fapi/v1/aggTrades every {POLL_INTERVAL_SECONDS:g}s")
+        print(f"calendar      {FEED_URL}")
         print("orders        none; this loop has no execution port to submit to")
         print("stop with Ctrl-C")
         stop = asyncio.Event()
@@ -133,6 +135,11 @@ async def _run_shadow(alias: str, leverage: int) -> int:
                 f"tape          {tape.trades} trades over {tape.polls} polls "
                 f"({tape.failures} failures)"
             )
+            print(
+                f"calendar      {loop.events.fetches} fetches "
+                f"({loop.events.failures} failures)"
+            )
+            await loop.events.aclose()
             await loop.rest.aclose()
     finally:
         await engine.dispose()

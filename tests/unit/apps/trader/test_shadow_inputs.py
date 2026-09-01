@@ -17,6 +17,7 @@ import pytest
 
 from autotrader.apps.trader.shadow_inputs import FixedFacts, LiveBinanceInputs
 from autotrader.domain.completed_ohlcv import CompletedOhlcvBar
+from autotrader.strategies.david_v6.calendar import EventCalendar
 from autotrader.strategies.david_v6.costs import FeeSchedule
 from autotrader.strategies.david_v6.manifest import (
     V6_DESIGN_SHA256,
@@ -106,8 +107,37 @@ def _trades(count: int) -> tuple[TradePrint, ...]:
     )
 
 
-def _provider(spreads: _Spreads, pessimism: _Pessimism) -> LiveBinanceInputs:
-    return LiveBinanceInputs(fixed=_fixed(), spreads=spreads, pessimism=pessimism)
+class _Events:
+    """A calendar source that answers with whatever it was given."""
+
+    def __init__(self, calendar: EventCalendar | None = None) -> None:
+        self.calendar_value = calendar
+        self.asked: list[datetime] = []
+
+    async def calendar(self, now: datetime) -> EventCalendar | None:
+        self.asked.append(now)
+        return self.calendar_value
+
+
+def _calendar(now: datetime = NOW) -> EventCalendar:
+    return EventCalendar(
+        captured_at=now - timedelta(hours=1),
+        valid_until=now + timedelta(hours=11),
+        events=(),
+    )
+
+
+def _provider(
+    spreads: _Spreads,
+    pessimism: _Pessimism,
+    events: _Events | None = None,
+) -> LiveBinanceInputs:
+    return LiveBinanceInputs(
+        fixed=_fixed(),
+        spreads=spreads,
+        pessimism=pessimism,
+        events=events if events is not None else _Events(_calendar()),
+    )
 
 
 async def _build(
