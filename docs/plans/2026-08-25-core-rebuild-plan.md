@@ -952,6 +952,45 @@ id가 건너뛰어 있으므로.
 
 ---
 
+---
+
+## fstream 진단: aggTrade 스트림만 죽어 있다 (2026-09-01)
+
+원인을 좁혔다. 우리 쪽 문제도, 네트워크 문제도 아니다.
+
+| 확인 항목 | 결과 |
+|---|---|
+| TLS 인증서 | DigiCert / GeoTrust, `*.binance.com` — 중간자 없음 |
+| 웹소켓 업그레이드 | `101 Switching Protocols`, 연결 유지 |
+| 구독 메커니즘 | 동작 (`{"result":null,"id":1}`) |
+| `/ws/<stream>` 경로 형태 | 동작 (`btcusdt@trade`로 확인) |
+| `btcusdt@trade` 웹소켓 | **데이터 옴** |
+| `btcusdt@aggTrade` 웹소켓 | **없음** — 3회 재시도, 같은 소켓에 trade와 동시 구독해도 trade만 옴 |
+| `btcusdt@kline_1m` 웹소켓 | 없음 |
+| REST `/fapi/v1/aggTrades` | **데이터 옴**, `a`/`f`/`l`/`T`/`m`/`p`/`q` 전부 |
+
+즉 **집계 체결 스트림만** 조용하고, 같은 소켓의 원시 체결 스트림과 집계 체결 REST
+엔드포인트는 멀쩡하다. 재현되며 일시적이지 않다.
+
+### 선택지
+
+**A. 웹소켓 유지, 환경 제약으로 기록.** 다른 네트워크에서는 동작할 수 있다.
+클라이언트는 이미 검증됐다(실제 Binance 프레임 56건 수신·저장).
+
+**B. `@trade`로 전환.** §22.4가 "Aggregate Trade **또는** 원시 Trade 스트림"을
+허용한다. 다만 지금 기계장치 전부가 집계 체결 id 위에 서 있다 — 중복 제거,
+`last_aggregate_trade_id` 체크포인트, `_recover_gap`의 REST `aggregate_trades`.
+id 공간이 다르므로 교체가 아니라 재작업이다.
+
+**C. REST `aggTrades` 폴링.** 같은 id, 같은 필드. `_decode_aggregate_trade`에
+이미 `websocket=False` 경로가 있고 `_recover_gap`이 이미 그 엔드포인트를 쓴다 —
+중복 제거·체크포인트·갭 복구가 그대로 산다. 대가는 지연 시간과 REST weight다.
+5분봉 전략이 30분 체결 창을 읽는 데는 수 초 폴링으로 충분하다.
+
+C가 설계를 가장 적게 흔들면서 이 기계에서 실제로 동작한다.
+
+---
+
 ## 미검증 항목
 
 이 계획을 시작하는 시점에 아래는 **한 번도 확인된 적이 없다.** 어느 것도 되어 있다고
