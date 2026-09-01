@@ -24,17 +24,52 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from autotrader.apps.trader.composition import (
+    NO_KILL_SWITCH,
     MySqlDecisionRecorder,
-    MySqlTradingControl,
 )
 from autotrader.apps.trader.loop import LoopPorts
+from autotrader.persistence.mysql.models.operations import OpsTradingControl
 from autotrader.strategies.david_v6.hlit import HlitSetup
 from autotrader.strategies.david_v6.models import V6Decision
 
 SHADOW = "SHADOW"
+
+
+class ShadowTradingControl:
+    """Whether a Shadow pass may evaluate. Not whether anything may trade.
+
+    Arming opens exposure, and a Shadow loop takes none: it has no execution
+    port to submit through. Requiring ARMED here would mean arming a LIVE
+    account in order to collect the evidence that is supposed to come before
+    it is armed, which is the wrong way round - the operator would have to
+    enter the dangerous state to earn the right to enter it.
+
+    So `armed` is not read. Two things still are.
+
+    A kill switch at any level stops this loop. BLOCK_NEW_EXPOSURE names
+    something Shadow never does, so continuing could be argued; it stops
+    anyway, because any level above NONE means somebody intervened
+    deliberately, and evidence gathered during an intervention is not
+    evidence of how the strategy behaves.
+
+    And no control rows means nobody has intervened, which is not the same
+    question `MySqlTradingControl` asks. There, no rows means nobody armed
+    anything and the answer is no. Here it means nothing is stopping this,
+    and the answer is yes.
+    """
+
+    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = sessions
+
+    async def is_armed(self) -> bool:
+        # The protocol calls it this. What it decides here is narrower.
+        async with self._sessions() as session:
+            controls = (await session.scalars(select(OpsTradingControl))).all()
+        return all(control.kill_switch_level == NO_KILL_SWITCH for control in controls)
 
 
 class RefusingExecution:
@@ -105,7 +140,7 @@ def shadow_ports(
         reconciliation=NoBrokerDisagreement(),
         protection=NothingToProtect(),
         source=source,  # type: ignore[arg-type]
-        control=MySqlTradingControl(sessions),
+        control=ShadowTradingControl(sessions),
         recorder=MySqlDecisionRecorder(sessions),
         execution=execution or RefusingExecution(),
     )
@@ -117,5 +152,6 @@ __all__ = (
     "NoSettlement",
     "NothingToProtect",
     "RefusingExecution",
+    "ShadowTradingControl",
     "shadow_ports",
 )
