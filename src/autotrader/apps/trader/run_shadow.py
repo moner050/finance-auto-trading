@@ -104,6 +104,10 @@ class ShadowLoop:
     rest: BinancePublicRest
     market_data: BinanceUsdmMarketData
     events: ForexFactoryCalendars
+    # The same lease the loop holds, handed out so the tape poller can ask the
+    # same question with the same instance id. Two halves of one process must
+    # be one leader, or the guard would have them fighting each other.
+    lease: MySqlSchedulerLease
     equity: Decimal
     tick_size: Decimal
 
@@ -434,21 +438,19 @@ async def build_shadow_loop(
             policy=policy,  # type: ignore[arg-type]
         ),
     )
+    lease = MySqlSchedulerLease(
+        sessions,
+        LeaseSettings(
+            lease_name=LEASE_NAME,
+            runtime_instance_id=new_uuid7(),
+            ttl=LEASE_TTL,
+        ),
+    )
     return ShadowLoop(
         market_data=market_data,
         events=events,
-        ports=shadow_ports(
-            sessions=sessions,
-            source=source,
-            lease=MySqlSchedulerLease(
-                sessions,
-                LeaseSettings(
-                    lease_name=LEASE_NAME,
-                    runtime_instance_id=new_uuid7(),
-                    ttl=LEASE_TTL,
-                ),
-            ),
-        ),
+        lease=lease,
+        ports=shadow_ports(sessions=sessions, source=source, lease=lease),
         rest=rest,
         equity=equity,
         tick_size=specification.tick_size,

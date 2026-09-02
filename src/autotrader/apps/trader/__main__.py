@@ -139,7 +139,16 @@ async def _run_shadow(alias: str, leverage: int, run_for: timedelta | None) -> i
         # Fetched rather than pushed: `btcusdt@aggTrade` accepts a
         # subscription and then sends nothing, while this endpoint returns the
         # same rows with the same ids. See binance_trade_poller.
-        tape = BinanceUsdmTradePoller(market_data=loop.market_data, rest=loop.rest)
+        tape = BinanceUsdmTradePoller(
+            market_data=loop.market_data,
+            rest=loop.rest,
+            # The same lease the evaluation holds. The tape is one table
+            # shared by every instance on this database, and two pollers
+            # resuming from one checkpoint fetch the same page and insert it
+            # twice.
+            lease=loop.lease,
+            clock=SystemClock(),
+        )
         print(f"mode          {SHADOW}")
         print(f"account       {alias} ({resolved.account.environment})")
         print(f"equity        {loop.equity} USDT")
@@ -175,7 +184,7 @@ async def _run_shadow(alias: str, leverage: int, run_for: timedelta | None) -> i
         finally:
             print(
                 f"tape          {tape.trades} trades over {tape.polls} polls "
-                f"({tape.failures} failures)"
+                f"({tape.failures} failures, {tape.deferred} not leader)"
             )
             print(
                 f"calendar      {loop.events.fetches} fetches "

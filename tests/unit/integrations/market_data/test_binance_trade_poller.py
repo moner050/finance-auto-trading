@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 
 import pytest
 
 from autotrader.integrations.market_data.binance_trade_poller import (
     PAGE_LIMIT,
+    POLL_INTERVAL_SECONDS,
     BinanceUsdmTradePoller,
 )
 
@@ -91,10 +93,35 @@ class _Sleeps:
             self._stop.set()
 
 
-def _poller(store: _Store, rest: _Rest, sleeps: object) -> BinanceUsdmTradePoller:
+class _Lease:
+    """Leadership, which this instance either has or does not."""
+
+    def __init__(self, *, held: bool = True) -> None:
+        self.held = held
+        self.asked = 0
+
+    async def acquire(self, now: datetime) -> bool:
+        del now
+        self.asked += 1
+        return self.held
+
+
+class _Clock:
+    def now(self) -> datetime:
+        return datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
+
+
+def _poller(
+    store: _Store,
+    rest: _Rest,
+    sleeps: object,
+    lease: _Lease | None = None,
+) -> BinanceUsdmTradePoller:
     return BinanceUsdmTradePoller(
         market_data=store,  # type: ignore[arg-type]
         rest=rest,  # type: ignore[arg-type]
+        lease=lease if lease is not None else _Lease(),
+        clock=_Clock(),
         sleep=sleeps,  # type: ignore[arg-type]
     )
 
@@ -199,6 +226,8 @@ def test_a_page_larger_than_the_venue_allows_is_refused() -> None:
         BinanceUsdmTradePoller(
             market_data=_Store(),  # type: ignore[arg-type]
             rest=_Rest(),  # type: ignore[arg-type]
+            lease=_Lease(),  # type: ignore[arg-type]
+            clock=_Clock(),
             limit=PAGE_LIMIT + 1,
         )
 
@@ -231,3 +260,74 @@ async def test_an_empty_page_is_not_handed_over() -> None:
     await _poller(store, rest, _Sleeps(stop)).run(stop=stop)
 
     assert store.pages == 0
+
+
+@pytest.mark.asyncio
+async def test_an_instance_without_the_lease_writes_nothing() -> None:
+    """The tape is one table shared by every instance on this database. Two
+    pollers resuming from the same checkpoint fetch the same page and insert
+    it twice, and the second one crashes on the unique id - which is the lucky
+    outcome, because the unlucky one is a tape nobody can trust."""
+    stop = asyncio.Event()
+    store = _Store(checkpoint=1)
+    rest = _Rest((_row(2),))
+    lease = _Lease(held=False)
+
+    poller = _poller(store, rest, _Sleeps(stop), lease)
+    await poller.run(stop=stop)
+
+    assert rest.asked == []
+    assert store.seen == []
+    assert store.pages == 0
+    assert poller.deferred == 1
+
+
+@pytest.mark.asyncio
+async def test_losing_the_lease_is_not_an_error_and_does_not_end_the_run() -> None:
+    """Another instance owning the account is a state to wait out, not a
+    failure to back off from. The checkpoint says what was missed when
+    leadership comes back."""
+    stop = asyncio.Event()
+    store = _Store(checkpoint=1)
+    rest = _Rest((_row(2),))
+    lease = _Lease(held=False)
+    sleeps = _Sleeps(stop, stop_after=3)
+
+    poller = _poller(store, rest, sleeps, lease)
+    await poller.run(stop=stop)
+
+    assert poller.failures == 0
+    # The poll interval, not a growing backoff: this is not a failure.
+    assert sleeps.waited == [POLL_INTERVAL_SECONDS] * 3
+
+
+@pytest.mark.asyncio
+async def test_leadership_regained_resumes_from_the_checkpoint() -> None:
+    stop = asyncio.Event()
+    store = _Store(checkpoint=41)
+    rest = _Rest((_row(42),))
+    lease = _Lease(held=False)
+    sleeps = _Sleeps(stop, stop_after=2)
+
+    async def take_leadership(seconds: float) -> None:
+        lease.held = True
+        await sleeps(seconds)
+
+    poller = _poller(store, rest, take_leadership, lease)
+    await poller.run(stop=stop)
+
+    assert rest.asked == [42]
+    assert store.seen == [42]
+
+
+@pytest.mark.asyncio
+async def test_leadership_is_asked_before_the_venue_is() -> None:
+    """Asking the venue first would spend a request, and a rate-limit budget,
+    on a page this instance is not allowed to store."""
+    stop = asyncio.Event()
+    lease = _Lease(held=False)
+
+    poller = _poller(_Store(checkpoint=1), _Rest((_row(2),)), _Sleeps(stop), lease)
+    await poller.run(stop=stop)
+
+    assert lease.asked == 1

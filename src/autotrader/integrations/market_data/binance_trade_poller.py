@@ -22,12 +22,27 @@ Ordering is not this module's problem. `ingest_rest_agg_trades` refuses a trade
 that arrives out of sequence, recovers a gap when ids skip, and advances the
 checkpoint - the same path the stream used. The page goes over whole, because
 a page stored one commit at a time is slower than the tape that produced it.
+
+Being the only writer is this module's problem, and it took a duplicate key to
+notice. The tape is one table shared by every instance pointed at this
+database, and two pollers resuming from the same checkpoint fetch the same
+page and insert it twice; the second one crashes on the unique id, which is
+the lucky outcome. The scheduler lease already answers who may act for this
+account, and the loop asks it every pass. The poller now asks it too, with the
+same instance id, so within one process both halves are the same leader and a
+second process writes nothing at all.
+
+Losing the lease is not an error and does not end the run. It means another
+instance owns the account, so this one stops writing and keeps asking; if
+leadership comes back the checkpoint says what was missed, and the gap
+recovery that already exists fetches it.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from datetime import datetime
 from typing import Protocol, cast
 
 # A poll behind by this much is invisible to a five-minute bar, and each one
@@ -48,6 +63,16 @@ class AggregateTradeRest(Protocol):
     ) -> tuple[object, ...]: ...
 
 
+class Leadership(Protocol):
+    """Whoever decides which instance may act for this account."""
+
+    async def acquire(self, now: datetime) -> bool: ...
+
+
+class Clock(Protocol):
+    def now(self) -> datetime: ...
+
+
 class RestTradeIngest(Protocol):
     async def ingest_rest_agg_trades(
         self, rows: Sequence[Mapping[str, object]]
@@ -64,6 +89,8 @@ class BinanceUsdmTradePoller:
         *,
         market_data: RestTradeIngest,
         rest: AggregateTradeRest,
+        lease: Leadership,
+        clock: Clock,
         symbol: str = "BTCUSDT",
         interval: float = POLL_INTERVAL_SECONDS,
         limit: int = PAGE_LIMIT,
@@ -77,6 +104,8 @@ class BinanceUsdmTradePoller:
             raise ValueError(f"the page limit must be within 1 and {PAGE_LIMIT}")
         self._market_data = market_data
         self._rest = rest
+        self._lease = lease
+        self._clock = clock
         self._symbol = symbol
         self._interval = interval
         self._limit = limit
@@ -86,6 +115,7 @@ class BinanceUsdmTradePoller:
         self.trades = 0
         self.polls = 0
         self.failures = 0
+        self.deferred = 0
 
     async def run(self, *, stop: asyncio.Event) -> None:
         backoff = self._first_backoff
@@ -111,6 +141,12 @@ class BinanceUsdmTradePoller:
                 await self._sleep(self._interval)
 
     async def _poll(self) -> int:
+        if not await self._lease.acquire(self._clock.now()):
+            # Another instance owns this account. Writing anyway is how the
+            # same page arrives twice, and returning zero parks this one at
+            # the poll interval until leadership comes back.
+            self.deferred += 1
+            return 0
         checkpoint = await self._market_data.checkpoint_trade_id()
         # From the next unseen id, or from the most recent page when the tape
         # has never been read. Not from zero: that is a real id at the start
@@ -142,5 +178,7 @@ __all__ = (
     "POLL_INTERVAL_SECONDS",
     "AggregateTradeRest",
     "BinanceUsdmTradePoller",
+    "Clock",
+    "Leadership",
     "RestTradeIngest",
 )
