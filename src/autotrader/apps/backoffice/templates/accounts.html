@@ -1,7 +1,8 @@
 {% extends "_layout.html" %}
 {% block title %}계정과 자격증명{% endblock %}
 {% block content %}
-{% if error %}<p class="danger">{{ error }}</p>{% endif %}
+{% if error %}<p class="flash bad">{{ error }}</p>{% endif %}
+{% if notice %}<p class="flash good">{{ notice }}</p>{% endif %}
 
 <h2>계정</h2>
 {% if view.accounts %}
@@ -39,6 +40,27 @@
         <input type="hidden" name="account_id" value="{{ account.account_id }}" />
         <button type="submit">사용 시작</button>
       </form>
+      {% if account.removable %}
+      <button type="button" class="opens-confirm"
+              data-opens="remove-{{ account.account_id }}">삭제…</button>
+      <dialog class="confirm" id="remove-{{ account.account_id }}">
+        <h3>계정 삭제</h3>
+        <p class="what">
+          <strong>{{ account.account_alias }}</strong> ({{ account.broker_code }}
+          / {{ account.environment }}) 을 삭제합니다.
+          이 계정을 참조하는 기록이 하나도 없어 삭제할 수 있습니다.
+          되돌릴 수 없습니다.
+        </p>
+        <form method="post" action="/accounts/delete">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
+          <input type="hidden" name="account_id" value="{{ account.account_id }}" />
+          <span class="actions">
+            <button class="stop" type="submit">삭제</button>
+            <button type="button" class="quiet" data-closes>취소</button>
+          </span>
+        </form>
+      </dialog>
+      {% endif %}
       {% endif %}
     </td>
   </tr>

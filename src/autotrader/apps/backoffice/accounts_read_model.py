@@ -19,6 +19,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from autotrader.apps.backoffice.account_removal import unreferenced_accounts
 from autotrader.apps.backoffice.provider_secrets import (
     BINANCE,
     KIS,
@@ -83,10 +84,23 @@ class AccountView:
     # somewhere says nothing about what this account trades under.
     policy_code: str | None
     policy_version: str | None
+    # Nothing anywhere points at this account. Deletion is offered only here,
+    # and the route checks again rather than trusting the page.
+    unreferenced: bool = False
 
     @property
     def bound(self) -> bool:
         return self.policy_version is not None
+
+    @property
+    def removable(self) -> bool:
+        """An account that was never used and is not permitted to trade.
+
+        Being enabled is disqualifying on its own. Whatever the tables say, an
+        account allowed to place orders is not an unused one, and deleting it
+        would be deciding that on the operator's behalf.
+        """
+        return self.unreferenced and not self.enabled
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,7 +141,11 @@ def _provider_binding_view(binding: ProviderBinding) -> ProviderBindingView:
 
 
 def _account_view(
-    account: Account, broker_code: str, binding: PolicyBinding | None
+    account: Account,
+    broker_code: str,
+    binding: PolicyBinding | None,
+    *,
+    unreferenced: bool = False,
 ) -> AccountView:
     return AccountView(
         account_id=account.id,
@@ -138,6 +156,7 @@ def _account_view(
         secret_reference=account.secret_reference,
         policy_code=None if binding is None else binding.policy_code,
         policy_version=None if binding is None else binding.version,
+        unreferenced=unreferenced,
     )
 
 
@@ -166,12 +185,18 @@ class AccountsReadModel:
                 )
             ).all()
             bindings = AccountPolicyBindings(session)
+            clean = await unreferenced_accounts(
+                session, tuple(account.id for account, _ in rows)
+            )
             # Built inside the session: these instances are expired once it
             # closes, and a detached one raises on attribute access.
             return tuple(
                 [
                     _account_view(
-                        account, code, await bindings.active_binding(account.id)
+                        account,
+                        code,
+                        await bindings.active_binding(account.id),
+                        unreferenced=account.id in clean,
                     )
                     for account, code in rows
                 ]

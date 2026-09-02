@@ -40,6 +40,10 @@ from autotrader.apps.backoffice.account_commands import (
 from autotrader.apps.backoffice.account_commands import (
     enable_approval_for as account_enable_approval_for,
 )
+from autotrader.apps.backoffice.account_removal import (
+    AccountRemovalRefusedError,
+    delete_unused_account,
+)
 from autotrader.apps.backoffice.accounts_read_model import AccountsReadModel
 from autotrader.apps.backoffice.auth import (
     SESSION_COOKIE,
@@ -318,6 +322,42 @@ def create_app(
             templates,
             secret_store,
             registered=entry.logical_name,
+        )
+
+    async def delete_account(
+        request: Request,
+        session: Annotated[Session, Depends(require_session)],
+        csrf_token: str = Form(...),
+        account_id: str = Form(...),
+    ) -> Response:
+        """Remove an account nothing has ever referred to.
+
+        No second password. That gate is on the steps that let something
+        trade, and this is the opposite: the account is already disabled, has
+        never held an order, and after this it cannot do anything at all.
+
+        The check runs here as well as on the screen. The page decides whether
+        to offer the button; this decides whether the row goes, and it reads
+        the tables rather than the form.
+        """
+        require_csrf(session, csrf_token)
+        async with sessions() as store:
+            try:
+                alias = await delete_unused_account(
+                    store, account_id=_uuid(account_id, "unknown account")
+                )
+            except AccountRemovalRefusedError as error:
+                await store.rollback()
+                return await _render_accounts(
+                    request, session, templates, account_reader, error=str(error)
+                )
+            await store.commit()
+        return await _render_accounts(
+            request,
+            session,
+            templates,
+            account_reader,
+            notice=f"{alias} 계정을 삭제했습니다.",
         )
 
     async def approve_secret(
@@ -1164,6 +1204,12 @@ def create_app(
         response_class=HTMLResponse,
     )
     app.add_api_route(
+        "/accounts/delete",
+        delete_account,
+        methods=["POST"],
+        response_class=HTMLResponse,
+    )
+    app.add_api_route(
         "/secrets/register",
         register_secret,
         methods=["POST"],
@@ -1233,6 +1279,7 @@ async def _render_accounts(
     reader: AccountsReadModel | None,
     *,
     error: str | None = None,
+    notice: str | None = None,
     enable: EnableFacts | None = None,
     provider: ProviderBindingFacts | None = None,
     approval_id: str | None = None,
@@ -1247,6 +1294,7 @@ async def _render_accounts(
         name="accounts.html",
         context={
             "session": session,
+            "notice": notice,
             "view": await reader.load(),
             "error": error,
             "enable": enable,
