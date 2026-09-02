@@ -1,0 +1,246 @@
+# 섀도 실행 적합성 감사 — v6.0 전략 대비
+
+- **일자**: 2026-09-02
+- **대상**: `docs/strategy/David_Trullas_Vila_전략분석_자동매매용_v6.0_화면역공학통합판.md`
+- **계정**: `lmhml0237` / BINANCE USD-M / LIVE / 3배 / 섀도(주문 포트 없음)
+- **근거**: 프로덕션 결정 17건, 집계 체결 109만 건, 테이프 1,065분
+
+감사 원칙은 문서 5행의 지배 원칙을 따른다 — **확정 규칙과 추정 규칙을 절대 섞지 않는다.** 아래 항목은 전부 프로덕션 데이터 또는 동일 입력 재현으로 확인한 것이며, 추측은 추측이라고 표시했다.
+
+---
+
+## 요약
+
+| # | 발견 | 심각도 | 상태 |
+|---|---|---|---|
+| F1 | 모든 평가가 영구적으로 BUY — 문서가 금지한 `permanent_long_only` | **치명** | 미해결 |
+| F2 | 마크된 존이 구조적으로 획득 불가 → 모든 결정 영구 REJECT | **치명** | 미해결 |
+| F3 | F2의 분기를 가르는 `at_observed_all_time_high`에 생산자 없음 | 높음 | 미해결 |
+| F4 | 소진(Agotamiento) 부재는 F2의 결과 — 독립 결함 아님 | 정보 | F2에 종속 |
+| F5 | 라이브 리스크 비율이 문서 수치를 67~100% 초과 | 높음 | 미해결 |
+| F6 | `exit_before_blocking_big_trade` 미구현 | 중간 | 미해결 |
+| F7 | 경제 캘린더에 생산자 없었음 → 뉴스 필터·월요일 감점 동시 사망 | 치명 | **이번 세션 해결** |
+
+**17건의 결정이 전부 REJECT이고, 그 원인은 시장이 아니라 F1·F2다.**
+
+---
+
+## F1 — 모든 평가가 영구적으로 BUY
+
+### 근거
+
+프로덕션 결정 17건의 `side` 분포:
+
+```
+17  BUY
+ 0  SELL
+```
+
+`src/autotrader/apps/trader/risk_context.py:49`
+
+```python
+def __init__(self, *, budget, policy, side: Side = Side.BUY) -> None:
+```
+
+`run_shadow.py`가 `BinanceRiskContexts(budget=..., policy=...)`로 생성하며 `side`를 넘기지 않는다. 기본값이 그대로 굳는다.
+
+### 왜 문제인가
+
+문서 §21 `prohibited` 목록(약 1030행)에 **`permanent_long_only`**가 명시되어 있다. 현재 구현은 그 금지 항목 자체다.
+
+이것은 "숏 기회를 놓친다"보다 나쁘다. 하락 구조에서 나타나는 **약세 다이버전스와 고점 소진이 평가조차 되지 않는다.** 엔진은 매 패스 "롱이 성립하는가"만 묻고, 답이 아니오면 `DIRECTION_EVIDENCE_MISSING`(17건 중 11건)과 `REGULAR_DIVERGENCE_ABSENT`(11건)를 기록한다. 그 11건 중 숏이 성립하는 봉이 몇 개였는지는 **기록에 존재하지 않는다.** 평가하지 않았기 때문이다.
+
+`Side.SELL` 경로는 코드에 존재한다 — `risk_context.py:79`가 숏의 구조적 기준선을 계산하고, `exhaustion.py`가 `bearish` 시퀀스를 만들며, `risk/v6.py`가 `INVALID_SHORT_STRUCTURAL_REFERENCE`를 검사한다. **연결만 한쪽이 비어 있다.**
+
+### 유의
+
+Binance USD-M 무기한 선물은 공매도가 가능하다. 현물 베뉴의 제약(`SPOT_VENUE_CANNOT_SHORT`)은 이 시장에 적용되지 않는다. 즉 이 제약은 베뉴가 아니라 배선에서 온다.
+
+---
+
+## F2 — 마크된 존이 구조적으로 획득 불가
+
+### 근거
+
+`src/autotrader/strategies/david_v6/zones.py:100`
+
+```python
+required_dates = 3 if config.at_observed_all_time_high else 10
+...
+if len(ordered_dates) < required_dates or min(observations) == max(observations):
+    return ZoneFacts(..., zones=())
+```
+
+프로덕션 봉 창은 Binance 클라인 상한 1,500개다. 5분봉 1,499개는:
+
+```
+2026-08-27 20:05  →  2026-09-02 00:55
+= 5일 4시간 50분  =  날짜 7개
+```
+
+**7 < 10.** 존은 항상 빈 튜플이다.
+
+동일 봉으로 플래그만 바꿔 재현:
+
+```
+at_observed_all_time_high=False : 0 zones
+at_observed_all_time_high=True  : 14 zones
+    76368.00-76561.60  touches=3
+    76989.90-77182.50  touches=39
+    77187.30-77381.20  touches=72
+```
+
+### 왜 치명인가
+
+`engine.py:156`
+
+```python
+final_grade = SetupGrade.REJECT if canonical_blockers else grade
+```
+
+**블로커가 하나라도 있으면 REJECT다.** 존이 비면 `NO_MARKED_ZONE`이 17/17로 붙고, 따라서 이 시스템은 **거래 가능한 결정을 낼 수 없다.** 섀도 2회 → 페이퍼 2회 → 라이브(§11.7/§11.8) 승격 경로 전체가 여기서 막힌다.
+
+### 플래그를 켜서 해결하면 안 되는 이유
+
+`at_observed_all_time_high=True`로 두면 존 14개가 즉시 생긴다. 그러나 BTC는 현재 관측 사상 최고가 구간에 있지 않다. 플래그를 켜는 것은 **증거를 만들기 위해 시장 상태를 허위 기술하는 것**이며, 문서 5행의 지배 원칙에 정면으로 반한다.
+
+### 추가 의심 (추정, 검증 필요)
+
+문서 835행에서 원저자는 이렇게 말한다 — 5분 차트에서 한 달 전까지 거슬러 가는 것은 터무니없다는 취지. 이는 존이 **5분봉이 아니라 상위 시간대의 과거 고점·저점·종가·시가**에서 온다는 뜻으로 읽힌다. 그렇다면 "5분봉 10일치"라는 요구 자체가 원문의 오독일 수 있다. **이 판단은 검증되지 않았으며, 코드를 바꾸기 전에 원문 재확인이 필요하다.**
+
+---
+
+## F3 — `at_observed_all_time_high`에 생산자가 없다
+
+`assembly.py:151`
+
+```python
+at_observed_all_time_high: bool = False
+```
+
+기본값이며, 섀도 경로(`shadow_source.py`)가 `AssemblyInputs`를 만들 때 이 필드를 설정하지 않는다. **가격이 관측 사상 최고가 구간에 있는지 측정하는 코드가 시스템 어디에도 없다.**
+
+F7(캘린더)과 정확히 같은 형태의 결함이다 — 필드는 존재하고, 소비되고, 결과를 바꾸지만, 아무도 채우지 않는다. 그리고 `--check`의 `UNSOURCED_INPUTS` 목록에도 없어서 기동 점검은 깨끗하다고 보고한다.
+
+F2와 결합하면: **아무도 측정하지 않는 불리언 하나가 존 10일 요구와 3일 요구를 가른다.**
+
+---
+
+## F4 — 소진 부재는 F2의 결과다
+
+`EXHAUSTION_ABSENT`가 17/17로 나타나지만 독립 결함이 아니다.
+
+`exhaustion.py`
+
+```python
+if len(history) < 2 or not _inside_zone(history[-1].price, zones):
+    return None
+
+def _inside_zone(price, facts) -> bool:
+    return any(zone.lower_boundary <= price <= zone.upper_boundary
+               for zone in facts.zones)
+```
+
+`facts.zones == ()`이면 `any(())`는 False다. 따라서 소진 시퀀스는 항상 None이다.
+
+**영구 블로커 셋 중 둘이 하나의 뿌리에서 나온다:**
+
+```
+봉 창 5.2일 < 요구 10일
+  └→ zones = ()
+       ├→ NO_MARKED_ZONE            (17/17)
+       └→ _inside_zone 항상 False
+            └→ EXHAUSTION_ABSENT    (17/17)
+                 └→ engine.py:156 → REJECT
+```
+
+F2를 고치면 둘 다 사라진다. 소진 로직 자체를 건드릴 이유는 현재 없다.
+
+---
+
+## F5 — 라이브 리스크 비율이 문서 수치를 초과
+
+바인딩된 정책(`01a05ab8-2f14-710b-9856-aac7bf0cbd86`) 대 문서 §21 약 995행:
+
+| 항목 | 문서 | 라이브 | 차이 |
+|---|---|---|---|
+| `per_trade` / `normal_risk_fraction` | 0.0015 | **0.0025** | +67% |
+| `a_grade_max` / `a_risk_fraction` | 0.0025 | **0.0050** | +100% |
+| `daily_stop` | 0.0075 | 0.0075 | 일치 |
+| `weekly_stop` | 0.0200 | 0.0200 | 일치 |
+| `consecutive_loss_halt` | 2 | 2 | 일치 |
+
+### 공정한 단서
+
+문서의 해당 블록은 스스로 이렇게 표기한다:
+
+```yaml
+risk:
+  source_status: IMPLEMENTATION_SAFETY_CANDIDATE_NOT_DAVID
+```
+
+즉 이 수치들은 **원저자의 것이 아니다.** 따라서 이것은 원저자 방법 위반이 아니라 **명시된 유일한 수치와의 불일치**다. 그럼에도 기록하는 이유는, 현재 시스템에 다른 근거가 없고 라이브 계정에서 건당 위험이 명시치의 1.67배로 잡히기 때문이다.
+
+### 현재 완화되어 있음
+
+`risk/v6.py:384`의 `_allowed()`가 `RESEARCH_SCORE_AUTHORITY == SCORE_ONLY`인 동안 상향 비율을 normal로 눌러둔다. 따라서 A등급의 0.0050은 실효적으로 0.0025다. **normal 자체의 0.0025는 눌리지 않는다.**
+
+---
+
+## F6 — `exit_before_blocking_big_trade` 미구현
+
+문서 §21 약 987행:
+
+```yaml
+exit_before_blocking_big_trade: true
+```
+
+전체 소스에서 이 규칙에 해당하는 구현이 검색되지 않는다. `BLOCKING_BIG_TRADE_AHEAD`는 **진입 차단**으로만 존재하며(17건 중 16건에서 발동), **보유 포지션의 청산 트리거**로는 어디에서도 소비되지 않는다.
+
+섀도는 포지션을 열지 않으므로 지금은 무해하다. 페이퍼 승격 시점에는 실재하는 공백이 된다 — 진입은 막으면서 이미 들고 있는 포지션은 같은 신호 앞에서 그대로 둔다.
+
+---
+
+## F7 — 경제 캘린더에 생산자가 없었음 (이번 세션 해결)
+
+`inputs.events`가 항상 None이었다. 결과:
+
+- `CALENDAR_UNAVAILABLE`이 매 패스 블로커 → `engine.py:156`에 의해 **모든 결정이 영구 REJECT**
+- §8 뉴스 필터(2·3성 차단, 10분/120분/세션 전체)가 **한 번도 실행되지 않음**
+- 부수 효과로 §7.2 **월요일 감점도 함께 사망** — `_monday_penalty`는 캘린더가 AVAILABLE이 아니면 0을 반환한다
+
+ForexFactory 주간 피드로 생산자를 붙였고, 프로덕션에서 이벤트 61건 / `state: AVAILABLE` 확인. 결정 기록에서 `CALENDAR_UNAVAILABLE`이 8건에서 멈췄다(그 이후 결정에는 없음).
+
+기록해두는 이유: **F3이 정확히 같은 형태이며, 같은 방식으로 발견되지 않고 있었다.**
+
+---
+
+## 확인되어 정상인 항목
+
+감사 중 문서와 일치함을 확인한 것들:
+
+- `hard_upper_bound: 8` → `SESSION_TRADE_UPPER_BOUND = 8`
+- `daily_stop` / `weekly_stop` / `consecutive_loss_halt` → 일치
+- `forbid_risking_banked_profit` → `risk_base = min(session_start_equity, current_equity)`로 구현
+- §7.2 월요일 감점 → `engine.py:137`에서 `score_adjustment=-_monday_penalty(facts)`로 적용 (F7 해결 후 실제 동작)
+- §8 뉴스 지속시간 규칙 → `calendar.py`의 10분 / 120분 / NFP 세션 전체
+- `block_stars: [2, 3]` → `impact_stars < 2` 는 건너뜀
+- V1/C/X1 가설 지표에 주문 권한 없음 → `HYPOTHESIS_CODES`가 `mandatory_indicator_codes`에서 거부됨
+
+---
+
+## 권고 순서
+
+1. **F2 먼저.** 이것을 고치기 전에는 다른 어떤 수정도 결과를 바꾸지 못한다 — 모든 결정이 REJECT로 고정되어 있어 F1을 고쳐도 관측 가능한 변화가 없다. 다만 **원문 재확인이 선행되어야 한다**(F2의 "추가 의심" 항목).
+2. **F3을 F2와 함께.** 같은 코드 경로이고, 생산자 없는 불리언을 남겨두면 고친 뒤에도 분기가 우연에 맡겨진다.
+3. **F1.** 배선 한 줄이지만 결정의 절반을 되살린다. F2 이후에 해야 효과를 관측할 수 있다.
+4. **F5.** 코드가 아니라 정책 데이터 문제다. 문서 수치로 내릴지, 현재 수치를 문서에 근거와 함께 반영할지는 운영자의 결정이다.
+5. **F6.** 페이퍼 승격 전까지.
+
+---
+
+## 방법론 메모
+
+F7과 F3은 **런타임 증거로만** 발견됐다 — 코드를 읽어서는 "필드에 기본값이 있다"까지만 보이고, 그 기본값이 매 패스 결과를 뒤집는다는 사실은 프로덕션 결정의 블로커 분포를 세어야 드러난다.
+
+권장 상시 점검: **17건 중 17건에서 나타나는 블로커, 그리고 한 번도 나타나지 않는 증거 키.** 둘 다 "한쪽만 연결된" 결함의 지문이다.
