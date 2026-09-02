@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from autotrader.apps.backoffice.secrets import (
     ACCOUNT_IDENTIFIER,
+    OAUTH,
     PROVIDER_CREDENTIAL,
     MySqlSecretStore,
     SecretNotFoundError,
@@ -105,6 +106,94 @@ def fields_for(provider: str, environment: str) -> tuple[ProviderField, ...]:
     )
 
 
+# Every provider value that can be registered, and the one Google secret that
+# is not a provider value. Ordered as the screen shows them.
+REGISTERABLE_SCOPES = (
+    (KIS, LIVE),
+    (KIS, PAPER),
+    (TOSS, LIVE),
+    (BINANCE, LIVE),
+    (BINANCE, PAPER),
+)
+
+# What each field is, in the operator's terms. A screen that offers
+# `binance-live-secret-key` and nothing else makes the operator translate.
+FIELD_LABELS = {
+    "app-key": "앱 키",
+    "app-secret": "앱 시크릿",
+    "account-number": "계좌번호",
+    "product-code": "상품코드",
+    "client-id": "클라이언트 ID",
+    "client-secret": "클라이언트 시크릿",
+    "api-key": "API 키",
+    "secret-key": "시크릿 키",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class RegisterableSecret:
+    """One thing the register form can offer.
+
+    The slot carries the scope, so the form posts a choice rather than a name
+    and a provider and an environment that could disagree with each other.
+    """
+
+    slot: str
+    group: str
+    label: str
+    logical_name: str
+    category: str
+    provider_code: str
+    environment: str | None
+
+
+def registerable_secrets() -> tuple[RegisterableSecret, ...]:
+    """What can be registered, derived rather than listed.
+
+    `ProviderField` already builds the logical name from the scope so it
+    cannot be typed differently twice. Reading the catalogue off it means the
+    form and the resolver can never drift: a field added to `KIS_FIELDS`
+    appears here without anyone remembering to add it.
+    """
+    entries: list[RegisterableSecret] = [
+        RegisterableSecret(
+            slot="GOOGLE::oauth-client-secret",
+            group="GOOGLE",
+            label="OAuth 클라이언트 시크릿",
+            logical_name="google-oauth-client-secret",
+            category=OAUTH,
+            provider_code="GOOGLE",
+            environment=None,
+        )
+    ]
+    for provider_code, environment in REGISTERABLE_SCOPES:
+        for item in fields_for(provider_code, environment):
+            entries.append(
+                RegisterableSecret(
+                    slot=f"{provider_code}:{environment}:{item.field}",
+                    group=f"{provider_code} {environment}",
+                    label=FIELD_LABELS.get(item.field, item.field),
+                    logical_name=item.logical_name,
+                    category=item.scope.category,
+                    provider_code=provider_code,
+                    environment=environment,
+                )
+            )
+    return tuple(entries)
+
+
+def registerable_for(slot: str) -> RegisterableSecret:
+    """The chosen entry, or a refusal.
+
+    Matched against the catalogue rather than parsed, so a slot invented by
+    hand cannot register a secret under a name no adapter looks for.
+    """
+    for entry in registerable_secrets():
+        if entry.slot == slot:
+            return entry
+    raise ValueError("등록할 수 있는 항목이 아닙니다")
+
+
 class MySqlAccountSecretResolver:
     """The database counterpart of DotenvAccountSecretResolver."""
 
@@ -181,16 +270,21 @@ __all__ = (
     "BINANCE",
     "BINANCE_FIELDS",
     "BINANCE_LIVE_REFERENCE",
+    "FIELD_LABELS",
     "KIS",
     "KIS_FIELDS",
     "KIS_LIVE_REFERENCE",
     "KIS_PAPER_REFERENCE",
     "LIVE",
     "PAPER",
+    "REGISTERABLE_SCOPES",
     "TOSS",
     "TOSS_FIELDS",
     "TOSS_LIVE_REFERENCE",
     "MySqlAccountSecretResolver",
     "ProviderField",
+    "RegisterableSecret",
     "fields_for",
+    "registerable_for",
+    "registerable_secrets",
 )

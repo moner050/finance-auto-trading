@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Annotated, cast
 from uuid import UUID
 
@@ -85,6 +86,10 @@ from autotrader.apps.backoffice.policy_commands import (
     approval_for as policy_approval_for,
 )
 from autotrader.apps.backoffice.promotion_read_model import PromotionReadModel
+from autotrader.apps.backoffice.provider_secrets import (
+    registerable_for,
+    registerable_secrets,
+)
 from autotrader.apps.backoffice.read_model import OperationsReadModel, OperationsView
 from autotrader.apps.backoffice.second_password import (
     ApprovalStore,
@@ -101,11 +106,10 @@ from autotrader.apps.backoffice.secret_commands import (
     approval_for as secret_approval_for,
 )
 from autotrader.apps.backoffice.secrets import (
-    OAUTH,
-    PROVIDER_CREDENTIAL,
     MySqlSecretStore,
     SecretReferenceError,
     SecretScope,
+    SecretVersionView,
 )
 from autotrader.apps.backoffice.universe_commands import (
     ActivationFacts,
@@ -276,21 +280,23 @@ def create_app(
         request: Request,
         session: Annotated[Session, Depends(require_session)],
         csrf_token: str = Form(...),
-        logical_name: str = Form(...),
-        provider: str = Form(...),
-        environment: str = Form(""),
+        slot: str = Form(...),
         plaintext: str = Form(...),
     ) -> Response:
         require_csrf(session, csrf_token)
         if secret_store is None:
             raise HTTPException(status_code=503, detail="secrets are unavailable")
         try:
+            # The name and the category come from the chosen slot. They used
+            # to be typed, and a name the adapters do not look for stores
+            # perfectly well and is never read.
+            entry = registerable_for(slot)
             await secret_store.store(
-                logical_name=logical_name.strip(),
+                logical_name=entry.logical_name,
                 scope=SecretScope(
-                    category=OAUTH if provider == "GOOGLE" else PROVIDER_CREDENTIAL,
-                    provider_code=provider,
-                    environment=environment or None,
+                    category=entry.category,
+                    provider_code=entry.provider_code,
+                    environment=entry.environment,
                 ),
                 plaintext=plaintext,
                 now=datetime.now(UTC),
@@ -311,7 +317,7 @@ def create_app(
             session,
             templates,
             secret_store,
-            registered=logical_name.strip(),
+            registered=entry.logical_name,
         )
 
     async def approve_secret(
@@ -1334,6 +1340,32 @@ def _require_policy_commands(
     return commands
 
 
+def _registerable_groups(
+    versions: tuple[SecretVersionView, ...],
+) -> tuple[tuple[str, tuple[object, ...]], ...]:
+    """The catalogue, grouped for the form, with what is already stored.
+
+    Marking the stored ones is the difference between a list of everything
+    and a list an operator can act on: registering a second version of a
+    secret is normal, and doing it by accident because the screen looked
+    empty is not.
+    """
+    highest: dict[str, int] = {}
+    for version in versions:
+        current = highest.get(version.logical_name, 0)
+        highest[version.logical_name] = max(current, version.version)
+    grouped: dict[str, list[object]] = {}
+    for entry in registerable_secrets():
+        grouped.setdefault(entry.group, []).append(
+            SimpleNamespace(
+                slot=entry.slot,
+                label=entry.label,
+                stored=highest.get(entry.logical_name),
+            )
+        )
+    return tuple((group, tuple(items)) for group, items in grouped.items())
+
+
 async def _render_secrets(
     request: Request,
     session: Session,
@@ -1347,12 +1379,14 @@ async def _render_secrets(
 ) -> Response:
     if store is None:
         raise HTTPException(status_code=503, detail="secrets are unavailable")
+    versions = await store.versions()
     return templates.TemplateResponse(
         request=request,
         name="secrets.html",
         context={
             "session": session,
-            "versions": await store.versions(),
+            "versions": versions,
+            "registerable": _registerable_groups(versions),
             "registered": registered,
             "error": error,
             "facts": facts,
