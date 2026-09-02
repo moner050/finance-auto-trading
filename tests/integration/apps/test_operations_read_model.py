@@ -27,6 +27,7 @@ from autotrader.apps.backoffice.read_model import (
     OperationsReadModel,
     PositionView,
 )
+from autotrader.apps.trader.run_shadow import LEASE_LOST, MySqlLeaseJournal
 from autotrader.config.settings import Settings
 from autotrader.persistence.mysql.engine import create_engine
 from autotrader.persistence.mysql.models.operations import (
@@ -259,5 +260,51 @@ def test_the_window_is_refused_rather_than_silently_clamped() -> None:
             for hours in (0, -1, 169):
                 with pytest.raises(ValueError):
                     await model.activity(hours=hours, now=NOW)
+
+    _drive(scenario)
+
+
+@pytest.mark.integration
+def test_a_lost_lease_reaches_the_screen_and_clears_when_it_returns() -> None:
+    """F13: the count existed and the record did not.
+
+    The assertion is on `open_incidents` rather than on the row, because the
+    projection is what the operations screen reads and the defect was that
+    nothing an operator looks at ever learned about it.
+    """
+
+    async def scenario(sessions: async_sessionmaker[AsyncSession]) -> None:
+        journal = MySqlLeaseJournal(sessions, lease_name="test-lease")
+
+        await journal.lost(NOW)
+        async with sessions() as session:
+            opened = await OperationsReadModel(session).open_incidents(limit=20)
+        assert [row.reason_code for row in opened] == [LEASE_LOST]
+        assert opened[0].scope_key == "test-lease"
+        assert opened[0].severity == "WARNING"
+
+        # A three-hour contention is one episode, not one row every forty
+        # seconds. The heartbeat only reports transitions; this makes the
+        # journal safe even if something else ever calls it.
+        await journal.lost(NOW + timedelta(seconds=40))
+        async with sessions() as session:
+            still = await OperationsReadModel(session).open_incidents(limit=20)
+        assert len(still) == 1
+
+        await journal.regained(NOW + timedelta(minutes=5))
+        async with sessions() as session:
+            cleared = await OperationsReadModel(session).open_incidents(limit=20)
+        assert cleared == ()
+
+    _drive(scenario)
+
+
+@pytest.mark.integration
+def test_regaining_a_lease_nobody_lost_writes_nothing() -> None:
+    async def scenario(sessions: async_sessionmaker[AsyncSession]) -> None:
+        await MySqlLeaseJournal(sessions, lease_name="test-lease").regained(NOW)
+
+        async with sessions() as session:
+            assert await OperationsReadModel(session).open_incidents(limit=20) == ()
 
     _drive(scenario)

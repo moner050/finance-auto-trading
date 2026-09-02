@@ -97,7 +97,9 @@ async def _run_shadow(alias: str, leverage: int, run_for: timedelta | None) -> i
     from autotrader.apps.trader.composition import bound_policy
     from autotrader.apps.trader.loop import SystemClock, run_forever
     from autotrader.apps.trader.run_shadow import (
+        LEASE_NAME,
         LeaseHeartbeat,
+        MySqlLeaseJournal,
         ShadowStartupError,
         build_shadow_loop,
         run_together,
@@ -150,7 +152,14 @@ async def _run_shadow(alias: str, leverage: int, run_for: timedelta | None) -> i
             lease=loop.lease,
             clock=SystemClock(),
         )
-        heartbeat = LeaseHeartbeat(lease=loop.lease, clock=SystemClock())
+        heartbeat = LeaseHeartbeat(
+            lease=loop.lease,
+            clock=SystemClock(),
+            # Losing the account to another instance used to be an in-memory
+            # count printed at exit, which a killed process took with it and
+            # the operations screen never saw.
+            journal=MySqlLeaseJournal(sessions, lease_name=LEASE_NAME),
+        )
         print(f"mode          {SHADOW}")
         print(f"account       {alias} ({resolved.account.environment})")
         print(f"equity        {loop.equity} USDT")

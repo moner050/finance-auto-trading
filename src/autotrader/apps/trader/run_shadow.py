@@ -24,8 +24,9 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import cast
+from typing import Protocol, cast
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from autotrader.apps.backoffice.bootstrap import master_key_ring
@@ -58,6 +59,7 @@ from autotrader.integrations.market_data.economic_calendar import (
     ForexFactoryCalendars,
 )
 from autotrader.persistence.mysql.models.david_v6 import DavidV6ManifestRow
+from autotrader.persistence.mysql.models.operations import OpsIncident
 from autotrader.persistence.mysql.repositories.market_tape import MySqlMarketTape
 from autotrader.persistence.mysql.repositories.pessimism import MarketPessimism
 from autotrader.shared.ids import new_uuid7
@@ -148,6 +150,32 @@ async def run_together(
 LEASE_RENEWAL_FRACTION = 3
 
 
+# What a lost lease is called where an operator will look for it. The scope is
+# the lease rather than the account: one lease governs the loop, and naming the
+# account would suggest the account is at fault when another process holds it.
+LEASE_LOST = "LEASE_LOST"
+LEASE_SCOPE = "LEASE"
+
+
+class LeaseJournal(Protocol):
+    """Where a change of leadership is written down.
+
+    Counting losses in memory and printing them at exit was the whole of the
+    record, so a killed process took the count with it and the operations
+    screen never learned that another instance had taken the account. The
+    lease is the one thing stopping two loops from trading one account; it
+    cannot lose that fight quietly.
+    """
+
+    async def lost(self, now: datetime) -> None:
+        """Leadership was held and is not any more."""
+        ...
+
+    async def regained(self, now: datetime) -> None:
+        """Leadership came back."""
+        ...
+
+
 class LeaseHeartbeat:
     """Keep the lease alive between passes.
 
@@ -170,6 +198,7 @@ class LeaseHeartbeat:
         clock: Clock,
         ttl: timedelta = LEASE_TTL,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        journal: LeaseJournal | None = None,
     ) -> None:
         if ttl <= timedelta(0):
             raise ValueError("the lease term must be positive")
@@ -177,6 +206,11 @@ class LeaseHeartbeat:
         self._clock = clock
         self._interval = ttl.total_seconds() / LEASE_RENEWAL_FRACTION
         self._sleep = sleep
+        self._journal = journal
+        # None until the first answer. A process that starts already holding
+        # the lease has nothing to report; one that starts without it does,
+        # and those are the two cases the first observation has to tell apart.
+        self._held: bool | None = None
         self.renewals = 0
         self.losses = 0
 
@@ -189,10 +223,97 @@ class LeaseHeartbeat:
             # owns the account, `run_pass` will report NOT_LEADER and place
             # nothing, and the poller will store nothing - and leadership can
             # come back, which it cannot if this gave up asking.
-            if await self._lease.acquire(self._clock.now()):
+            moment = self._clock.now()
+            held = await self._lease.acquire(moment)
+            if held:
                 self.renewals += 1
             else:
                 self.losses += 1
+            await self._record(held=held, now=moment)
+
+    async def _record(self, *, held: bool, now: datetime) -> None:
+        """Write down a change of leadership, and only a change.
+
+        Renewing every forty seconds for six hours is not news; losing the
+        account to another process is. Reporting the transition rather than
+        the state keeps a three-hour contention to the handful of rows that
+        say when it started and when it ended.
+        """
+        was = self._held
+        self._held = held
+        if self._journal is None or was == held:
+            return
+        if not held:
+            await self._journal.lost(now)
+        elif was is not None:
+            await self._journal.regained(now)
+
+
+class MySqlLeaseJournal:
+    """A lost lease as an open incident, resolved when it comes back.
+
+    Open while leadership is elsewhere and resolved when it returns, so the
+    operations screen answers "is another process holding my account right
+    now" by showing the row or not showing it. That is the same shape the
+    protection guard already uses for a position with no stop behind it.
+
+    One row per episode, not one per attempt: `LeaseHeartbeat` only calls
+    this on a transition, and opening is skipped when an episode is already
+    open in case anything else ever calls it.
+    """
+
+    def __init__(
+        self, sessions: async_sessionmaker[AsyncSession], *, lease_name: str
+    ) -> None:
+        if not lease_name or lease_name != lease_name.strip():
+            raise ValueError("lease name is required")
+        self._sessions = sessions
+        self._lease_name = lease_name
+
+    async def lost(self, now: datetime) -> None:
+        moment = require_utc(now)
+        async with self._sessions() as session:
+            if await self._open_episode(session) is not None:
+                return
+            session.add(
+                OpsIncident(
+                    severity="WARNING",
+                    status="OPEN",
+                    reason_code=LEASE_LOST,
+                    scope_type=LEASE_SCOPE,
+                    scope_key=self._lease_name,
+                    created_at=moment,
+                )
+            )
+            await session.commit()
+
+    async def regained(self, now: datetime) -> None:
+        require_utc(now)
+        async with self._sessions() as session:
+            rows = (
+                await session.scalars(
+                    select(OpsIncident).where(
+                        OpsIncident.reason_code == LEASE_LOST,
+                        OpsIncident.scope_type == LEASE_SCOPE,
+                        OpsIncident.scope_key == self._lease_name,
+                        OpsIncident.status == "OPEN",
+                    )
+                )
+            ).all()
+            for row in rows:
+                row.status = "RESOLVED"
+            if rows:
+                await session.commit()
+
+    async def _open_episode(self, session: AsyncSession) -> OpsIncident | None:
+        return await session.scalar(
+            select(OpsIncident).where(
+                OpsIncident.reason_code == LEASE_LOST,
+                OpsIncident.scope_type == LEASE_SCOPE,
+                OpsIncident.scope_key == self._lease_name,
+                OpsIncident.status == "OPEN",
+            )
+        )
 
 
 # Every way this program is asked to stop. A supervisor sends the first; an
@@ -510,10 +631,14 @@ async def build_shadow_loop(
 
 
 __all__ = (
+    "LEASE_LOST",
     "LEASE_NAME",
+    "LEASE_SCOPE",
     "LEASE_TTL",
     "SHUTDOWN_SIGNALS",
     "SYMBOL",
+    "LeaseJournal",
+    "MySqlLeaseJournal",
     "RestSpreads",
     "ShadowLoop",
     "ShadowStartupError",
