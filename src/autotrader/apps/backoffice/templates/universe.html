@@ -154,14 +154,19 @@
     <span class="note">승인은 60초 후 만료되며 한 번만 사용됩니다.</span>
   </form>
   {% else %}
-  <form method="post" action="/universe/approve">
+  <button type="button" class="opens-confirm" data-opens="confirm-7">승인…</button>
+  <dialog class="confirm" id="confirm-7">
+    <h3>유니버스 권위 승인</h3>
+    <p class="what">전략이 어떤 종목을 볼 수 있는지가 바뀝니다.</p>
+    <form method="post" action="/universe/approve">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
     <input type="hidden" name="snapshot_id" value="{{ facts.snapshot_id }}" />
-    <p><label>2차 비밀번호
-      <input type="password" name="second_password" autocomplete="off" required />
-    </label></p>
-    <button type="submit">승인</button>
+    <label class="field"><span>2차 비밀번호</span>
+      <input type="password" name="second_password" autocomplete="off"
+             required /></label>
+    <span class="actions"><button class="go" type="submit">승인</button><button type="button" class="quiet" data-closes>취소</button></span>
   </form>
+  </dialog>
   {% endif %}
 </div>
 {% endif %}

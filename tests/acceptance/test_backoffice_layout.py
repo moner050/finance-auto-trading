@@ -223,3 +223,58 @@ def test_the_safety_band_is_separate_from_the_ordinary_controls() -> None:
         assert 'value="EMERGENCY"' in page.text
         # Arming is exposure-enabling and never sits beside them as a button.
         assert 'href="/controls/arm"' in page.text
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_the_second_password_is_asked_for_in_a_dialog() -> None:
+    """Section 9 puts it on the step that makes something trade, and it used
+    to be a field at the bottom of a long screen - so reaching the one control
+    that matters meant scrolling past everything else.
+
+    The form is unchanged: same action, same CSRF, same field. Only where it
+    appears is different.
+    """
+
+    async def scenario(
+        sessions: async_sessionmaker[AsyncSession], approvals: object
+    ) -> None:
+        app, session_id = await _signed_in(sessions, approvals)
+        async with _client(app, session_id) as http:
+            for path in SCREENS:
+                page = await http.get(path)
+                assert page.status_code == 200, path
+                if 'name="second_password"' not in page.text:
+                    continue
+                # Every password field sits inside a dialog, and every dialog
+                # has something that opens it.
+                assert '<dialog class="confirm"' in page.text, path
+                assert "data-opens=" in page.text, path
+
+    _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_no_two_dialogs_on_a_screen_share_an_identifier() -> None:
+    """A dialog id is what the trigger opens. Two rows rendering the same id -
+    which is what happens the moment one of these forms is moved inside a
+    loop - would make every button open the first row's dialog, and the
+    operator would approve something other than what they clicked.
+    """
+    import re
+
+    async def scenario(
+        sessions: async_sessionmaker[AsyncSession], approvals: object
+    ) -> None:
+        app, session_id = await _signed_in(sessions, approvals)
+        async with _client(app, session_id) as http:
+            for path in SCREENS:
+                page = await http.get(path)
+                ids = re.findall(r'<dialog class="confirm" id="([^"]+)"', page.text)
+                assert len(ids) == len(set(ids)), f"{path}: duplicate dialog ids {ids}"
+                opens = set(re.findall(r'data-opens="([^"]+)"', page.text))
+                # Every trigger points at a dialog that is actually on the page.
+                assert opens <= set(ids), f"{path}: {opens - set(ids)} open nothing"
+
+    _drive(scenario)

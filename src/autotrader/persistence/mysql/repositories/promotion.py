@@ -126,61 +126,82 @@ class PromotionSessions:
     async def evidence_for(
         self, *, account_id: UUID, exchange_date: date
     ) -> SessionEvidence:
-        """What the day left behind, counted from what the loop wrote."""
+        """What the day left behind, counted from what the loop wrote.
+
+        Five counts in one statement rather than five statements. They are
+        independent and each was costing a round trip, which on a database
+        that answers `SELECT 1` in thirty milliseconds is a hundred and fifty
+        milliseconds of waiting per session - and the promotion screen asks
+        for this once per session per binding.
+
+        Scalar subqueries rather than concurrency: the counts share a session,
+        and an AsyncSession is not safe to use from two tasks at once.
+        """
         start = datetime.combine(exchange_date, time.min, tzinfo=UTC)
         end = start + _DAY
-        decisions = await self._count(
-            # By when the decision was generated, which is when the
-            # strategy actually evaluated, not when the evidence behind it was
-            # completed.
-            select(func.count(DavidV6DecisionRow.id)).where(
-                DavidV6DecisionRow.generated_at >= start,
-                DavidV6DecisionRow.generated_at < end,
+        counts = (
+            await self._session.execute(
+                select(
+                    # By when the decision was generated, which is when the
+                    # strategy actually evaluated, not when the evidence
+                    # behind it was completed.
+                    select(func.count(DavidV6DecisionRow.id))
+                    .where(
+                        DavidV6DecisionRow.generated_at >= start,
+                        DavidV6DecisionRow.generated_at < end,
+                    )
+                    .scalar_subquery()
+                    .label("decisions"),
+                    select(func.count(PersistedOrder.id))
+                    .where(
+                        PersistedOrder.account_id == account_id,
+                        PersistedOrder.created_at >= start,
+                        PersistedOrder.created_at < end,
+                    )
+                    .scalar_subquery()
+                    .label("orders"),
+                    select(func.count(OpsIncident.id))
+                    .where(
+                        OpsIncident.severity == "BLOCKING",
+                        OpsIncident.status == "OPEN",
+                        OpsIncident.created_at >= start,
+                        OpsIncident.created_at < end,
+                    )
+                    .scalar_subquery()
+                    .label("incidents"),
+                    select(func.count(PersistedReconciliationDiff.id))
+                    .join(
+                        PersistedReconciliationRun,
+                        PersistedReconciliationRun.id
+                        == PersistedReconciliationDiff.run_id,
+                    )
+                    .where(
+                        PersistedReconciliationRun.account_id == account_id,
+                        PersistedReconciliationDiff.severity == "BLOCKING",
+                        PersistedReconciliationDiff.status == "OPEN",
+                        PersistedReconciliationDiff.created_at >= start,
+                        PersistedReconciliationDiff.created_at < end,
+                    )
+                    .scalar_subquery()
+                    .label("diffs"),
+                    select(func.count(PersistedOrder.id))
+                    .where(
+                        PersistedOrder.account_id == account_id,
+                        PersistedOrder.status == "UNKNOWN",
+                        PersistedOrder.created_at >= start,
+                        PersistedOrder.created_at < end,
+                    )
+                    .scalar_subquery()
+                    .label("unknown"),
+                )
             )
-        )
-        orders = await self._count(
-            select(func.count(PersistedOrder.id)).where(
-                PersistedOrder.account_id == account_id,
-                PersistedOrder.created_at >= start,
-                PersistedOrder.created_at < end,
-            )
-        )
-        incidents = await self._count(
-            select(func.count(OpsIncident.id)).where(
-                OpsIncident.severity == "BLOCKING",
-                OpsIncident.status == "OPEN",
-                OpsIncident.created_at >= start,
-                OpsIncident.created_at < end,
-            )
-        )
-        diffs = await self._count(
-            select(func.count(PersistedReconciliationDiff.id))
-            .join(
-                PersistedReconciliationRun,
-                PersistedReconciliationRun.id == PersistedReconciliationDiff.run_id,
-            )
-            .where(
-                PersistedReconciliationRun.account_id == account_id,
-                PersistedReconciliationDiff.severity == "BLOCKING",
-                PersistedReconciliationDiff.status == "OPEN",
-                PersistedReconciliationDiff.created_at >= start,
-                PersistedReconciliationDiff.created_at < end,
-            )
-        )
-        unknown = await self._count(
-            select(func.count(PersistedOrder.id)).where(
-                PersistedOrder.account_id == account_id,
-                PersistedOrder.status == "UNKNOWN",
-                PersistedOrder.created_at >= start,
-                PersistedOrder.created_at < end,
-            )
-        )
+        ).one()
         return SessionEvidence(
-            decision_count=decisions,
-            order_count=orders,
-            blocking_incident_count=incidents,
-            blocking_reconciliation_count=diffs,
-            unresolved_unknown_count=unknown,
+            decision_count=int(counts.decisions or 0),
+            order_count=int(counts.orders or 0),
+            blocking_incident_count=int(counts.incidents or 0),
+            blocking_reconciliation_count=int(counts.diffs or 0),
+            unresolved_unknown_count=int(counts.unknown or 0),
         )
 
     async def complete(

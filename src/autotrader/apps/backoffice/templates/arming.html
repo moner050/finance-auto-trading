@@ -26,7 +26,11 @@
     <span class="note">승인은 60초 후 만료되며 한 번만 사용됩니다.</span>
   </form>
   {% else %}
-  <form method="post" action="/controls/approve">
+  <button type="button" class="opens-confirm" data-opens="confirm-3">승인…</button>
+  <dialog class="confirm" id="confirm-3">
+    <h3>거래 무장 승인</h3>
+    <p class="what">무장된 계정은 전략이 결정하면 주문을 냅니다.</p>
+    <form method="post" action="/controls/approve">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
     <p>
       <label>2차 비밀번호
@@ -40,6 +44,7 @@
     <button type="submit" name="action" value="ARM">무장 승인</button>
     {% endif %}
   </form>
+  </dialog>
   {% endif %}
 </div>
   

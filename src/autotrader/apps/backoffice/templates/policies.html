@@ -135,16 +135,21 @@
     <span class="note">승인은 60초 후 만료되며 한 번만 사용됩니다.</span>
   </form>
   {% else %}
-  <form method="post" action="/bindings/approve">
+  <button type="button" class="opens-confirm" data-opens="confirm-4">승인…</button>
+  <dialog class="confirm" id="confirm-4">
+    <h3>정책 바인딩 승인</h3>
+    <p class="what">이 계정의 주문 크기를 정하는 리스크 정책이 바뀝니다.</p>
+    <form method="post" action="/bindings/approve">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
     <input type="hidden" name="account_id" value="{{ binding.account_id }}" />
     <input type="hidden" name="target_version_id"
            value="{{ binding.target_version_id }}" />
-    <p><label>2차 비밀번호
-      <input type="password" name="second_password" autocomplete="off" required />
-    </label></p>
-    <button type="submit">승인</button>
+    <label class="field"><span>2차 비밀번호</span>
+      <input type="password" name="second_password" autocomplete="off"
+             required /></label>
+    <span class="actions"><button class="go" type="submit">승인</button><button type="button" class="quiet" data-closes>취소</button></span>
   </form>
+  </dialog>
   {% endif %}
 </div>
 {% endif %}
@@ -215,14 +220,19 @@
     <span class="note">승인은 60초 후 만료되며 한 번만 사용됩니다.</span>
   </form>
   {% else %}
-  <form method="post" action="/policies/approve">
+  <button type="button" class="opens-confirm" data-opens="confirm-5">승인…</button>
+  <dialog class="confirm" id="confirm-5">
+    <h3>정책 버전 활성화 승인</h3>
+    <p class="what">활성화된 버전이 이후 모든 결정의 사이징 근거가 됩니다.</p>
+    <form method="post" action="/policies/approve">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
     <input type="hidden" name="target_version_id" value="{{ facts.target_version_id }}" />
-    <p><label>2차 비밀번호
-      <input type="password" name="second_password" autocomplete="off" required />
-    </label></p>
-    <button type="submit">승인</button>
+    <label class="field"><span>2차 비밀번호</span>
+      <input type="password" name="second_password" autocomplete="off"
+             required /></label>
+    <span class="actions"><button class="go" type="submit">승인</button><button type="button" class="quiet" data-closes>취소</button></span>
   </form>
+  </dialog>
   {% endif %}
 </div>
 {% endif %}

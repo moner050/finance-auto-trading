@@ -154,14 +154,19 @@
     <span class="note">승인은 60초 후 만료되며 한 번만 사용됩니다.</span>
   </form>
   {% else %}
-  <form method="post" action="/accounts/enable/approve">
+  <button type="button" class="opens-confirm" data-opens="confirm-1">승인…</button>
+  <dialog class="confirm" id="confirm-1">
+    <h3>계정 활성화</h3>
+    <p class="what">이 계정이 주문을 낼 수 있게 됩니다.</p>
+    <form method="post" action="/accounts/enable/approve">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
     <input type="hidden" name="account_id" value="{{ enable.account_id }}" />
-    <p><label>2차 비밀번호
-      <input type="password" name="second_password" autocomplete="off" required />
-    </label></p>
-    <button type="submit">승인</button>
+    <label class="field"><span>2차 비밀번호</span>
+      <input type="password" name="second_password" autocomplete="off"
+             required /></label>
+    <span class="actions"><button class="go" type="submit">승인</button><button type="button" class="quiet" data-closes>취소</button></span>
   </form>
+  </dialog>
   {% endif %}
 </div>
 {% endif %}
@@ -188,17 +193,22 @@
     <span class="note">승인은 60초 후 만료되며 한 번만 사용됩니다.</span>
   </form>
   {% else %}
-  <form method="post" action="/accounts/provider/approve">
+  <button type="button" class="opens-confirm" data-opens="confirm-2">승인…</button>
+  <dialog class="confirm" id="confirm-2">
+    <h3>Provider 바인딩 승인</h3>
+    <p class="what">이 계정이 어떤 자격증명으로 거래소에 접속할지 정합니다.</p>
+    <form method="post" action="/accounts/provider/approve">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
     <input type="hidden" name="account_id" value="{{ provider.account_id }}" />
     <input type="hidden" name="provider_code" value="{{ provider.provider_code }}" />
     <input type="hidden" name="account_seq"
            value="{{ provider.account_seq if provider.account_seq is not none else '' }}" />
-    <p><label>2차 비밀번호
-      <input type="password" name="second_password" autocomplete="off" required />
-    </label></p>
-    <button type="submit">승인</button>
+    <label class="field"><span>2차 비밀번호</span>
+      <input type="password" name="second_password" autocomplete="off"
+             required /></label>
+    <span class="actions"><button class="go" type="submit">승인</button><button type="button" class="quiet" data-closes>취소</button></span>
   </form>
+  </dialog>
   {% endif %}
 </div>
 {% endif %}

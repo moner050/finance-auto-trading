@@ -10,12 +10,18 @@
          block, so the same table looked different depending on where the
          operator had clicked. One stylesheet, defined once. */
       :root {
-        --ink: #1a1a1a;
-        --muted: #6b6b6b;
-        --line: #e0e0e0;
-        --line-strong: #c8c8c8;
+        --ink: #16181d;
+        /* Was #6b6b6b, which fails contrast at the sizes it is used at.
+           Secondary text on this screen is often the only label a number
+           has. */
+        --muted: #5a6068;
+        --line: #e4e6ea;
+        --line-strong: #c3c7ce;
         --page: #ffffff;
-        --rail: #f7f7f8;
+        --rail: #f6f7f9;
+        --raised: #fbfcfd;
+        --hover: #f2f4f7;
+        --focus: #1a4fa0;
         --danger: #b00020;
         --danger-ink: #8a0018;
         --ok: #00701a;
@@ -28,9 +34,20 @@
         margin: 0;
         color: var(--ink);
         background: var(--page);
-        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic",
+          sans-serif;
         font-size: 15px;
-        line-height: 1.55;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* Every interactive thing gets the same visible focus ring. An
+         operator driving this from the keyboard should never have to guess
+         where they are, least of all on a screen that arms trading. */
+      :where(a, button, input, select, textarea, summary):focus-visible {
+        outline: 2px solid var(--focus);
+        outline-offset: 2px;
+        border-radius: 3px;
       }
 
       .shell { display: flex; min-height: 100vh; align-items: stretch; }
@@ -83,9 +100,20 @@
         margin-bottom: 1.5rem;
         flex-wrap: wrap;
       }
-      h1 { font-size: 1.25rem; margin: 0; letter-spacing: -.01em; }
-      h2 { font-size: 1rem; margin: 2rem 0 .6rem; }
-      h3 { font-size: .92rem; margin: 1.4rem 0 .5rem; }
+      h1 { font-size: 1.3rem; margin: 0; letter-spacing: -.015em; }
+      /* A rule under each section heading, so the eye finds the boundaries
+         of a long screen without reading the words. */
+      h2 {
+        font-size: 1.02rem;
+        margin: 2.2rem 0 .7rem;
+        padding-bottom: .35rem;
+        border-bottom: 1px solid var(--line);
+        letter-spacing: -.01em;
+      }
+      h3 { font-size: .93rem; margin: 1.5rem 0 .5rem; color: var(--ink); }
+      p { margin: .5rem 0; }
+      /* Prose stays inside a readable measure; tables and panels do not. */
+      .main > p, .panel > p, .note { max-width: 68ch; }
 
       /* Read-only summaries are plain; anything that mutates sits in a
          bordered panel. Section 12 asks for the two to be distinguishable
@@ -93,22 +121,39 @@
       table { border-collapse: collapse; width: 100%; font-size: .9rem; }
       th, td {
         border-bottom: 1px solid var(--line);
-        padding: .45rem .6rem;
+        padding: .55rem .7rem;
         text-align: left;
         vertical-align: top;
       }
-      th { color: var(--muted); font-weight: 600; font-size: .8rem; }
-      tbody tr:hover td { background: #fafafa; }
+      /* Held while a long table scrolls: a row of numbers with the headings
+         off screen is a row of numbers nobody can read. */
+      thead th {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        background: var(--page);
+        color: var(--muted);
+        font-weight: 600;
+        font-size: .78rem;
+        letter-spacing: .03em;
+        text-transform: uppercase;
+        border-bottom: 1px solid var(--line-strong);
+      }
+      tbody tr:nth-child(even) td { background: #fafbfc; }
+      tbody tr:hover td { background: var(--hover); }
       td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+      /* Identifiers line up so two that differ are visibly different. */
+      td .code, td.code { font-variant-numeric: tabular-nums; }
 
       .panel {
         border: 1px solid var(--line-strong);
-        border-radius: 4px;
-        padding: 1rem 1.25rem;
-        margin: 1rem 0;
-        background: #fcfcfd;
+        border-radius: 6px;
+        padding: 1.1rem 1.35rem;
+        margin: 1.1rem 0;
+        background: var(--raised);
       }
       .panel h2, .panel h3 { margin-top: 0; }
+      .panel h2 { border-bottom: 0; padding-bottom: 0; }
 
       .code {
         font-family: ui-monospace, "Cascadia Mono", monospace;
@@ -123,16 +168,22 @@
       .removed { color: var(--danger); }
 
       input, select, textarea {
-        padding: .4rem .5rem;
+        padding: .5rem .6rem;
         font: inherit;
         font-size: .9rem;
         border: 1px solid var(--line-strong);
-        border-radius: 3px;
+        border-radius: 4px;
         background: #fff;
       }
-      label { font-size: .9rem; }
+      input:focus, select:focus, textarea:focus { border-color: var(--focus); }
+      label { font-size: .9rem; display: inline-block; }
+      /* A field and its label as one block, so a form reads down rather than
+         wrapping unpredictably. */
+      .field { display: block; margin: .7rem 0; }
+      .field > span { display: block; margin-bottom: .25rem; color: var(--muted); }
+      .field input, .field select { width: 100%; max-width: 22rem; }
       button {
-        padding: .45rem .9rem;
+        padding: .5rem .95rem;
         font: inherit;
         font-size: .9rem;
         cursor: pointer;
@@ -175,6 +226,60 @@
         margin-bottom: 1.5rem;
       }
       .safety button { padding: .55rem 1.1rem; }
+
+
+      /* Section 9 puts the second password on the step that makes something
+         trade. It used to be a field at the bottom of a long screen, which
+         meant scrolling past everything to reach the one control that
+         matters. It is a dialog now: it opens over the thing it is
+         confirming, and the page behind it stays where the operator left it.
+
+         Without JavaScript every dialog renders inline exactly as it did
+         before. A safety control that disappears when a script fails is
+         worse than one that is inconvenient. */
+      html:not(.has-dialog) dialog.confirm {
+        display: block;
+        position: static;
+        width: auto;
+        max-width: none;
+        box-shadow: none;
+        margin: 1rem 0;
+      }
+      html:not(.has-dialog) .opens-confirm { display: none; }
+      dialog.confirm {
+        border: 1px solid var(--line-strong);
+        border-radius: 8px;
+        padding: 1.25rem 1.4rem;
+        max-width: 32rem;
+        width: calc(100% - 2rem);
+        box-shadow: 0 10px 40px rgb(0 0 0 / 18%);
+        color: var(--ink);
+      }
+      dialog.confirm::backdrop { background: rgb(16 18 22 / 45%); }
+      dialog.confirm h3 { margin-top: 0; }
+      dialog.confirm .actions {
+        display: flex;
+        gap: .6rem;
+        align-items: center;
+        margin-top: 1rem;
+        flex-wrap: wrap;
+      }
+      dialog.confirm .what {
+        border-left: 3px solid var(--line-strong);
+        padding-left: .8rem;
+        margin: .6rem 0 1rem;
+        color: var(--muted);
+        font-size: .88rem;
+      }
+      html.no-dialog dialog.confirm,
+      dialog.confirm:not([open]).inline {
+        display: block;
+        position: static;
+        width: auto;
+        max-width: none;
+        box-shadow: none;
+        margin: 1rem 0;
+      }
 
       .flash { padding: .7rem 1rem; border-radius: 4px; margin-bottom: 1rem; }
       .flash.bad { background: #fdecef; border: 1px solid #f3c2cc; }
@@ -232,5 +337,29 @@
         {% block content %}{% endblock %}
       </main>
     </div>
+    <script>
+      // Progressive: the class is added only once this runs, so a page that
+      // never gets here keeps the inline forms.
+      document.documentElement.classList.add("has-dialog");
+      document.addEventListener("click", function (event) {
+        var opener = event.target.closest("[data-opens]");
+        if (opener) {
+          var dialog = document.getElementById(opener.dataset.opens);
+          if (dialog && typeof dialog.showModal === "function") {
+            event.preventDefault();
+            dialog.showModal();
+            var first = dialog.querySelector("input:not([type=hidden])");
+            if (first) { first.focus(); }
+          }
+          return;
+        }
+        var closer = event.target.closest("[data-closes]");
+        if (closer) {
+          event.preventDefault();
+          var owner = closer.closest("dialog");
+          if (owner) { owner.close(); }
+        }
+      });
+    </script>
   </body>
 </html>
