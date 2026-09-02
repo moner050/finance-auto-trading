@@ -40,11 +40,16 @@ BUILT = (
     V6PositionActionKind.EXIT_FULL_SESSION_CLOSE,
     V6PositionActionKind.EMERGENCY_EXIT_FULL,
 )
-NOT_BUILT = (V6PositionActionKind.ADD_AND_MOVE_STOP,)
+# Everything the manager can decide is now carried out. The lists stay so
+# that a kind added to the enum has to be placed in one of them.
+NOT_BUILT: tuple[V6PositionActionKind, ...] = ()
 STOP_MOVES = (
     V6PositionActionKind.ACTIVATE_INITIAL_STOP,
     V6PositionActionKind.MOVE_STOP_TO_BREAK_EVEN,
 )
+# Its own category: an add is a stop move and an entry, and refusing it says
+# so in its own words.
+ADDS = (V6PositionActionKind.ADD_AND_MOVE_STOP,)
 TELEMETRY = (
     V6PositionActionKind.RECORD_FIB_25,
     V6PositionActionKind.RECORD_FIB_50_RESEARCH,
@@ -56,9 +61,9 @@ TELEMETRY = (
 def test_every_action_kind_is_accounted_for() -> None:
     """A kind added to the manager and to neither list here is a kind whose
     handling nobody decided."""
-    assert set(BUILT) | set(NOT_BUILT) | set(STOP_MOVES) | set(TELEMETRY) == set(
-        V6PositionActionKind
-    )
+    assert set(BUILT) | set(NOT_BUILT) | set(STOP_MOVES) | set(ADDS) | set(
+        TELEMETRY
+    ) == set(V6PositionActionKind)
 
 
 def _held() -> V6ManagedPosition:
@@ -114,18 +119,28 @@ def _sink() -> MySqlPositionActions:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", NOT_BUILT)
-async def test_an_action_this_sink_cannot_carry_out_stops_the_run(
-    kind: V6PositionActionKind,
-) -> None:
-    """Moving a stop means cancelling the working one first, and adding
-    increases exposure and so needs a real reservation. Neither happened
-    before this path existed either, so refusing changes nothing about how a
-    position behaves - doing them half-right would change how much is at
-    risk."""
-    with pytest.raises(PositionActionUnsupportedError, match=kind.value):
+async def test_an_add_without_its_stop_move_is_refused() -> None:
+    """Adding without moving the stop enlarges the position behind the stop
+    it already had, which is more money at risk than anything approved. The
+    move is not an accompaniment to the add; it is the half that pays for it."""
+    with pytest.raises(PositionActionUnsupportedError, match="behind the old stop"):
         await _sink().apply(
-            _action(kind),
+            _action(V6PositionActionKind.ADD_AND_MOVE_STOP, stop_price=None),
+            position=_held(),
+            position_id=POSITION_ID,
+            now=NOW,
+        )
+
+
+@pytest.mark.asyncio
+async def test_an_add_with_no_quantity_is_refused() -> None:
+    with pytest.raises(PositionActionUnsupportedError, match="no quantity"):
+        await _sink().apply(
+            _action(
+                V6PositionActionKind.ADD_AND_MOVE_STOP,
+                stop_price=Decimal("100"),
+                quantity=None,
+            ),
             position=_held(),
             position_id=POSITION_ID,
             now=NOW,

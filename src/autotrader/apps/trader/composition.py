@@ -34,6 +34,7 @@ from autotrader.execution.intents.models import (
 from autotrader.execution.intents.service import OrderIntentFactory
 from autotrader.execution.orders.models import CommandType
 from autotrader.execution.orders.service import (
+    NEW_EXPOSURE,
     STRICT_REDUCTION,
     OrderService,
     OrderSubmissionContext,
@@ -1022,6 +1023,11 @@ class MySqlPositionActions:
                 action, position=position, position_id=position_id, now=moment
             )
             return
+        if action.kind is V6PositionActionKind.ADD_AND_MOVE_STOP:
+            await self._add(
+                action, position=position, position_id=position_id, now=moment
+            )
+            return
         if action.kind not in _EXIT_KINDS:
             raise PositionActionUnsupportedError(
                 f"{action.kind.value} is decided but this sink cannot carry it out"
@@ -1194,6 +1200,146 @@ class MySqlPositionActions:
             ),
             origin=IntentOrigin.STRATEGY,
             target_broker_order_id=broker_order_id,
+        )
+
+    async def _add(
+        self,
+        action: V6PositionAction,
+        *,
+        position: V6ManagedPosition,
+        position_id: UUID,
+        now: datetime,
+    ) -> None:
+        """Move the stop, then add. That order, and it is the whole design.
+
+        The add and the stop move are two acts at the venue and cannot be made
+        one, so what matters is which failure they leave behind.
+
+        Stop first: if the add then fails, the position is the size it was,
+        behind a stop computed for a larger one. The weighted break-even sits
+        between the original entry and the current price, so for the existing
+        position that stop is tighter than the one it had - a worse fill if it
+        triggers, never more risk.
+
+        Add first would leave the reverse: a position enlarged and still behind
+        the old stop, which is more money at risk than anything approved it.
+        That is the state this ordering exists to make impossible.
+
+        The quantity is the manager's, and so is the arithmetic behind it -
+        `_add_action` only returns one when the resulting worst case is no
+        greater than what was already approved, which is why this reserves the
+        resulting risk rather than a new allowance.
+        """
+        if action.stop_price is None or action.stop_price <= 0:
+            raise PositionActionUnsupportedError(
+                "an add names no stop to move to, and adding without the move "
+                "would enlarge the position behind the old stop"
+            )
+        if action.quantity is None or action.quantity <= 0:
+            raise PositionActionUnsupportedError("an add names no quantity")
+
+        await self._move_stop(
+            action, position=position, position_id=position_id, now=now
+        )
+
+        async with self._sessions() as session:
+            command_id = await self._create_add_order(
+                session, action, position=position, position_id=position_id, now=now
+            )
+            await session.commit()
+        if command_id is None:
+            return
+        async with self._sessions() as session:
+            await DispatchService(
+                store=MySqlDispatchStore(session), broker=self._broker
+            ).dispatch(command_id=command_id, now=now)
+            await session.commit()
+
+    async def _create_add_order(
+        self,
+        session: AsyncSession,
+        action: V6PositionAction,
+        *,
+        position: V6ManagedPosition,
+        position_id: UUID,
+        now: datetime,
+    ) -> UUID | None:
+        assert action.quantity is not None
+        intent = OrderIntentFactory().from_protection(
+            account=self._account.account,
+            request=ProtectionRequest(
+                locked_position_id=position_id,
+                reason_code=action.kind.value,
+                instrument_id=self._instrument_id,
+                # An entry: it opens exposure, which is why it reserves risk
+                # and carries new-exposure authority rather than a reduction.
+                intent_type=IntentType.ENTRY,
+                side=position.side,
+                order_style=OrderStyle.MARKET,
+                terms=OrderTerms(
+                    requested_quantity=action.quantity,
+                    limit_price=None,
+                    trigger_price=None,
+                ),
+            ),
+        )
+        row = _persisted_intent(intent, position_id, now)
+        row.strategy_signal_id = None
+        row.protection_position_id = position_id
+        row.protection_reason_code = action.kind.value
+        stored = await OrderIntentRepository(session).create_or_get(row)
+        risk_decision = PersistedRiskDecision(
+            id=new_uuid7(),
+            order_intent_id=stored.id,
+            policy_version_id=self._account.policy_version_id,
+            risk_snapshot_id=self._account.risk_snapshot_id,
+            outcome="APPROVE",
+            requested_quantity=action.quantity,
+            approved_quantity=action.quantity,
+            approved_limit_price=None,
+            # What the position will risk once this order and its stop move
+            # have both landed. The manager only proposes an add when that is
+            # no greater than the risk already approved, so this restates an
+            # allowance rather than asking for a new one.
+            reserved_risk_amount=action.resulting_worst_case_risk,
+            currency=self._account.currency,
+            reason_codes=[action.kind.value],
+            decision_hash=_digest(f"add:{stored.id.hex}"),
+            decided_at=now,
+        )
+        await RiskReservationService(
+            uow=cast(RiskReservationUow, MySqlRiskReservationUow(session))
+        ).persist_approval(
+            decision=cast(RiskDecisionRecord, risk_decision),
+            reservation=cast(
+                RiskReservationRecord,
+                _reservation(risk_decision, self._account.account.id, now),
+            ),
+            account_id=self._account.account.id,
+            currency=self._account.currency,
+        )
+        order = await OrderService(
+            store=MySqlOrderStore(session)
+        ).create_from_risk_decision(
+            decision=_domain_decision(risk_decision, stored.id),
+            intent=intent,
+            submission=OrderSubmissionContext(
+                broker_client_order_id=f"add-{stored.id.hex}",
+                owner_runtime_instance_id=self._account.runtime_instance_id,
+                fencing_token=self._account.fencing_token,
+                not_after=now + _RESERVATION_WINDOW,
+                time_in_force="GTC",
+                authority_class=NEW_EXPOSURE,
+                created_at=now,
+            ),
+        )
+        if order is None:
+            return None
+        await session.flush()
+        return await session.scalar(
+            select(PersistedOrderCommand.id).where(
+                PersistedOrderCommand.order_id == order.id
+            )
         )
 
     async def _create_exit_order(
