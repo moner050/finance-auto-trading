@@ -10,6 +10,10 @@ from typing import cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from autotrader.domain.completed_ohlcv import CompletedOhlcvBar
+from autotrader.strategies.david_v6.pivots import (
+    PivotConfig,
+    confirmed_pivots,
+)
 
 _FIVE_MINUTES = timedelta(minutes=5)
 _MINIMUM_DISTINCT_TOUCHES = 3
@@ -94,6 +98,36 @@ class ZoneFacts:
             raise TypeError("zones must contain exact HlitZone values")
 
 
+def _observations(
+    selected: tuple[CompletedOhlcvBar, ...],
+) -> tuple[tuple[datetime, Decimal], ...]:
+    """The prices a zone is built from, as section 10 collects them.
+
+        pivots = collect(bars_5m, lookback_days,
+                         kinds=['swing_high', 'swing_low', 'close', 'open'])
+
+    Swing highs and lows - the author's variable is `pivots` - plus each bar's
+    open and close. Not every bar's high and low, which is what this used to
+    take: an extreme is only a level the market turned at if the market turned
+    there.
+
+    This is a fidelity change and not a fix for the touch counts, which was
+    the guess when it was written up. Measured on live bars it moves the top
+    zone from 577 distinct touches to 543, because `PivotConfig(left=3,
+    right=0)` marks 1686 of 2880 bars as swings - 59% of them - so what is
+    dropped is a minority of the observations. Every zone still saturates the
+    strength cap of five. That cause lies elsewhere and is recorded as its own
+    finding rather than assumed fixed here.
+    """
+    marks: list[tuple[datetime, Decimal]] = []
+    for pivot in confirmed_pivots(selected, PivotConfig()):
+        marks.append((pivot.timestamp, pivot.price))
+    for bar in selected:
+        marks.append((bar.timestamp, bar.open))
+        marks.append((bar.timestamp, bar.close))
+    return tuple(marks)
+
+
 def at_observed_all_time_high(bars: Sequence[CompletedOhlcvBar]) -> bool:
     """Whether the last bar closed at the high of everything we can see.
 
@@ -138,9 +172,8 @@ def build_hlit_zones(
     )
     selected_dates = ordered_dates[-required_dates:]
     selected = tuple(bar for day in selected_dates for bar in by_date[day])
-    observations = tuple(
-        value for bar in selected for value in (bar.open, bar.high, bar.low, bar.close)
-    )
+    marks = _observations(selected)
+    observations = tuple(price for _, price in marks)
     bin_count = _cube_root_ceiling(len(observations))
     if len(ordered_dates) < required_dates or min(observations) == max(observations):
         return ZoneFacts(
@@ -153,15 +186,14 @@ def build_hlit_zones(
     minimum = min(observations)
     span = _fraction(max(observations)) - _fraction(minimum)
     bins: list[dict[datetime, list[Decimal]]] = [dict() for _ in range(bin_count)]
-    for bar in selected:
-        for observation in (bar.open, bar.high, bar.low, bar.close):
-            index = _bin_index(
-                value=observation,
-                minimum=_fraction(minimum),
-                span=span,
-                bin_count=bin_count,
-            )
-            bins[index].setdefault(bar.timestamp, []).append(observation)
+    for moment, observation in marks:
+        index = _bin_index(
+            value=observation,
+            minimum=_fraction(minimum),
+            span=span,
+            bin_count=bin_count,
+        )
+        bins[index].setdefault(moment, []).append(observation)
     zones = tuple(
         HlitZone(
             lower_boundary=min(
