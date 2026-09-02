@@ -11,6 +11,12 @@ Paper and LIVE are sections 11.7 and 11.8, behind two Shadow and two Paper
 sessions. The Shadow loop evaluates real bars and records real decisions
 through an execution port with no broker behind it.
 
+`--for` ends the run on its own after a stated length, as in `--for 6h`.
+Without it the run continues until it is stopped. On Windows there is no
+polite way to stop it from outside - `timeout` and `taskkill` terminate
+through the Win32 API, where no signal is delivered - so a run that has to
+finish cleanly states its own length.
+
 `--leverage` is required. It is on no position the venue reports and it
 decides the size of an order, so it is stated rather than guessed - the rule
 `OperatorFacts` states for the money.
@@ -28,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from datetime import timedelta
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -46,10 +53,36 @@ from autotrader.strategies.david_v6.models import V6Market
 _USAGE_LINES = (
     "usage: python -m autotrader.apps.trader --account <alias> --check",
     "   or: python -m autotrader.apps.trader --account <alias> --run "
-    "--shadow --leverage <n>",
+    "--shadow --leverage <n> [--for <30m|6h|900s>]",
 )
 USAGE = "\n".join(_USAGE_LINES)
 MARKET = V6Market.BINANCE_USDM
+
+
+# Seconds, minutes, hours. A bare number is refused rather than guessed at:
+# `--for 30` means half a minute to one operator and half an hour to another,
+# and the two differ by a factor of sixty on a live account.
+_DURATION_UNITS = {"s": 1, "m": 60, "h": 3600}
+
+
+def parse_duration(text: str) -> timedelta:
+    """`90m`, `6h`, `900s`. Anything else is refused."""
+    if type(text) is not str or not text:
+        raise ValueError("a duration needs a number and a unit, as in 6h")
+    if text.isdigit():
+        # The whole point of the unit. Reporting this as an unknown unit of
+        # `0` would send the operator looking at the wrong character.
+        raise ValueError(f"{text!r} needs a number and a unit, as in {text}m")
+    number, unit = text[:-1], text[-1]
+    seconds = _DURATION_UNITS.get(unit)
+    if seconds is None:
+        raise ValueError(f"unknown duration unit {unit!r}; use s, m or h")
+    if not number.isdigit():
+        raise ValueError(f"{number!r} is not a whole number of {unit!r}")
+    total = int(number) * seconds
+    if total <= 0:
+        raise ValueError("a duration must be positive")
+    return timedelta(seconds=total)
 
 
 def _value(argv: tuple[str, ...], flag: str) -> str | None:
@@ -59,7 +92,7 @@ def _value(argv: tuple[str, ...], flag: str) -> str | None:
     return None
 
 
-async def _run_shadow(alias: str, leverage: int) -> int:
+async def _run_shadow(alias: str, leverage: int, run_for: timedelta | None) -> int:
     """Evaluate real bars and record real decisions, placing nothing."""
     from autotrader.apps.trader.composition import bound_policy
     from autotrader.apps.trader.loop import SystemClock, run_forever
@@ -67,6 +100,7 @@ async def _run_shadow(alias: str, leverage: int) -> int:
         ShadowStartupError,
         build_shadow_loop,
         run_together,
+        stop_after,
         stop_on_signals,
     )
     from autotrader.apps.trader.shadow import SHADOW
@@ -113,13 +147,14 @@ async def _run_shadow(alias: str, leverage: int) -> int:
         print(f"tape          /fapi/v1/aggTrades every {POLL_INTERVAL_SECONDS:g}s")
         print(f"calendar      {FEED_URL}")
         print("orders        none; this loop has no execution port to submit to")
+        print("runs for      " + ("until stopped" if run_for is None else str(run_for)))
         print("stop with Ctrl-C")
         stop = asyncio.Event()
         try:
             # A termination signal becomes the stop both halves already watch,
             # so a supervisor ending the run gets the same wind-down as an
             # operator pressing Ctrl-C rather than a process killed mid-write.
-            async with stop_on_signals(stop):
+            async with stop_on_signals(stop), stop_after(stop, run_for):
                 # Together, because neither is useful alone: without the tape
                 # every pass quietly produces nothing, and without the loop
                 # the tape fills a table nobody reads.
@@ -222,7 +257,15 @@ def main(argv: tuple[str, ...]) -> int:
             file=sys.stderr,
         )
         return 2
-    return asyncio.run(_run_shadow(alias, int(leverage)))
+    run_for: timedelta | None = None
+    requested = _value(argv, "--for")
+    if requested is not None:
+        try:
+            run_for = parse_duration(requested)
+        except ValueError as error:
+            print(str(error), file=sys.stderr)
+            return 2
+    return asyncio.run(_run_shadow(alias, int(leverage), run_for))
 
 
 if __name__ == "__main__":

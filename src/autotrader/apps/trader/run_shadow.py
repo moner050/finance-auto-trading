@@ -203,6 +203,41 @@ async def stop_on_signals(
                 signal.signal(number, handler)  # type: ignore[arg-type]
 
 
+@asynccontextmanager
+async def stop_after(
+    stop: asyncio.Event, duration: timedelta | None
+) -> AsyncGenerator[None]:
+    """End the run on its own after `duration`, or never when it is None.
+
+    A run stopped from outside is at the mercy of how it is stopped, and on
+    Windows a supervisor cannot ask politely at all: `timeout` and `taskkill`
+    terminate through the Win32 API, where no signal is delivered and nothing
+    is catchable. A run that knows when it is due to finish does not need to
+    be asked.
+
+    The end goes through the same stop a signal sets, so a session that ran to
+    its length and one an operator interrupted wind down identically. There is
+    only one shutdown path to get right.
+    """
+    if duration is None:
+        yield
+        return
+    if duration <= timedelta(0):
+        raise ValueError("the run duration must be positive")
+
+    async def elapse() -> None:
+        await asyncio.sleep(duration.total_seconds())
+        stop.set()
+
+    timer = asyncio.ensure_future(elapse())
+    try:
+        yield
+    finally:
+        timer.cancel()
+        with suppress(asyncio.CancelledError):
+            await timer
+
+
 async def _manifest(
     sessions: async_sessionmaker[AsyncSession], resolved: ResolvedAccount
 ) -> V6Manifest:
@@ -431,5 +466,6 @@ __all__ = (
     "StoredPessimism",
     "build_shadow_loop",
     "run_together",
+    "stop_after",
     "stop_on_signals",
 )
