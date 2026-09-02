@@ -45,6 +45,8 @@ from autotrader.strategies.david_v6.grading import (
     PROFILE_VALUE_CONFLUENCE,
     REGULAR_HLIT_DIVERGENCE,
     SUPPORTING_BIG_TRADE_BEHIND,
+    V1_MIG_REVERSAL,
+    V1_SECADO,
 )
 from autotrader.strategies.david_v6.hlit import HlitFacts, build_hlit_setups
 from autotrader.strategies.david_v6.metodo import (
@@ -270,6 +272,23 @@ def derive_indicators(
                 matched.append(_indicator(BLOCKING_BIG_TRADE_AHEAD, order_flow_hash))
             elif flow.big_trades:
                 matched.append(_indicator(SUPPORTING_BIG_TRADE_BEHIND, order_flow_hash))
+        # `aggregate_order_flow` has computed these on every pass since it was
+        # written and nothing read them, so §21.3's two-point weights could
+        # never be earned and the candidate threshold of seven was out of
+        # reach by arithmetic. Section 15.2 puts both at `score_only`: they may
+        # carry weight and may not be required, which is what an entry in the
+        # matched list is.
+        #
+        # `is True` rather than truthiness because the field has three states -
+        # None is a window that could not measure, and only True is a match.
+        if flow.secado is True:
+            matched.append(_indicator(V1_SECADO, order_flow_hash))
+        if flow.reversal_mig is True:
+            matched.append(_indicator(V1_MIG_REVERSAL, order_flow_hash))
+        # Not wired, and each for its own reason. `continuation_mig` carries no
+        # weight in §21.3. `ceros` is `telemetry_only` in §15.2 at LOW
+        # confidence, and `_TELEMETRY_ONLY` already forces its weight to zero -
+        # scoring it would add a row that says nothing.
 
     calendar_hash = _digest_bytes(bundle.calendar)
     if calendar_hash is not None:

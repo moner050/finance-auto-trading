@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import cast
 
 import pytest
 
@@ -41,6 +42,7 @@ from autotrader.strategies.david_v6.models import (
     V6Market,
 )
 from autotrader.strategies.david_v6.order_flow import (
+    OrderFlowFacts,
     OrderFlowThresholds,
     TradePrint,
 )
@@ -611,3 +613,51 @@ def test_the_perpetual_market_is_not_filtered_by_a_universe() -> None:
     assert "universe" not in _required_keys(V6Market.BINANCE_USDM, StrategyFamily.HLIT)
     # And the cash side still is filtered, or the claim would be vacuous.
     assert "universe" in _required_keys(V6Market.US_CASH, StrategyFamily.HLIT)
+
+
+def test_secado_and_the_reversal_mig_reach_the_matched_list() -> None:
+    """F14 wiring. Both were measured on every pass and read by nobody, so
+    §21.3's two points each could never be earned."""
+    inputs = _inputs(V6Market.BINANCE_USDM)
+    bundle = assemble_v6_evidence(inputs).bundle
+    flow = bundle.order_flow.value
+    assert flow is not None
+
+    keys = {
+        indicator.key
+        for indicator in derive_indicators(
+            assemble_v6_evidence(inputs), side=Side.BUY, reference_price=Decimal("120")
+        )
+    }
+
+    # Whatever the fixture's tape happens to produce, the wiring is what is
+    # under test: an observed fact appears, an unobserved one does not.
+    assert ("v1_secado" in keys) is (cast(OrderFlowFacts, flow).secado is True)
+    assert ("v1_mig_reversal" in keys) is (
+        cast(OrderFlowFacts, flow).reversal_mig is True
+    )
+
+
+def test_a_window_that_could_not_measure_is_not_a_match() -> None:
+    """The fields are three-state: None is a window too thin to say, and
+    reading it as absent-and-measured would score the same as a real no."""
+    from autotrader.strategies.david_v6.order_flow import OrderFlowFacts
+
+    for value in (None, False):
+        facts = OrderFlowFacts(
+            state=EvidenceState.AVAILABLE,
+            trade_count=0,
+            unknown_aggressor_count=0,
+            buy_notional=Decimal(0),
+            sell_notional=Decimal(0),
+            delta_notional=Decimal(0),
+            big_trades=None,
+            reversal_mig=value,
+            continuation_mig=None,
+            secado=value,
+            ceros=None,
+            telemetry_only=True,
+        )
+
+        assert facts.secado is not True
+        assert facts.reversal_mig is not True
