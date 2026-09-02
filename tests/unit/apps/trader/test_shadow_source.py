@@ -133,8 +133,8 @@ class _NoRisk:
     def __init__(self) -> None:
         self.calls = 0
 
-    def build(self, *, bars: object, now: datetime) -> None:
-        del bars, now
+    def build(self, *, bars: object, now: datetime, side: object) -> None:
+        del bars, now, side
         self.calls += 1
         return None
 

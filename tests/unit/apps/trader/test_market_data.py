@@ -71,7 +71,11 @@ class _Risk:
         self.calls = 0
 
     def build(
-        self, *, bars: tuple[CompletedOhlcvBar, ...], now: datetime
+        self,
+        *,
+        bars: tuple[CompletedOhlcvBar, ...],
+        now: datetime,
+        side: Side = Side.BUY,
     ) -> V6RiskContext | None:
         del bars, now
         self.calls += 1

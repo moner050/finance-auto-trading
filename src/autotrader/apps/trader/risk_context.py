@@ -46,15 +46,23 @@ class BinanceRiskContexts:
         *,
         budget: AccountBudget,
         policy: V6RiskPolicySnapshot,
-        side: Side = Side.BUY,
     ) -> None:
         self._budget = budget
         self._policy = policy
-        self._side = side
 
     def build(
-        self, *, bars: tuple[CompletedOhlcvBar, ...], now: datetime
+        self, *, bars: tuple[CompletedOhlcvBar, ...], now: datetime, side: Side
     ) -> V6RiskContext | None:
+        """Price the account for an evaluation of `side`.
+
+        The side is required rather than defaulted. It used to default to BUY
+        and no caller ever passed one, so every evaluation this system made
+        asked whether a long was on and a bearish setup was invisible - which
+        is the `permanent_long_only` section 21 prohibits. A default here
+        cannot be right for both directions, so there is none.
+        """
+        if type(side) is not Side:
+            raise TypeError("side must be an exact Side")
         atr = average_true_range(bars)
         if atr is None:
             return None
@@ -72,12 +80,10 @@ class BinanceRiskContexts:
             risk_request=V6RiskRequest(
                 market=V6Market.BINANCE_USDM,
                 grade=SetupGrade.NORMAL,
-                side=self._side,
+                side=side,
                 entry_price=entry,
                 # A placeholder the exhaustion overrides once it is confirmed.
-                structural_reference=(
-                    entry - atr if self._side is Side.BUY else entry + atr
-                ),
+                structural_reference=(entry - atr if side is Side.BUY else entry + atr),
                 tick_size=budget.tick_size,
                 spread=budget.spread,
                 atr_30s=atr,

@@ -23,7 +23,9 @@ from autotrader.apps.trader.market_data import (
 from autotrader.apps.trader.risk_context import BinanceRiskContexts
 from autotrader.apps.trader.shadow_inputs import LiveBinanceInputs
 from autotrader.apps.trader.tick import TickContext
+from autotrader.domain.enums import Side
 from autotrader.shared.time import require_utc
+from autotrader.strategies.david_v6.direction import divergence_directions
 from autotrader.strategies.david_v6.models import V6Market
 from autotrader.strategies.david_v6.zones import ZONE_HISTORY
 
@@ -66,7 +68,20 @@ class ShadowContextSource:
         if self._watermark is not None and latest <= self._watermark:
             return None
 
-        risk_context = self._risk.build(bars=bars, now=moment)
+        # Section 3 reads the direction off the divergence rather than
+        # assuming one and checking afterwards.
+        directions = divergence_directions(bars)
+        if len(directions) > 1:
+            # Both ways at once. Choosing one would find its own divergence
+            # and look supported, slipping past the contradiction the engine
+            # exists to catch.
+            return None
+        # Empty means no setup, and neither side can pass, so the pass still
+        # runs and records the refusal under an arbitrary carrier rather than
+        # vanishing: `decision_count` feeds a promotion gate, and a bar the
+        # system looked at and refused is evidence that it was looking.
+        side = next(iter(directions), Side.BUY)
+        risk_context = self._risk.build(bars=bars, now=moment, side=side)
         if risk_context is None:
             return None
         daily = await self._market_data.completed_bars(DAILY_TIMEFRAME, moment)

@@ -28,6 +28,7 @@ from autotrader.strategies.david_v6.calendar import (
     evaluate_event_window,
 )
 from autotrader.strategies.david_v6.costs import FeeSchedule, estimate_round_trip_cost
+from autotrader.strategies.david_v6.direction import aligned_macd_histogram
 from autotrader.strategies.david_v6.evidence import (
     TIMEFRAMES,
     EvidenceItem,
@@ -47,9 +48,7 @@ from autotrader.strategies.david_v6.grading import (
 )
 from autotrader.strategies.david_v6.hlit import HlitFacts, build_hlit_setups
 from autotrader.strategies.david_v6.metodo import (
-    MACD_WARMUP_BARS,
     evaluate_metodo,
-    macd_series,
 )
 from autotrader.strategies.david_v6.models import (
     EvidenceState,
@@ -414,26 +413,14 @@ def _divergence(
     inputs: AssemblyInputs,
     bars: tuple[CompletedOhlcvBar, ...] | None,
 ) -> tuple[EvidenceItem[object], tuple[Pivot, ...], tuple[CompletedOhlcvBar, ...]]:
-    if bars is None or len(bars) < MACD_WARMUP_BARS:
+    if bars is None:
         return _unavailable("DIVERGENCE_MACD_WARMUP_UNAVAILABLE"), (), ()
-    closes = tuple(bar.close for bar in bars)
-    macd, signal = macd_series(closes)
-    # Keep bars and oscillator aligned by dropping the warm-up prefix together.
-    start = next(
-        (
-            index
-            for index in range(len(closes))
-            if macd[index] is not None and signal[index] is not None
-        ),
-        None,
-    )
-    if start is None:
+    # Shared with the source that picks the side, so the two cannot align the
+    # warm-up differently and disagree about which divergence is there.
+    aligned = aligned_macd_histogram(bars)
+    if aligned is None:
         return _unavailable("DIVERGENCE_MACD_WARMUP_UNAVAILABLE"), (), ()
-    aligned_bars = bars[start:]
-    histogram = tuple(
-        cast(Decimal, macd[index]) - cast(Decimal, signal[index])
-        for index in range(start, len(closes))
-    )
+    aligned_bars, histogram = aligned
     facts = evaluate_divergence(aligned_bars, histogram)
     pivots = confirmed_pivots(aligned_bars, PivotConfig())
     item = _available(
