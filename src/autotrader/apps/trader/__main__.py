@@ -67,6 +67,7 @@ async def _run_shadow(alias: str, leverage: int) -> int:
         ShadowStartupError,
         build_shadow_loop,
         run_together,
+        stop_on_signals,
     )
     from autotrader.apps.trader.shadow import SHADOW
     from autotrader.integrations.market_data.binance_trade_poller import (
@@ -115,20 +116,26 @@ async def _run_shadow(alias: str, leverage: int) -> int:
         print("stop with Ctrl-C")
         stop = asyncio.Event()
         try:
-            # Together, because neither is useful alone: without the tape
-            # every pass quietly produces nothing, and without the loop the
-            # tape fills a table nobody reads.
-            await run_together(
-                stream=tape.run(stop=stop),
-                loop=run_forever(
-                    ports=loop.ports,
-                    clock=SystemClock(),
-                    interval=HLIT_TIMEFRAME,
+            # A termination signal becomes the stop both halves already watch,
+            # so a supervisor ending the run gets the same wind-down as an
+            # operator pressing Ctrl-C rather than a process killed mid-write.
+            async with stop_on_signals(stop):
+                # Together, because neither is useful alone: without the tape
+                # every pass quietly produces nothing, and without the loop
+                # the tape fills a table nobody reads.
+                await run_together(
+                    stream=tape.run(stop=stop),
+                    loop=run_forever(
+                        ports=loop.ports,
+                        clock=SystemClock(),
+                        interval=HLIT_TIMEFRAME,
+                        stop=stop,
+                    ),
                     stop=stop,
-                ),
-                stop=stop,
-            )
+                )
+            print("stopped")
         except KeyboardInterrupt:
+            # Reachable only in the window before the handlers are installed.
             print("stopped")
         finally:
             print(

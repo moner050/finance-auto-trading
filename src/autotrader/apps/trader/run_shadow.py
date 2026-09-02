@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable
+import signal
+from collections.abc import AsyncGenerator, Awaitable
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -135,6 +137,70 @@ async def run_together(
     for task in done:
         # Raises whichever finished first, if it finished by failing.
         task.result()
+
+
+# Every way this program is asked to stop. A supervisor sends the first; an
+# operator at a terminal sends the second. The third exists only on Windows,
+# where a console Ctrl-Break arrives as SIGBREAK rather than as SIGINT -
+# leaving it out is why the process died at 0xC000013A with the wind-down
+# never reached.
+SHUTDOWN_SIGNALS: tuple[signal.Signals, ...] = (
+    signal.SIGTERM,
+    signal.SIGINT,
+    *((signal.SIGBREAK,) if hasattr(signal, "SIGBREAK") else ()),
+)
+
+
+@asynccontextmanager
+async def stop_on_signals(
+    stop: asyncio.Event,
+    *,
+    numbers: tuple[signal.Signals, ...] = SHUTDOWN_SIGNALS,
+) -> AsyncGenerator[None]:
+    """Turn a termination signal into the stop the loop already understands.
+
+    Without this, `timeout` or a supervisor kills the process where it stands.
+    Python's default SIGTERM handler does not unwind, so the `finally` that
+    reports the run and closes the venue clients never executes, and the last
+    thing an operator sees is exit code 124. Worse than losing the summary is
+    where it dies: mid-write, between fetching a page of trades and storing
+    it, with the checkpoint saying one thing and the tape another.
+
+    Setting the stop instead lets both halves finish what they are doing and
+    return, which is the same path a clean end already takes.
+
+    A second signal is not a repeat of the request; it means the first one did
+    not work. So the handler puts back whatever was there before - normally
+    the default, which kills - and the operator gets their process gone.
+    """
+    loop = asyncio.get_running_loop()
+    previous: dict[signal.Signals, object] = {}
+
+    def request_stop(number: int, frame: object) -> None:
+        del frame
+        restored = previous.get(signal.Signals(number), signal.SIG_DFL)
+        with suppress(OSError, ValueError):
+            signal.signal(number, restored)  # type: ignore[arg-type]
+        # Thread-safe because it also wakes a loop that is asleep in select;
+        # setting the event directly would be seen only once something else
+        # happened to wake it.
+        with suppress(RuntimeError):
+            loop.call_soon_threadsafe(stop.set)
+
+    for number in numbers:
+        try:
+            previous[number] = signal.signal(number, request_stop)
+        except OSError, ValueError:
+            # Not the main thread, or a platform without this signal. A run
+            # that cannot be asked to stop politely is still a run worth
+            # having.
+            continue
+    try:
+        yield
+    finally:
+        for number, handler in previous.items():
+            with suppress(OSError, ValueError):
+                signal.signal(number, handler)  # type: ignore[arg-type]
 
 
 async def _manifest(
@@ -357,6 +423,7 @@ async def build_shadow_loop(
 __all__ = (
     "LEASE_NAME",
     "LEASE_TTL",
+    "SHUTDOWN_SIGNALS",
     "SYMBOL",
     "RestSpreads",
     "ShadowLoop",
@@ -364,4 +431,5 @@ __all__ = (
     "StoredPessimism",
     "build_shadow_loop",
     "run_together",
+    "stop_on_signals",
 )
