@@ -38,6 +38,7 @@ TABLES: tuple[str, ...] = (
     "risk_budget_anchor",
     "risk_decision",
     "risk_policy",
+    "strategy_david_v6_position_mark",
     "strategy_definition",
     "strategy_source_reference",
     "universe_snapshot",
@@ -447,6 +448,13 @@ _CREATE: tuple[str, ...] = (
     active BOOL NOT NULL,
     PRIMARY KEY (id),
     CONSTRAINT uq_risk_policy_code UNIQUE (code)
+)""",
+    """CREATE TABLE strategy_david_v6_position_mark (
+    position_id BINARY(16) NOT NULL,
+    mark VARCHAR(64) COLLATE ascii_bin NOT NULL,
+    recorded_at DATETIME(6) NOT NULL,
+    CONSTRAINT pk_strategy_david_v6_position_mark PRIMARY KEY (position_id, mark),
+    CONSTRAINT ck_strategy_david_v6_position_mark_scope CHECK (CHAR_LENGTH(mark) BETWEEN 1 AND 64 AND mark = TRIM(mark))
 )""",
     """CREATE TABLE strategy_definition (
     id BINARY(16) NOT NULL,

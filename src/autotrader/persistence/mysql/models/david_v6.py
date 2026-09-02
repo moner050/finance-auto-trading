@@ -287,3 +287,38 @@ class DavidV6BlockerRow(CoreBase):
     blocker_code: Mapped[str] = mapped_column(
         String(128, collation="utf8mb4_bin"), nullable=False
     )
+
+
+class DavidV6PositionMarkRow(CoreBase):
+    """One observation already emitted for one position.
+
+    `manage_v6_position` carries four flags - the two fibonacci records and
+    the two Shadow partial observations - whose only job is to stop the same
+    observation being emitted on every pass. Everything else the manager needs
+    is derivable from what the account already stores: the average cost and
+    quantity from the position, the lots from the fills, the structural stop
+    and the approved risk from the decision that opened it. These four are not
+    derivable, because "have we said this already" is not a fact about the
+    market.
+
+    Existence is the flag. A unique key rather than a boolean column so a
+    second emission collides instead of overwriting, which is the difference
+    between a duplicate that is refused and one that is silently absorbed.
+    """
+
+    __tablename__ = "strategy_david_v6_position_mark"
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "position_id",
+            "mark",
+            name="pk_strategy_david_v6_position_mark",
+        ),
+        CheckConstraint(
+            "CHAR_LENGTH(mark) BETWEEN 1 AND 64 AND mark = TRIM(mark)",
+            name="ck_strategy_david_v6_position_mark_scope",
+        ),
+    )
+
+    position_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
+    mark: Mapped[str] = mapped_column(String(64, collation="ascii_bin"), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
