@@ -25,12 +25,14 @@ from autotrader.execution.dispatch.service import BrokerSubmitter, DispatchServi
 from autotrader.execution.fills.models import ChargeLegRole
 from autotrader.execution.intents.models import (
     AccountCandidate,
+    IntentOrigin,
     OrderIntent,
     OrderTerms,
     ProtectionRequest,
     SizingApproved,
 )
 from autotrader.execution.intents.service import OrderIntentFactory
+from autotrader.execution.orders.models import CommandType
 from autotrader.execution.orders.service import (
     STRICT_REDUCTION,
     OrderService,
@@ -577,6 +579,7 @@ class MySqlPaperExecution:
 
 
 STRUCTURAL_STOP = "STRUCTURAL_STOP"
+REPLACE_NON_INCREASING = "REPLACE_NON_INCREASING"
 
 
 @dataclass(frozen=True, slots=True)
@@ -871,6 +874,14 @@ _EXIT_KINDS = frozenset(
 )
 
 
+_STOP_KINDS = frozenset(
+    {
+        V6PositionActionKind.ACTIVATE_INITIAL_STOP,
+        V6PositionActionKind.MOVE_STOP_TO_BREAK_EVEN,
+    }
+)
+
+
 class PositionActionUnsupportedError(RuntimeError):
     """Raised for an action this sink cannot carry out.
 
@@ -880,28 +891,101 @@ class PositionActionUnsupportedError(RuntimeError):
     """
 
 
+async def create_protective_order(
+    session: AsyncSession,
+    *,
+    account: ExecutionAccount,
+    plan: _ProtectionPlan,
+    now: datetime,
+) -> UUID | None:
+    """Place a stop behind a position, from a fill or from a stop move.
+
+    Module level because both reach it. The settlement hook places the
+    first one when an entry fills; the position manager places one when it
+    finds a position with nothing working behind it. Two copies of this
+    would be two answers to what a protective order is.
+    """
+    intent = OrderIntentFactory().from_protection(
+        account=account.account,
+        request=ProtectionRequest(
+            locked_position_id=plan.position_id,
+            reason_code=STRUCTURAL_STOP,
+            instrument_id=plan.instrument_id,
+            intent_type=IntentType.PROTECTIVE,
+            side=Side.SELL if plan.entry_side is Side.BUY else Side.BUY,
+            order_style=OrderStyle.MARKET,
+            terms=OrderTerms(
+                requested_quantity=plan.quantity,
+                limit_price=None,
+                trigger_price=plan.structural_stop,
+            ),
+        ),
+    )
+    stored = await OrderIntentRepository(session).create_or_get(
+        _protection_intent(intent, plan, now)
+    )
+    risk_decision = _reduction_decision(
+        intent_id=stored.id,
+        quantity=plan.quantity,
+        account=account,
+        now=now,
+    )
+    await RiskReservationService(
+        uow=cast(RiskReservationUow, MySqlRiskReservationUow(session))
+    ).persist_approval(
+        decision=cast(RiskDecisionRecord, risk_decision),
+        reservation=cast(
+            RiskReservationRecord,
+            _consumed_reservation(risk_decision, account.account.id, now),
+        ),
+        account_id=account.account.id,
+        currency=account.currency,
+    )
+    order = await OrderService(
+        store=MySqlOrderStore(session)
+    ).create_from_risk_decision(
+        decision=_domain_decision(risk_decision, stored.id),
+        intent=intent,
+        submission=OrderSubmissionContext(
+            broker_client_order_id=f"stop-{stored.id.hex}",
+            owner_runtime_instance_id=account.runtime_instance_id,
+            fencing_token=account.fencing_token,
+            not_after=now + _RESERVATION_WINDOW,
+            time_in_force="GTC",
+            authority_class=STRICT_REDUCTION,
+            created_at=now,
+        ),
+    )
+    if order is None:
+        return None
+    await session.flush()
+    return await session.scalar(
+        select(PersistedOrderCommand.id).where(
+            PersistedOrderCommand.order_id == order.id
+        )
+    )
+
+
 class MySqlPositionActions:
     """Turn a decided action into an order, or refuse to pretend.
 
-    What is built is the half that gets a position out: the four full exits,
-    which are what `exit_before_blocking_big_trade` and the fibonacci target
-    come to, plus the telemetry that only records a level was reached.
+        What is built is the half that gets a position out: the four full exits,
+        which are what `exit_before_blocking_big_trade` and the fibonacci target
+        come to, plus the telemetry that only records a level was reached.
 
-    What is not built is the half that improves a position - moving the stop
-    to break-even, and adding at thirty points. Both need machinery this does
-    not have. Replacing a working stop means cancelling one first, and two
-    stops behind one position is worse than a stop that never moved. An add
-    increases exposure, so it needs a real risk reservation rather than the
-    REDUCE a closing order carries.
+    Stops move by replacing, not by cancelling and placing again: the gap
+        between a cancel and its replacement is a position with nothing behind it,
+        which is what the stop was for.
 
-    Leaving those out changes nothing about how a position behaves today,
-    because neither happened before either. Doing them half-right would change
-    how much money is at risk.
+        What is still not built is the add at thirty points. It increases exposure,
+        so it needs a real risk reservation rather than the REDUCE a closing order
+        carries, and leaving it out changes nothing about how a position behaves
+        today because it never happened before either.
 
-    An emergency exit closes first and refuses the halt second, in that order.
-    The position is out because that is the urgent part, and the run then
-    stops with its reason rather than carrying on with an account that was
-    supposed to be halted and was not.
+        An emergency exit closes first and refuses the halt second, in that order.
+        The position is out because that is the urgent part, and the run then
+        stops with its reason rather than carrying on with an account that was
+        supposed to be halted and was not.
     """
 
     def __init__(
@@ -932,6 +1016,11 @@ class MySqlPositionActions:
                     position_id=position_id, mark=action.kind.value, now=moment
                 )
                 await session.commit()
+            return
+        if action.kind in _STOP_KINDS:
+            await self._move_stop(
+                action, position=position, position_id=position_id, now=moment
+            )
             return
         if action.kind not in _EXIT_KINDS:
             raise PositionActionUnsupportedError(
@@ -982,6 +1071,130 @@ class MySqlPositionActions:
                 store=MySqlDispatchStore(session), broker=self._broker
             ).dispatch(command_id=command_id, now=now)
             await session.commit()
+
+    async def _move_stop(
+        self,
+        action: V6PositionAction,
+        *,
+        position: V6ManagedPosition,
+        position_id: UUID,
+        now: datetime,
+    ) -> None:
+        """Put the stop where the manager says it belongs.
+
+        One path for both actions, and deliberately so. `ACTIVATE_INITIAL_STOP`
+        means nothing is working and `MOVE_STOP_TO_BREAK_EVEN` means something
+        is, but the manager decides that from what it was told a pass ago. If
+        it is wrong, the branch below is what stops a second stop being placed
+        behind one position - which is a state nothing downstream would flag,
+        because two working stops both look like protection.
+        """
+        stop_price = action.stop_price
+        if stop_price is None or stop_price <= 0:
+            raise PositionActionUnsupportedError(
+                f"{action.kind.value} names no stop price to move to"
+            )
+        async with self._sessions() as session:
+            working = await self._working_stop(session)
+            if working is None:
+                command_id = await create_protective_order(
+                    session,
+                    account=self._account,
+                    plan=_ProtectionPlan(
+                        position_id=position_id,
+                        instrument_id=self._instrument_id,
+                        entry_side=position.side,
+                        quantity=position.remaining_quantity,
+                        structural_stop=stop_price,
+                    ),
+                    now=now,
+                )
+            else:
+                command_id = await self._replace_stop(
+                    session, working, stop_price=stop_price, now=now
+                )
+            await session.commit()
+        if command_id is None:
+            return
+        async with self._sessions() as session:
+            await DispatchService(
+                store=MySqlDispatchStore(session), broker=self._broker
+            ).dispatch(command_id=command_id, now=now)
+            await session.commit()
+
+    async def _working_stop(
+        self, session: AsyncSession
+    ) -> tuple[PersistedOrder, str] | None:
+        """The protective order that is actually working, and its broker id.
+
+        A replace has to name what it replaces, and only an order the broker
+        acknowledged has an id to name. One that was never dispatched is not
+        working, so it is not what a move is about.
+        """
+        row = (
+            await session.execute(
+                select(PersistedOrder, PersistedBrokerOrderLink.broker_order_id)
+                .join(
+                    PersistedOrderIntent,
+                    PersistedOrderIntent.id == PersistedOrder.order_intent_id,
+                )
+                .join(
+                    PersistedBrokerOrderLink,
+                    PersistedBrokerOrderLink.order_id == PersistedOrder.id,
+                )
+                .where(
+                    PersistedOrder.account_id == self._account.account.id,
+                    PersistedOrder.instrument_id == self._instrument_id,
+                    PersistedOrderIntent.intent_type == IntentType.PROTECTIVE.value,
+                    PersistedOrder.filled_quantity == 0,
+                )
+                .order_by(PersistedOrder.created_at.desc())
+                .limit(1)
+                .with_for_update(of=PersistedOrder)
+            )
+        ).first()
+        return None if row is None else (row[0], row[1])
+
+    async def _replace_stop(
+        self,
+        session: AsyncSession,
+        working: tuple[PersistedOrder, str],
+        *,
+        stop_price: Decimal,
+        now: datetime,
+    ) -> UUID | None:
+        """Amend the working stop rather than cancelling and re-placing it.
+
+        Cancel-then-place leaves a moment with nothing behind the position,
+        and that moment is exactly what the stop exists for. A replace is one
+        act at the venue and one write in the journal.
+        """
+        order, broker_order_id = working
+        if order.trigger_price == stop_price:
+            # Already where it is being moved to. Issuing the replace anyway
+            # would spend a command and a version on nothing.
+            return None
+        order.trigger_price = stop_price
+        # The command's canonical payload is built from the order's terms, so
+        # the amendment lands first and the version moves with it.
+        order.aggregate_version += 1
+        await session.flush()
+        return await MySqlOrderStore(session).command_for_existing_order(
+            order=order,
+            command_type=CommandType.REPLACE,
+            submission=OrderSubmissionContext(
+                broker_client_order_id=order.broker_client_order_id,
+                owner_runtime_instance_id=self._account.runtime_instance_id,
+                fencing_token=self._account.fencing_token,
+                not_after=now + _RESERVATION_WINDOW,
+                time_in_force="GTC",
+                # Only ever tightens: a replace may not increase exposure.
+                authority_class=REPLACE_NON_INCREASING,
+                created_at=now,
+            ),
+            origin=IntentOrigin.STRATEGY,
+            target_broker_order_id=broker_order_id,
+        )
 
     async def _create_exit_order(
         self,
@@ -1126,64 +1339,8 @@ class MySqlFillSettlement:
     async def _create_protective_order(
         self, session: AsyncSession, plan: _ProtectionPlan, now: datetime
     ) -> UUID | None:
-        intent = OrderIntentFactory().from_protection(
-            account=self._account.account,
-            request=ProtectionRequest(
-                locked_position_id=plan.position_id,
-                reason_code=STRUCTURAL_STOP,
-                instrument_id=plan.instrument_id,
-                intent_type=IntentType.PROTECTIVE,
-                side=Side.SELL if plan.entry_side is Side.BUY else Side.BUY,
-                order_style=OrderStyle.MARKET,
-                terms=OrderTerms(
-                    requested_quantity=plan.quantity,
-                    limit_price=None,
-                    trigger_price=plan.structural_stop,
-                ),
-            ),
-        )
-        stored = await OrderIntentRepository(session).create_or_get(
-            _protection_intent(intent, plan, now)
-        )
-        risk_decision = _reduction_decision(
-            intent_id=stored.id,
-            quantity=plan.quantity,
-            account=self._account,
-            now=now,
-        )
-        await RiskReservationService(
-            uow=cast(RiskReservationUow, MySqlRiskReservationUow(session))
-        ).persist_approval(
-            decision=cast(RiskDecisionRecord, risk_decision),
-            reservation=cast(
-                RiskReservationRecord,
-                _consumed_reservation(risk_decision, self._account.account.id, now),
-            ),
-            account_id=self._account.account.id,
-            currency=self._account.currency,
-        )
-        order = await OrderService(
-            store=MySqlOrderStore(session)
-        ).create_from_risk_decision(
-            decision=_domain_decision(risk_decision, stored.id),
-            intent=intent,
-            submission=OrderSubmissionContext(
-                broker_client_order_id=f"stop-{stored.id.hex}",
-                owner_runtime_instance_id=self._account.runtime_instance_id,
-                fencing_token=self._account.fencing_token,
-                not_after=now + _RESERVATION_WINDOW,
-                time_in_force="GTC",
-                authority_class=STRICT_REDUCTION,
-                created_at=now,
-            ),
-        )
-        if order is None:
-            return None
-        await session.flush()
-        return await session.scalar(
-            select(PersistedOrderCommand.id).where(
-                PersistedOrderCommand.order_id == order.id
-            )
+        return await create_protective_order(
+            session, account=self._account, plan=plan, now=now
         )
 
     async def _apply_to_ledger(

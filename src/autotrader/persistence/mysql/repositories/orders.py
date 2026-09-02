@@ -15,6 +15,7 @@ from autotrader.domain.enums import OrderStyle, Side
 from autotrader.execution.intents.models import IntentOrigin
 from autotrader.execution.orders.models import (
     BrokerOrderCommand,
+    CommandType,
     Order,
     OrderDomainEvent,
     OrderStatus,
@@ -234,6 +235,74 @@ class MySqlOrderStore:
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def command_for_existing_order(
+        self,
+        *,
+        order: PersistedOrder,
+        command_type: CommandType,
+        submission: OrderSubmissionContext,
+        origin: IntentOrigin,
+        target_broker_order_id: str,
+    ) -> UUID:
+        """A further command against an order that already exists.
+
+        `create_approved_once` makes an order and its first command together,
+        which is right for a submit and useless for a replace: the order is
+        already there and only the command is new. The conversion from row to
+        domain order lives here either way, so putting this beside it keeps
+        one answer to what a persisted order means.
+
+        The caller owns the transaction and is expected to have amended the
+        order's terms already - the command's canonical payload is built from
+        them, so a replace that had not changed anything would be a command to
+        do nothing.
+        """
+        canonical = OrderCommandFactory().create(
+            order=self._to_domain_order(order),
+            command_type=command_type,
+            submission=submission,
+            origin=origin,
+            target_broker_order_id=target_broker_order_id,
+        )
+        await self._session.execute(
+            insert(PersistedOrderCommandAuthority)
+            .values(
+                order_id=canonical.order_id,
+                authority_class=canonical.authority_class,
+            )
+            .prefix_with("IGNORE")
+        )
+        stored = await OrderRepository(self._session).create_command_once(
+            PersistedOrderCommand(
+                id=canonical.id,
+                order_id=canonical.order_id,
+                account_id=canonical.account_id,
+                instrument_id=canonical.instrument_id,
+                command_type=canonical.command_type.value,
+                command_sequence=canonical.command_sequence,
+                target_aggregate_version=canonical.target_aggregate_version,
+                idempotency_key=canonical.idempotency_key,
+                canonical_payload_hash=canonical.canonical_payload_hash,
+                broker_client_order_id=canonical.broker_client_order_id,
+                target_broker_order_id=canonical.target_broker_order_id,
+                replaces_command_id=canonical.replaces_command_id,
+                origin_type=canonical.origin_type,
+                authority_class=canonical.authority_class,
+                owner_runtime_instance_id=canonical.owner_runtime_instance_id,
+                fencing_token=canonical.fencing_token,
+                not_after=canonical.not_after,
+                side=canonical.side.value,
+                order_style=canonical.order_style.value,
+                quantity=canonical.quantity,
+                limit_price=canonical.limit_price,
+                trigger_price=canonical.trigger_price,
+                time_in_force=canonical.time_in_force,
+                status=canonical.status,
+                created_at=submission.created_at,
+            )
+        )
+        return stored.id
 
     async def create_approved_once(
         self,

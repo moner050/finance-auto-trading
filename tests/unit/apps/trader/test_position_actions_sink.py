@@ -40,9 +40,9 @@ BUILT = (
     V6PositionActionKind.EXIT_FULL_SESSION_CLOSE,
     V6PositionActionKind.EMERGENCY_EXIT_FULL,
 )
-NOT_BUILT = (
+NOT_BUILT = (V6PositionActionKind.ADD_AND_MOVE_STOP,)
+STOP_MOVES = (
     V6PositionActionKind.ACTIVATE_INITIAL_STOP,
-    V6PositionActionKind.ADD_AND_MOVE_STOP,
     V6PositionActionKind.MOVE_STOP_TO_BREAK_EVEN,
 )
 TELEMETRY = (
@@ -56,7 +56,9 @@ TELEMETRY = (
 def test_every_action_kind_is_accounted_for() -> None:
     """A kind added to the manager and to neither list here is a kind whose
     handling nobody decided."""
-    assert set(BUILT) | set(NOT_BUILT) | set(TELEMETRY) == set(V6PositionActionKind)
+    assert set(BUILT) | set(NOT_BUILT) | set(STOP_MOVES) | set(TELEMETRY) == set(
+        V6PositionActionKind
+    )
 
 
 def _held() -> V6ManagedPosition:
@@ -86,13 +88,14 @@ def _action(
     telemetry_only: bool = False,
     halt: bool = False,
     quantity: Decimal | None = Decimal("2"),
+    stop_price: Decimal | None = None,
 ) -> V6PositionAction:
     return V6PositionAction(
         kind=kind,
         reason=kind.value,
         order_style=None,
         quantity=None if telemetry_only else quantity,
-        stop_price=None,
+        stop_price=stop_price,
         average_entry_price=Decimal("100"),
         resulting_worst_case_risk=Decimal("0"),
         reduce_only=not telemetry_only,
@@ -139,3 +142,34 @@ async def test_a_closing_action_with_nothing_left_to_close_does_nothing() -> Non
         position_id=POSITION_ID,
         now=NOW,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", STOP_MOVES)
+async def test_a_stop_move_without_a_price_is_refused(
+    kind: V6PositionActionKind,
+) -> None:
+    """The action names where the stop goes. Falling back to the structural
+    stop when it does not would move a working stop to a price the manager
+    never asked for, and the fallback would look like it worked."""
+    with pytest.raises(PositionActionUnsupportedError, match="no stop price"):
+        await _sink().apply(
+            _action(kind, stop_price=None),
+            position=_held(),
+            position_id=POSITION_ID,
+            now=NOW,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", STOP_MOVES)
+async def test_a_stop_move_to_a_non_positive_price_is_refused(
+    kind: V6PositionActionKind,
+) -> None:
+    with pytest.raises(PositionActionUnsupportedError, match="no stop price"):
+        await _sink().apply(
+            _action(kind, stop_price=Decimal(0)),
+            position=_held(),
+            position_id=POSITION_ID,
+            now=NOW,
+        )
