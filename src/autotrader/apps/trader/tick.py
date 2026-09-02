@@ -15,11 +15,13 @@ from decimal import Decimal
 from typing import Protocol, cast
 from uuid import UUID
 
+from autotrader.apps.trader.position_management import PositionMarket
 from autotrader.domain.enums import Side
 from autotrader.risk.v6 import V6RiskContext
 from autotrader.shared.time import require_utc
 from autotrader.strategies.common.decisions import StrategyDecision
 from autotrader.strategies.david_v6.assembly import (
+    HLIT_TIMEFRAME_KEY,
     AssemblyInputs,
     AssemblyResult,
     assemble_v6_evidence,
@@ -37,6 +39,7 @@ from autotrader.strategies.david_v6.models import (
 
 DISARMED = "DISARMED"
 NO_SETUP = "NO_SETUP_DRAWN"
+POSITION_MANAGED = "POSITION_MANAGED"
 NOT_TRADEABLE = "NOT_TRADEABLE"
 SUBMITTED = "SUBMITTED"
 
@@ -50,6 +53,12 @@ class TradingControl(Protocol):
 class DecisionRecorder(Protocol):
     async def record(self, decision: V6Decision) -> None:
         """Persist one evaluation, tradeable or not."""
+        ...
+
+
+class PositionManagement(Protocol):
+    async def manage(self, market: PositionMarket, *, now: datetime) -> bool:
+        """Act on what is held, reporting whether anything was done."""
         ...
 
 
@@ -94,12 +103,39 @@ class TickContext:
         object.__setattr__(self, "now", require_utc(self.now))
 
 
+def _position_market(
+    context: TickContext, assembled: AssemblyResult
+) -> PositionMarket | None:
+    """The market as the position manager needs it, or None.
+
+    None when a piece it cannot do without is absent - the tick's inputs make
+    the tick size and the fee schedule optional, and both price what an exit
+    would cost. Skipping the pass leaves the position where it was, behind the
+    stop it already has, which beats managing it against a gap.
+    """
+    bars = context.inputs.bars.get(HLIT_TIMEFRAME_KEY)
+    if not bars or context.inputs.tick_size is None:
+        return None
+    if context.inputs.fee_schedule is None:
+        return None
+    return PositionMarket(
+        bundle=assembled.bundle,
+        hlit=assembled.hlit,
+        current_price=bars[-1].close,
+        atr_5m=context.risk_context.risk_request.atr_5m,
+        tick_size=context.inputs.tick_size,
+        fee_schedule=context.inputs.fee_schedule,
+        stop_slippage_q95=context.inputs.stop_slippage_q95,
+    )
+
+
 async def run_tick(
     context: TickContext,
     *,
     control: TradingControl,
     recorder: DecisionRecorder,
     execution: Execution,
+    position: PositionManagement | None = None,
 ) -> TickOutcome:
     if type(context) is not TickContext:
         raise TypeError("context must be an exact TickContext")
@@ -110,6 +146,18 @@ async def run_tick(
         return TickOutcome(reason=DISARMED, decision=None, order_id=None)
 
     assembled = assemble_v6_evidence(context.inputs)
+    market = _position_market(context, assembled)
+    if (
+        position is not None
+        and market is not None
+        and await position.manage(market, now=context.now)
+    ):
+        # Deal with what is held, and stop there when something was done.
+        # Closing a position and opening another against the same bar would
+        # be two decisions on one reading, and the second would be sized
+        # against exposure that had just changed underneath it.
+        return TickOutcome(reason=POSITION_MANAGED, decision=None, order_id=None)
+
     side = context.risk_context.risk_request.side
     decision = evaluate_v6(
         assembled.bundle,
@@ -183,6 +231,7 @@ __all__ = (
     "DISARMED",
     "NOT_TRADEABLE",
     "NO_SETUP",
+    "POSITION_MANAGED",
     "SUBMITTED",
     "DecisionRecorder",
     "Execution",

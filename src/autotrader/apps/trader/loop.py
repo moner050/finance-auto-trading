@@ -16,6 +16,7 @@ from typing import Protocol, cast
 from autotrader.apps.trader.tick import (
     DecisionRecorder,
     Execution,
+    PositionManagement,
     TickContext,
     TickOutcome,
     TradingControl,
@@ -82,6 +83,9 @@ class LoopPorts:
     control: TradingControl
     recorder: DecisionRecorder
     execution: Execution
+    # None means no position can exist in this mode. Shadow places nothing, so
+    # there is nothing held to manage; anything that trades is handed one.
+    position: PositionManagement | None = None
 
 
 async def run_pass(*, now: datetime, ports: LoopPorts) -> LoopPass:
@@ -116,6 +120,7 @@ async def run_pass(*, now: datetime, ports: LoopPorts) -> LoopPass:
         control=ports.control,
         recorder=ports.recorder,
         execution=ports.execution,
+        position=ports.position,
     )
     return LoopPass(reason=outcome.reason, settled=settled, outcome=outcome)
 

@@ -132,6 +132,7 @@ def shadow_ports(
     source: object,
     lease: object,
     execution: RefusingExecution | None = None,
+    position: object | None = None,
 ) -> LoopPorts:
     """One loop that can evaluate and record, and cannot place an order."""
     return LoopPorts(
@@ -143,6 +144,10 @@ def shadow_ports(
         control=ShadowTradingControl(sessions),
         recorder=MySqlDecisionRecorder(sessions),
         execution=execution or RefusingExecution(),
+        # Shadow opens nothing, so there is never a position to manage. Passed
+        # through rather than omitted so a caller that does hold one can hand
+        # a manager in without reaching around this function.
+        position=position,  # type: ignore[arg-type]
     )
 
 
