@@ -20,6 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from autotrader.domain.enums import IntentType, OrderStyle, Side
+from autotrader.execution.controls.models import KillSwitchLevel
 from autotrader.execution.dispatch.service import BrokerSubmitter, DispatchService
 from autotrader.execution.fills.models import ChargeLegRole
 from autotrader.execution.intents.models import (
@@ -94,6 +95,7 @@ from autotrader.persistence.mysql.repositories.fills import MySqlFillStore
 from autotrader.persistence.mysql.repositories.intents import OrderIntentRepository
 from autotrader.persistence.mysql.repositories.operations import (
     RuntimeControlRepository,
+    trip_kill_switch,
 )
 from autotrader.persistence.mysql.repositories.orders import MySqlOrderStore
 from autotrader.persistence.mysql.repositories.policy_binding import (
@@ -939,10 +941,14 @@ class MySqlPositionActions:
             action, position=position, position_id=position_id, now=moment
         )
         if action.account_halt:
-            raise PositionActionUnsupportedError(
-                f"{action.kind.value} closed the position and asks for an "
-                "account halt, which this sink cannot set"
-            )
+            # After the close, not before. Halting first would leave a
+            # position open behind a stopped account, which is the one state
+            # the emergency exists to get out of.
+            async with self._sessions() as session:
+                await trip_kill_switch(
+                    session, level=KillSwitchLevel.EMERGENCY, now=moment
+                )
+                await session.commit()
 
     async def _close(
         self,

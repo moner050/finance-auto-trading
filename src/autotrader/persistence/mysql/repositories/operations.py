@@ -13,6 +13,7 @@ from autotrader.persistence.mysql.models.operations import (
     OpsSchedulerLease,
     OpsTradingControl,
 )
+from autotrader.shared.time import require_utc
 
 
 async def lock_global_dispatch_guard(session: AsyncSession) -> OpsTradingControl:
@@ -287,3 +288,54 @@ class RuntimeControlRepository:
                 )
         await self._session.flush()
         return True
+
+
+async def trip_kill_switch(
+    session: AsyncSession, *, level: KillSwitchLevel, now: datetime
+) -> int:
+    """Raise every trading control to `level`, and never lower one.
+
+    Narrow on purpose. `create_control` is the other way to write this column
+    and it also rewrites ownership, arming and expiry - fine when an operator
+    is taking control, wrong when the strategy is stopping itself, because a
+    halt that quietly renewed a lease would hand the account back to whoever
+    was holding it.
+
+    Raising only, so a halt cannot be undone by a later, milder one arriving
+    out of order. Coming back down is an operator's act, through the back
+    office, where the second password is.
+    """
+    moment = require_utc(now)
+    controls = (
+        await session.scalars(select(OpsTradingControl).with_for_update())
+    ).all()
+    raised = 0
+    for control in controls:
+        if _RANK[KillSwitchLevel(control.kill_switch_level)] >= _RANK[level]:
+            continue
+        session.add(
+            OpsAuditLog(
+                action="STRATEGY_KILL_SWITCH_RAISED",
+                scope_type=control.scope_type,
+                scope_key=control.scope_key,
+                actor_runtime_instance_id=control.owner_runtime_instance_id,
+                fencing_token=control.fencing_token,
+                details={
+                    "from": control.kill_switch_level,
+                    "to": level.value,
+                },
+                occurred_at=moment,
+            )
+        )
+        control.kill_switch_level = level.value
+        control.row_version += 1
+        raised += 1
+    await session.flush()
+    return raised
+
+
+_RANK = {
+    KillSwitchLevel.NONE: 0,
+    KillSwitchLevel.BLOCK_NEW_EXPOSURE: 1,
+    KillSwitchLevel.EMERGENCY: 2,
+}
