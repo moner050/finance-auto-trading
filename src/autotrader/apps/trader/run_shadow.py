@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import signal
-from collections.abc import AsyncGenerator, Awaitable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -34,7 +34,7 @@ from autotrader.apps.backoffice.provider_secrets import (
     MySqlAccountSecretResolver,
 )
 from autotrader.apps.trader.composition import LeaseSettings, MySqlSchedulerLease
-from autotrader.apps.trader.loop import LoopPorts
+from autotrader.apps.trader.loop import Clock, LoopPorts, SchedulerLease
 from autotrader.apps.trader.risk_context import AccountBudget, BinanceRiskContexts
 from autotrader.apps.trader.shadow import shadow_ports
 from autotrader.apps.trader.shadow_inputs import FixedFacts, LiveBinanceInputs
@@ -113,24 +113,23 @@ class ShadowLoop:
 
 
 async def run_together(
-    *,
-    stream: Awaitable[None],
-    loop: Awaitable[None],
+    *parts: Awaitable[None],
     stop: asyncio.Event,
 ) -> None:
-    """Run the stream and the loop, and stop both when either ends.
+    """Run the parts of one session, and stop them all when any ends.
 
-    Neither is useful alone. Without the stream the tape stops advancing and
-    every pass quietly produces nothing - the inputs cannot rank a delta or an
-    ATR over an empty window - so a loop left running would look alive and
-    decide nothing. Without the loop the stream is filling a table nobody
-    reads.
+    None of them is useful alone. Without the tape every pass quietly produces
+    nothing - the inputs cannot rank a delta or an ATR over an empty window -
+    so a loop left running would look alive and decide nothing. Without the
+    loop the tape fills a table nobody reads. Without the heartbeat the lease
+    expires under a process that is still running, and the account is free for
+    somebody else to trade while this one is mid-session.
 
-    So whichever ends first ends both, and its exception is the run's. A
-    correction conflict from the stream has to reach the operator rather than
+    So whichever ends first ends the rest, and its exception is the run's. A
+    correction conflict from the tape has to reach the operator rather than
     leave a loop evaluating a tape that stopped being trustworthy.
     """
-    tasks = {asyncio.ensure_future(stream), asyncio.ensure_future(loop)}
+    tasks = {asyncio.ensure_future(part) for part in parts}
     try:
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     finally:
@@ -141,6 +140,59 @@ async def run_together(
     for task in done:
         # Raises whichever finished first, if it finished by failing.
         task.result()
+
+
+# A lease renewed only as often as it is needed is a lease that expires under
+# a process that is still running. Renewing at a third of the term leaves room
+# for two attempts to be lost before the term does.
+LEASE_RENEWAL_FRACTION = 3
+
+
+class LeaseHeartbeat:
+    """Keep the lease alive between passes.
+
+    `run_pass` renews it too, but on the evaluation's cadence, and that cadence
+    has nothing to do with the term: five-minute passes against a two-minute
+    lease left the account unclaimed for three minutes out of every five, free
+    for another instance to take mid-session. Nothing noticed, because the
+    tape poller happened to renew every couple of seconds - a correctness
+    property propped up by an unrelated component, which is the same defect as
+    having none.
+
+    So the renewal cadence is derived from the term rather than configured
+    beside it. The two cannot drift apart because there is only one number.
+    """
+
+    def __init__(
+        self,
+        *,
+        lease: SchedulerLease,
+        clock: Clock,
+        ttl: timedelta = LEASE_TTL,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        if ttl <= timedelta(0):
+            raise ValueError("the lease term must be positive")
+        self._lease = lease
+        self._clock = clock
+        self._interval = ttl.total_seconds() / LEASE_RENEWAL_FRACTION
+        self._sleep = sleep
+        self.renewals = 0
+        self.losses = 0
+
+    async def run(self, *, stop: asyncio.Event) -> None:
+        while not stop.is_set():
+            await self._sleep(self._interval)
+            if stop.is_set():
+                return
+            # Losing it is not a failure to end the run over. Another instance
+            # owns the account, `run_pass` will report NOT_LEADER and place
+            # nothing, and the poller will store nothing - and leadership can
+            # come back, which it cannot if this gave up asking.
+            if await self._lease.acquire(self._clock.now()):
+                self.renewals += 1
+            else:
+                self.losses += 1
 
 
 # Every way this program is asked to stop. A supervisor sends the first; an

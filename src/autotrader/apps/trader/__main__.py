@@ -97,6 +97,7 @@ async def _run_shadow(alias: str, leverage: int, run_for: timedelta | None) -> i
     from autotrader.apps.trader.composition import bound_policy
     from autotrader.apps.trader.loop import SystemClock, run_forever
     from autotrader.apps.trader.run_shadow import (
+        LeaseHeartbeat,
         ShadowStartupError,
         build_shadow_loop,
         run_together,
@@ -149,6 +150,7 @@ async def _run_shadow(alias: str, leverage: int, run_for: timedelta | None) -> i
             lease=loop.lease,
             clock=SystemClock(),
         )
+        heartbeat = LeaseHeartbeat(lease=loop.lease, clock=SystemClock())
         print(f"mode          {SHADOW}")
         print(f"account       {alias} ({resolved.account.environment})")
         print(f"equity        {loop.equity} USDT")
@@ -168,13 +170,16 @@ async def _run_shadow(alias: str, leverage: int, run_for: timedelta | None) -> i
                 # every pass quietly produces nothing, and without the loop
                 # the tape fills a table nobody reads.
                 await run_together(
-                    stream=tape.run(stop=stop),
-                    loop=run_forever(
+                    tape.run(stop=stop),
+                    run_forever(
                         ports=loop.ports,
                         clock=SystemClock(),
                         interval=HLIT_TIMEFRAME,
                         stop=stop,
                     ),
+                    # The pass renews the lease too, but on the evaluation's
+                    # cadence, which has nothing to do with the lease's term.
+                    heartbeat.run(stop=stop),
                     stop=stop,
                 )
             print("stopped")
@@ -189,6 +194,9 @@ async def _run_shadow(alias: str, leverage: int, run_for: timedelta | None) -> i
             print(
                 f"calendar      {loop.events.fetches} fetches "
                 f"({loop.events.failures} failures)"
+            )
+            print(
+                f"lease         {heartbeat.renewals} renewals ({heartbeat.losses} lost)"
             )
             await loop.events.aclose()
             await loop.rest.aclose()
