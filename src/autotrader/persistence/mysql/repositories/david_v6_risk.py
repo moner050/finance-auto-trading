@@ -17,7 +17,7 @@ from autotrader.persistence.mysql.models.risk import (
 from autotrader.risk.models import V6RiskPolicySnapshot, V6SessionRiskAnchor
 from autotrader.strategies.david_v6.models import V6Market
 
-V6_RISK_POLICY_VERSION = "v6-op-20260824.1"
+V6_RISK_POLICY_VERSION = "v6-op-20260902.1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,9 +139,21 @@ APPROVED_V6_RISK_POLICIES = (
         market=V6Market.BINANCE_USDM,
         currency=None,
         settlement_asset="USDT",
-        normal_risk_fraction=Decimal("0.0025"),
+        # Section 21: per_trade 0.0015, a_grade_max 0.0025 - the same figures
+        # the two cash policies above already carry. This market had been
+        # running at 0.0025 and 0.0050, which is 1.67x and 2x the only
+        # numbers the document states.
+        #
+        # The document marks that block `IMPLEMENTATION_SAFETY_CANDIDATE_NOT
+        # _DAVID`, so these are not the author's figures and following them is
+        # not a fidelity claim. It is the operator choosing the stated numbers
+        # over unstated ones.
+        normal_risk_fraction=Decimal("0.0015"),
         a_candidate_risk_fraction=Decimal("0.0025"),
-        a_risk_fraction=Decimal("0.0050"),
+        a_risk_fraction=Decimal("0.0025"),
+        # Left alone: the document names no absolute per-trade ceiling. Worth
+        # knowing that at 0.0075 it now sits five times the normal fraction
+        # and three times the elevated one, so it binds on nothing.
         absolute_trade_risk_fraction=Decimal("0.0075"),
         daily_loss_fraction=Decimal("0.0075"),
         weekly_loss_fraction=Decimal("0.0200"),

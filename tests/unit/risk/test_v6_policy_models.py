@@ -96,11 +96,15 @@ def test_exact_approved_v6_risk_policies_have_no_absolute_cap() -> None:
         assert policy.daily_requires_authoritative_close is True
 
     binance = definitions["DAVID_V6_BINANCE_USDM_USDT"].snapshot(POLICY_VERSION_ID)
-    assert binance.normal_risk_fraction == Decimal("0.0025")
+    # Section 21's stated figures, which this market had been running above.
+    assert binance.normal_risk_fraction == Decimal("0.0015")
     assert binance.a_candidate_risk_fraction == Decimal("0.0025")
-    assert binance.a_risk_fraction == Decimal("0.0050")
+    assert binance.a_risk_fraction == Decimal("0.0025")
+    # Untouched: the document names no absolute per-trade ceiling. It now
+    # sits five times the normal fraction, so it binds on nothing - it is a
+    # validation bound on the grades, not an input to sizing.
     assert binance.absolute_trade_risk_fraction == Decimal("0.0075")
-    assert binance.risk_fraction_for(SetupGrade.A) == Decimal("0.0050")
+    assert binance.risk_fraction_for(SetupGrade.A) == Decimal("0.0025")
     assert binance.daily_requires_authoritative_close is False
 
     for definition in definitions.values():

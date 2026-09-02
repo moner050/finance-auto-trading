@@ -91,12 +91,14 @@ def test_stop_distance_must_be_between_point_four_and_one_point_five_atr() -> No
     ("market", "grade", "expected"),
     (
         (V6Market.KRX_CASH, SetupGrade.NORMAL, Decimal("0.0015")),
-        (V6Market.BINANCE_USDM, SetupGrade.NORMAL, Decimal("0.0025")),
-        (V6Market.BINANCE_USDM, SetupGrade.A_CANDIDATE, Decimal("0.0025")),
+        # Lowered to section 21's stated `per_trade` when the policy stopped
+        # running above the only figures the document gives.
+        (V6Market.BINANCE_USDM, SetupGrade.NORMAL, Decimal("0.0015")),
+        (V6Market.BINANCE_USDM, SetupGrade.A_CANDIDATE, Decimal("0.0015")),
         # A drew 0.0050 until the score that produces the grade was held to
         # what section 21.3 says it is. See the test below.
         (V6Market.US_CASH, SetupGrade.A, Decimal("0.0015")),
-        (V6Market.BINANCE_USDM, SetupGrade.A, Decimal("0.0025")),
+        (V6Market.BINANCE_USDM, SetupGrade.A, Decimal("0.0015")),
     ),
 )
 def test_grade_and_market_select_fixed_percentage_risk(
@@ -190,7 +192,9 @@ def test_quantity_rounds_down_and_zero_quantity_rejects() -> None:
         ({"daily_net_pnl": Decimal("-13.5")}, "DAILY_LOSS_LIMIT"),
         ({"weekly_net_pnl": Decimal("-36")}, "WEEKLY_LOSS_LIMIT"),
         ({"consecutive_net_losses": 2}, "CONSECUTIVE_LOSS_LIMIT"),
-        ({"current_open_structural_risk": Decimal("10.01")}, "OPEN_RISK_LIMIT"),
+        # The gate trips when open risk plus this trade's budget exceeds the
+        # ceiling. A smaller budget needs more already open to reach it.
+        ({"current_open_structural_risk": Decimal("12.81")}, "OPEN_RISK_LIMIT"),
         ({"leverage": 8}, "BINANCE_LEVERAGE_LIMIT"),
     ),
 )
@@ -232,8 +236,9 @@ def test_size_multiplier_scales_the_quantity() -> None:
     halved = _authority(_request(size_multiplier=Decimal("0.5")))
 
     # The halved size is floored to the quantity step, never rounded up.
-    assert halved.quantity == Decimal("1.551")
-    assert full.quantity == Decimal("3.103")
+    # Both fell with the risk fraction: 0.0025 -> 0.0015 is 0.6x.
+    assert halved.quantity == Decimal("0.931")
+    assert full.quantity == Decimal("1.862")
     assert halved.quantity <= full.quantity / 2
     assert halved.risk_fraction == full.risk_fraction
 

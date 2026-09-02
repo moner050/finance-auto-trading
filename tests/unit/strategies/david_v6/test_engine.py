@@ -500,7 +500,7 @@ def test_missing_mandatory_indicator_demotes_binance_to_normal() -> None:
     )
 
     assert decision.grade is SetupGrade.NORMAL
-    assert decision.risk_fraction == Decimal("0.0025")
+    assert decision.risk_fraction == Decimal("0.0015")
 
 
 def test_same_bundle_and_context_produce_same_decision_digest() -> None:
