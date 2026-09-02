@@ -111,6 +111,22 @@ class MySqlPaperJournal:
         row = await self._row(command_id)
         return None if row is None else _to_command(row)
 
+    async def void_and_stage(
+        self,
+        *,
+        voided: PaperOrderReceipt,
+        staged: PaperOrderCommand,
+        digest: bytes,
+    ) -> None:
+        """Void one staged command and stage another, or do neither.
+
+        A stop that moves is one order replacing another, and the moment
+        between them is a position with nothing behind it. Two calls cannot
+        promise that moment does not exist; one transaction can.
+        """
+        await self.persist_receipt(voided)
+        await self.stage_command(staged, digest)
+
     async def unresolved_commands(
         self, *, order_id: UUID | None = None
     ) -> tuple[PaperOrderCommand, ...]:

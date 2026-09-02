@@ -170,6 +170,25 @@ class SessionPaperJournal:
             await MySqlPaperJournal(session).persist_receipt(receipt)
             await session.commit()
 
+    async def staged_command(self, command_id: UUID) -> PaperOrderCommand | None:
+        async with self._sessions() as session:
+            return await MySqlPaperJournal(session).staged_command(command_id)
+
+    async def void_and_stage(
+        self,
+        *,
+        voided: PaperOrderReceipt,
+        staged: PaperOrderCommand,
+        digest: bytes,
+    ) -> None:
+        # One session, so the void and the new order commit together. The
+        # gap between them is a position with no stop behind it.
+        async with self._sessions() as session:
+            await MySqlPaperJournal(session).void_and_stage(
+                voided=voided, staged=staged, digest=digest
+            )
+            await session.commit()
+
     async def unresolved_commands(
         self, *, order_id: UUID | None = None
     ) -> tuple[PaperOrderCommand, ...]:

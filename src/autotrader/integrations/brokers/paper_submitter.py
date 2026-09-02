@@ -45,6 +45,16 @@ class PaperJournal(Protocol):
         self, *, order_id: UUID | None = None
     ) -> tuple[PaperOrderCommand, ...]: ...
 
+    async def staged_command(self, command_id: UUID) -> PaperOrderCommand | None: ...
+
+    async def void_and_stage(
+        self,
+        *,
+        voided: PaperOrderReceipt,
+        staged: PaperOrderCommand,
+        digest: bytes,
+    ) -> None: ...
+
 
 class ExecutionBars(Protocol):
     async def bar_at(
@@ -92,6 +102,16 @@ class StagedSubmission:
     broker_order_id: str
 
 
+# What a voided staged command is recorded as. NO_FILL already means "this
+# command produced nothing", and the reason says which kind of nothing.
+CANCELLED = "CANCELLED"
+REPLACED = "REPLACED"
+
+
+class PaperCommandNotStagedError(ValueError):
+    """Raised when the command to void cannot be found or already resolved."""
+
+
 class PaperBrokerSubmitter:
     """Adapts the internal paper broker to the dispatch protocol."""
 
@@ -107,12 +127,66 @@ class PaperBrokerSubmitter:
         return StagedSubmission(broker_order_id=f"paper:{paper.id.hex}")
 
     async def cancel(self, command: BrokerOrderCommand) -> StagedSubmission:
-        del command
-        raise ValueError("the paper broker cannot cancel a staged order")
+        """Void a staged command so the next bar cannot fill it.
+
+        A stop that has to move is cancelled and replaced, and until this the
+        paper broker refused both - which is why the position manager could
+        decide to move a stop and then had nothing to do it with.
+        """
+        if command.command_type is not CommandType.CANCEL:
+            raise ValueError("cancel needs a CANCEL command")
+        receipt = await self._voided_receipt(command, reason=CANCELLED)
+        await self._journal.persist_receipt(receipt)
+        return StagedSubmission(broker_order_id=f"paper:{receipt.command_id.hex}")
 
     async def replace(self, command: BrokerOrderCommand) -> StagedSubmission:
-        del command
-        raise ValueError("the paper broker cannot replace a staged order")
+        """Void the working command and stage the new terms in its place.
+
+        Both halves or neither. A replace that voided the old stop and then
+        failed to stage the new one would leave the position with nothing
+        behind it, which is worse than the stop it was trying to improve, so
+        the journal writes both in one transaction.
+        """
+        if command.command_type is not CommandType.REPLACE:
+            raise ValueError("replace needs a REPLACE command")
+        paper = self._paper_command(command)
+        await self._journal.void_and_stage(
+            voided=await self._voided_receipt(command, reason=REPLACED),
+            staged=paper,
+            digest=paper.command_digest(),
+        )
+        return StagedSubmission(broker_order_id=f"paper:{paper.id.hex}")
+
+    async def _voided_receipt(
+        self, command: BrokerOrderCommand, *, reason: str
+    ) -> PaperOrderReceipt:
+        """The receipt that resolves the targeted command as producing nothing.
+
+        NO_FILL already means "this command produced nothing"; the reason says
+        which kind of nothing, so a cancelled stop and one that simply never
+        triggered are told apart in the journal.
+        """
+        target = _target_command_id(command)
+        staged = await self._journal.staged_command(target)
+        if staged is None:
+            # Already filled, already voided, or never ours. Any of those and
+            # writing a receipt would overwrite an answer the broker gave.
+            raise PaperCommandNotStagedError("the command to void is not staged")
+        return PaperOrderReceipt(
+            command_id=staged.id,
+            order_id=staged.order_id,
+            status=PaperOrderStatus.NO_FILL,
+            requested_quantity=staged.quantity,
+            filled_quantity=Decimal(0),
+            remaining_quantity=staged.quantity,
+            fill_price=None,
+            fee=Decimal(0),
+            slippage_cost=Decimal(0),
+            filled_at=None,
+            reason_code=reason,
+            source_digest=None,
+            command_digest=staged.command_digest(),
+        )
 
     async def recover_submit(
         self, command: BrokerOrderCommand, *, now: datetime
@@ -171,6 +245,22 @@ async def resolve_paper_fills(
             continue
         resolved.append(await broker.submit(command, now=now))
     return tuple(resolved)
+
+
+def _target_command_id(command: BrokerOrderCommand) -> UUID:
+    """The paper command a cancel or replace is aimed at.
+
+    Read from `target_broker_order_id` rather than from the command's own id,
+    because a cancel is its own command with its own id - using that would
+    void nothing and report success.
+    """
+    target = command.target_broker_order_id
+    if not target or not target.startswith("paper:"):
+        raise ValueError("a cancel or replace must name the paper order it targets")
+    try:
+        return UUID(hex=target.removeprefix("paper:"))
+    except ValueError as error:
+        raise ValueError("the targeted paper order id is not a uuid") from error
 
 
 __all__ = (
