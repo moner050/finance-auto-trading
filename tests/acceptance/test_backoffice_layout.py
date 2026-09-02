@@ -307,3 +307,60 @@ def test_no_screen_prints_a_utc_timestamp() -> None:
                 assert "+00:00" not in page.text, f"{path} prints a UTC timestamp"
 
     _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_at_most_one_dialog_opens_itself() -> None:
+    """A step the server produced opens on load, and exactly one can.
+
+    The script takes the first `data-open` it finds, so two of them on one
+    page would mean an operator is shown one confirmation while a second is
+    waiting behind it unseen - and both carry a second-password field for a
+    different action.
+    """
+    import re
+
+    async def scenario(
+        sessions: async_sessionmaker[AsyncSession], approvals: object
+    ) -> None:
+        app, session_id = await _signed_in(sessions, approvals)
+        async with _client(app, session_id) as http:
+            for path in SCREENS:
+                page = await http.get(path)
+                assert page.status_code == 200, path
+                opening = re.findall(
+                    r'<dialog class="confirm[^"]*"[^>]*data-open>', page.text
+                )
+                assert len(opening) <= 1, f"{path} opens {len(opening)} dialogs"
+
+    _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_a_dialog_that_opens_itself_says_what_it_is_confirming() -> None:
+    """The backdrop hides the page, so anything the operator needs in order
+    to answer has to be inside the dialog rather than behind it.
+
+    Before, the facts sat in a panel and the dialog held only the password
+    field; opening it dimmed the one thing worth reading.
+    """
+    import re
+
+    async def scenario(
+        sessions: async_sessionmaker[AsyncSession], approvals: object
+    ) -> None:
+        app, session_id = await _signed_in(sessions, approvals)
+        async with _client(app, session_id) as http:
+            for path in SCREENS:
+                body = (await http.get(path)).text
+                for match in re.finditer(
+                    r'<dialog class="confirm[^"]*"[^>]*>(.*?)</dialog>', body, re.S
+                ):
+                    dialog = match.group(1)
+                    if 'name="second_password"' not in dialog:
+                        continue
+                    assert 'class="what"' in dialog, path
+
+    _drive(scenario)

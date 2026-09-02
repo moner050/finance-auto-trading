@@ -133,7 +133,14 @@
 {% endif %}
 
 {% if binding %}
-<div class="panel">
+<h2>연결 확인</h2>
+<p class="note">
+  확인 창에서 진행합니다.
+  <button type="button" class="opens-confirm" data-opens="confirm-4">다시 열기</button>
+</p>
+<dialog class="confirm" id="confirm-4" data-open>
+  <h3>정책 바인딩 승인</h3>
+  <p class="what">이 계정의 주문 크기를 정하는 리스크 정책이 바뀝니다.</p>
   <p>
     <strong>{{ binding.account_alias }}</strong>
     ({{ binding.environment }}) 를
@@ -148,15 +155,11 @@
     <input type="hidden" name="account_id" value="{{ binding.account_id }}" />
     <input type="hidden" name="target_version_id"
            value="{{ binding.target_version_id }}" />
-    <button class="go" type="submit">연결 적용</button>
-    <span class="note">승인은 60초 후 만료되며 한 번만 사용됩니다.</span>
+    <p class="note">승인은 60초 후 만료되며 한 번만 사용됩니다.</p>
+    <span class="actions"><button class="go" type="submit">연결 적용</button><button type="button" class="quiet" data-closes>취소</button></span>
   </form>
   {% else %}
-  <button type="button" class="opens-confirm" data-opens="confirm-4">승인…</button>
-  <dialog class="confirm" id="confirm-4">
-    <h3>정책 바인딩 승인</h3>
-    <p class="what">이 계정의 주문 크기를 정하는 리스크 정책이 바뀝니다.</p>
-    <form method="post" action="/bindings/approve">
+  <form method="post" action="/bindings/approve">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
     <input type="hidden" name="account_id" value="{{ binding.account_id }}" />
     <input type="hidden" name="target_version_id"
@@ -166,14 +169,19 @@
              required /></label>
     <span class="actions"><button class="go" type="submit">승인</button><button type="button" class="quiet" data-closes>취소</button></span>
   </form>
-  </dialog>
   {% endif %}
-</div>
+</dialog>
 {% endif %}
 
 {% if facts %}
 <h2>확인</h2>
-<div class="panel">
+<p class="note">
+  확인 창에서 진행합니다.
+  <button type="button" class="opens-confirm" data-opens="confirm-5">다시 열기</button>
+</p>
+<dialog class="confirm wide" id="confirm-5" data-open>
+  <h3>정책 버전 활성화 승인</h3>
+  <p class="what">활성화된 버전이 이후 모든 결정의 사이징 근거가 됩니다.</p>
   <p>
     <span class="code">{{ facts.policy_code }}</span> 를
     {{ facts.active_version or '없음' }} 에서
@@ -181,6 +189,7 @@
     다음 평가부터 이 값으로 매매 크기가 정해집니다.
   </p>
   {% if facts.differences %}
+  <div class="scroller">
   <table>
     <tr><th>항목</th><th>현재</th><th>변경 후</th></tr>
     {% for item in facts.differences %}
@@ -191,24 +200,20 @@
     </tr>
     {% endfor %}
   </table>
+  </div>
   {% else %}
   <p class="note">비교할 기존 버전이 없습니다. 이 시장의 첫 정책입니다.</p>
   {% endif %}
-
   {% if approval_id %}
   <form method="post" action="/policies/apply">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
     <input type="hidden" name="approval_id" value="{{ approval_id }}" />
     <input type="hidden" name="target_version_id" value="{{ facts.target_version_id }}" />
-    <button class="go" type="submit">적용</button>
-    <span class="note">승인은 60초 후 만료되며 한 번만 사용됩니다.</span>
+    <p class="note">승인은 60초 후 만료되며 한 번만 사용됩니다.</p>
+    <span class="actions"><button class="go" type="submit">적용</button><button type="button" class="quiet" data-closes>취소</button></span>
   </form>
   {% else %}
-  <button type="button" class="opens-confirm" data-opens="confirm-5">승인…</button>
-  <dialog class="confirm" id="confirm-5">
-    <h3>정책 버전 활성화 승인</h3>
-    <p class="what">활성화된 버전이 이후 모든 결정의 사이징 근거가 됩니다.</p>
-    <form method="post" action="/policies/approve">
+  <form method="post" action="/policies/approve">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
     <input type="hidden" name="target_version_id" value="{{ facts.target_version_id }}" />
     <label class="field"><span>2차 비밀번호</span>
@@ -216,9 +221,8 @@
              required /></label>
     <span class="actions"><button class="go" type="submit">승인</button><button type="button" class="quiet" data-closes>취소</button></span>
   </form>
-  </dialog>
   {% endif %}
-</div>
+</dialog>
 {% endif %}
-  
+
 {% endblock %}

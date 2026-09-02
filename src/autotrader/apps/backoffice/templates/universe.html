@@ -260,7 +260,13 @@
 
 {% if facts %}
 <h2>확인</h2>
-<div class="panel">
+<p class="note">
+  확인 창에서 진행합니다.
+  <button type="button" class="opens-confirm" data-opens="confirm-7">다시 열기</button>
+</p>
+<dialog class="confirm wide" id="confirm-7" data-open>
+  <h3>유니버스 권위 승인</h3>
+  <p class="what">전략이 어떤 종목을 볼 수 있는지가 바뀝니다.</p>
   <p>
     <span class="code">{{ facts.universe_code }}</span> 의 권위를
     {{ facts.current_effective_date or '없음' }} 에서
@@ -284,21 +290,16 @@
   {% if facts.removed %}<p class="removed code">− {{ facts.removed | join(', ') }}</p>{% endif %}
   {% if facts.changed %}<p class="code">~ {{ facts.changed | join(', ') }}</p>{% endif %}
   <p class="note">다이제스트 <span class="code">{{ facts.digest }}</span></p>
-
   {% if approval_id %}
   <form method="post" action="/universe/activate">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
     <input type="hidden" name="approval_id" value="{{ approval_id }}" />
     <input type="hidden" name="snapshot_id" value="{{ facts.snapshot_id }}" />
-    <button class="go" type="submit">활성화</button>
-    <span class="note">승인은 60초 후 만료되며 한 번만 사용됩니다.</span>
+    <p class="note">승인은 60초 후 만료되며 한 번만 사용됩니다.</p>
+    <span class="actions"><button class="go" type="submit">활성화</button><button type="button" class="quiet" data-closes>취소</button></span>
   </form>
   {% else %}
-  <button type="button" class="opens-confirm" data-opens="confirm-7">승인…</button>
-  <dialog class="confirm" id="confirm-7">
-    <h3>유니버스 권위 승인</h3>
-    <p class="what">전략이 어떤 종목을 볼 수 있는지가 바뀝니다.</p>
-    <form method="post" action="/universe/approve">
+  <form method="post" action="/universe/approve">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}" />
     <input type="hidden" name="snapshot_id" value="{{ facts.snapshot_id }}" />
     <label class="field"><span>2차 비밀번호</span>
@@ -306,9 +307,8 @@
              required /></label>
     <span class="actions"><button class="go" type="submit">승인</button><button type="button" class="quiet" data-closes>취소</button></span>
   </form>
-  </dialog>
   {% endif %}
-</div>
+</dialog>
 {% endif %}
   
 {% endblock %}

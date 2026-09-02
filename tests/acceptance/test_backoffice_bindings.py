@@ -572,3 +572,63 @@ def test_a_binding_for_another_market_does_not_resolve() -> None:
         assert bound.policy_version_id == versions[USDT.code]
 
     _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_pressing_bind_asks_for_the_password_without_a_second_button() -> None:
+    """Section 9 keeps the second password on this step. What it does not ask
+    for is that reaching it takes three presses.
+
+    Pressing 연결 used to re-render the page with a confirmation section
+    somewhere below, where an 승인… button opened the dialog. Both POSTs now
+    return the step already open: the password first, then the apply.
+    """
+
+    async def scenario(
+        sessions: async_sessionmaker[AsyncSession], approvals: object
+    ) -> None:
+        await MySqlSecondPasswords(sessions).establish(PASSWORD, now=NOW)
+        account_id, versions = await _seed(sessions)
+        version_id = versions[KRW.code]
+        app, session_id = await _signed_in(sessions, approvals)
+
+        async with _client(app, session_id) as http:
+            # What the 연결 button in the table posts: no password yet.
+            proposed = await http.post(
+                "/bindings/approve",
+                data={
+                    "csrf_token": CSRF,
+                    "account_id": str(account_id),
+                    "target_version_id": str(version_id),
+                },
+            )
+            approved = await http.post(
+                "/bindings/approve",
+                data={
+                    "csrf_token": CSRF,
+                    "account_id": str(account_id),
+                    "target_version_id": str(version_id),
+                    "second_password": PASSWORD,
+                },
+            )
+
+        assert proposed.status_code == 200
+        assert 'id="confirm-4" data-open' in proposed.text
+        # The password is inside the dialog that opens, and so is the change
+        # it is approving - the backdrop hides whatever is behind it.
+        opened = proposed.text[proposed.text.index('id="confirm-4"') :]
+        opened = opened[: opened.index("</dialog>")]
+        assert 'name="second_password"' in opened
+        assert str(version_id) in opened
+
+        assert approved.status_code == 200
+        assert 'id="confirm-4" data-open' in approved.text
+        applying = approved.text[approved.text.index('id="confirm-4"') :]
+        applying = applying[: applying.index("</dialog>")]
+        assert 'action="/bindings/apply"' in applying
+        assert 'name="approval_id"' in applying
+        # The password is not asked for twice.
+        assert 'name="second_password"' not in applying
+
+    _drive(scenario)
