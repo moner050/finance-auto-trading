@@ -40,7 +40,6 @@ from autotrader.strategies.david_v6.grading import (
     BLOCKING_BIG_TRADE_AHEAD,
     DIRECTION_LONG,
     DIRECTION_SHORT,
-    FIBONACCI_EXTENSION_CLUSTER,
     HIDDEN_DIVERGENCE,
     HIGH_IMPACT_NEWS_RISK,
     HIGHER_TIMEFRAME_BIAS,
@@ -50,11 +49,7 @@ from autotrader.strategies.david_v6.grading import (
     V1_MIG_REVERSAL,
     V1_SECADO,
 )
-from autotrader.strategies.david_v6.hlit import (
-    HlitFacts,
-    build_hlit_setups,
-    extension_prices,
-)
+from autotrader.strategies.david_v6.hlit import HlitFacts, build_hlit_setups
 from autotrader.strategies.david_v6.metodo import (
     evaluate_metodo,
 )
@@ -286,8 +281,6 @@ def derive_indicators(
         if regime.trend is aligned:
             matched.append(_indicator(HIGHER_TIMEFRAME_BIAS, regime_hash))
 
-    _extension_cluster(result, side=side, matched=matched)
-
     order_flow_hash = _digest_bytes(bundle.order_flow)
     if order_flow_hash is not None:
         flow = cast(OrderFlowFacts, bundle.order_flow.value)
@@ -326,51 +319,23 @@ def derive_indicators(
     return tuple(sorted(matched, key=lambda indicator: indicator.key))
 
 
-def _extension_cluster(
-    result: AssemblyResult, *, side: Side, matched: list[MatchedIndicator]
-) -> None:
-    """Section 21.3's +2 for an extension that lands on something.
-
-    The two ratios are section 21.4's and section 15.2 rates their values
-    HIGH. What "cluster" means is not written down anywhere, so it is defined
-    here as containment rather than as a distance: an extension counts when it
-    falls inside a marked HLIT zone or inside the profile's value area.
-
-    Containment rather than a tolerance on purpose. A tolerance would be a
-    number nobody published, and section 15.2's instruction for those is to
-    expose them as parameters and run a sensitivity analysis. The zone and the
-    value area already have measured edges, so the question can be asked
-    without inventing a width. This is a V1 reading of the name and should be
-    read as an estimate, not as the document's rule.
-    """
-    # The drawn levels sit on the result rather than in the bundle, and the
-    # divergence they were drawn from is what provenance they have - the
-    # document's first invariant is that no anchor exists without it.
-    divergence_hash = _digest_bytes(result.bundle.divergence)
-    if result.hlit is None or divergence_hash is None:
-        return
-    setup = result.hlit.for_side(side)
-    if setup is None:
-        return
-    bundle = result.bundle
-    intervals: list[tuple[Decimal, Decimal]] = []
-    if bundle.zones.state is EvidenceState.AVAILABLE:
-        intervals.extend(
-            (zone.lower_boundary, zone.upper_boundary)
-            for zone in cast(ZoneFacts, bundle.zones.value).zones
-        )
-    if bundle.profile.state is EvidenceState.AVAILABLE:
-        profile = cast(ProfileFacts, bundle.profile.value)
-        if profile.value_area_low is not None and profile.value_area_high is not None:
-            intervals.append((profile.value_area_low, profile.value_area_high))
-    if not intervals:
-        return
-    if any(
-        low <= price <= high
-        for price in extension_prices(setup)
-        for low, high in intervals
-    ):
-        matched.append(_indicator(FIBONACCI_EXTENSION_CLUSTER, divergence_hash))
+# `_extension_cluster` lived here and produced FIBONACCI_EXTENSION_CLUSTER
+# when an extension fell inside a marked zone or the value area. It fired on
+# three of three setups, and measuring the geometry says why: twenty zones
+# cover 96% of the price range they span, so "inside a zone" is very nearly
+# always true. The predicate was not strict or loose, it was vacuous, and a
+# +2 that every setup earns is the candidate threshold quietly lowered by two.
+#
+# Removed rather than replaced. Containment fails because the interior of a
+# tiled range means nothing; the meaningful question is whether an extension
+# lands on a zone *boundary*, which is a price the market turned at. That
+# needs a tolerance, section 15.2's instruction for a number nobody published
+# is to expose it and run a sensitivity analysis, and choosing one here by
+# how plausible the hit rate looks would be fitting the thing under test.
+#
+# `extension_prices` stays. Section 21.4's 1.272 and 1.618 are the documented
+# targets and section 15.2 rates their values HIGH; what was wrong was the use
+# made of them here, not the levels.
 
 
 def _indicator(key: str, evidence_hash: bytes) -> MatchedIndicator:

@@ -24,6 +24,7 @@ from autotrader.strategies.david_v6.grading import (
     _RESEARCH_WEIGHTS,
     ABNORMAL_SPREAD_OR_SLIPPAGE,
     CANDIDATE_SCORE,
+    FIBONACCI_EXTENSION_CLUSTER,
     V1_CERO_OSMOTICO,
     indicator_weight,
 )
@@ -48,6 +49,7 @@ ASSEMBLY = (
 WITHOUT_A_PRODUCER = frozenset(
     {
         ABNORMAL_SPREAD_OR_SLIPPAGE,
+        FIBONACCI_EXTENSION_CLUSTER,
         V1_CERO_OSMOTICO,
     }
 )
