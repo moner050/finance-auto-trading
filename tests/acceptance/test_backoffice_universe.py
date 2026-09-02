@@ -25,6 +25,7 @@ from redis import asyncio as redis
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from autotrader.application.universe_manifest import UNIVERSE_CODES
 from autotrader.apps.backoffice.app import create_app
 from autotrader.apps.backoffice.auth import (
     SESSION_COOKIE,
@@ -518,5 +519,44 @@ def test_the_upload_is_audited_even_though_it_changes_nothing() -> None:
             ).all()
 
         assert "STAGE_UNIVERSE_SNAPSHOT" in set(actions)
+
+    _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_the_screen_explains_the_document_it_will_accept() -> None:
+    """An operator arriving here has a published list and no idea what shape
+    of file this screen wants. Every refusal in the parser is correct and
+    none of them says what the right document looks like, so the format has
+    to be on the screen that asks for it.
+
+    Named fields rather than a word count: a field added to the parser and
+    not to the explanation is exactly the drift this catches.
+    """
+
+    async def scenario(
+        sessions: async_sessionmaker[AsyncSession], approvals: object
+    ) -> None:
+        app, session_id = await _signed_in(sessions, approvals)
+        async with _client(app, session_id) as http:
+            page = await http.get("/universe")
+
+        assert page.status_code == 200
+        for field in (
+            "universe_code",
+            "effective_date",
+            "published_at",
+            "members",
+            "symbol",
+            "common_stock",
+            "sector",
+        ):
+            assert field in page.text, field
+        for code in UNIVERSE_CODES:
+            assert code in page.text, code
+        # The digest is the one field an operator is most likely to fill in
+        # wrongly, because the obvious guess - the file's hash - is not it.
+        assert "파일의 sha256 이 아닙니다" in page.text
 
     _drive(scenario)

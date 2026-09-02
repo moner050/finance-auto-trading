@@ -9,11 +9,143 @@
   그래서 이 화면에는 종목을 한 개 추가하는 방법이 없습니다 — 손으로 넣은 종목은
   아무도 발표하지 않은 유니버스를 만듭니다. 올리는 단위는 매니페스트 전체입니다.
 </p>
-<p class="note">
-  활성화는 이전 목록을 <strong>덮어쓰지 않고 supersede</strong> 합니다.
-  "그 거래를 결정한 날 이 종목이 KOSPI 200 보통주였는가"는 답이 있는 질문이고,
-  어제 목록을 덮어쓰는 순간 답이 사라집니다.
-</p>
+
+<details class="help" open>
+  <summary>이 화면을 쓰는 법</summary>
+
+  <h4>순서</h4>
+  <ol>
+    <li>
+      발표된 목록을 아래 형식의 JSON 매니페스트 파일로 만듭니다.
+      기관이 발표한 그대로여야 하고, 여기서 손으로 고친 목록은
+      출처가 없는 목록입니다.
+    </li>
+    <li>
+      <strong>스테이징</strong>. 형식·중복·개수를 검사한 뒤 저장합니다.
+      스테이징은 아무것도 사용되게 만들지 않으므로 2차 비밀번호를 묻지 않습니다.
+      잘못 올렸으면 활성화하지 않고 두면 됩니다.
+    </li>
+    <li>
+      아래 <strong>활성 대비 변경</strong>에서 추가·제외·재분류를 확인합니다.
+      종목 수만 보면 하나가 다른 하나로 바뀐 것을 볼 수 없습니다.
+    </li>
+    <li>
+      <strong>승인</strong>. 2차 비밀번호를 입력합니다. 승인은 확인 화면에 보인
+      그 다이제스트에 묶이므로, 세 종목 바뀌는 것을 승인한 사람이 서른 종목
+      바뀌는 활성화에 그 승인을 쓸 수 없습니다. 60초 후 만료되고 한 번만 쓰입니다.
+    </li>
+    <li>
+      <strong>활성화</strong>. 다음 평가부터 적용되고, 직전 목록은 지워지지 않고
+      supersede 됩니다. "그 거래를 결정한 날 이 종목이 목록에 있었는가"는
+      답이 있는 질문이고, 덮어쓰는 순간 답이 사라집니다.
+    </li>
+  </ol>
+
+  <h4>매니페스트 형식</h4>
+  <ul>
+    <li>
+      <span class="code">universe_code</span> — <span class="code">KOSPI200</span>,
+      <span class="code">SP100</span>, <span class="code">BINANCE_USDM</span> 중 하나.
+      그 외의 값은 거부됩니다.
+    </li>
+    <li>
+      <span class="code">effective_date</span> — 이 목록이 사실인 날짜
+      (<span class="code">YYYY-MM-DD</span>). 올린 날짜가 아니라 목록의 기준일입니다.
+    </li>
+    <li>
+      <span class="code">source</span> — <span class="code">name</span>(64자),
+      <span class="code">reference</span>(255자),
+      <span class="code">published_at</span>(오프셋이 붙은 시각, 예
+      <span class="code">2026-09-01T18:00:00+09:00</span>). 출처는 기록되고 감사되지만
+      다이제스트에는 들어가지 않습니다.
+    </li>
+    <li>
+      <span class="code">members</span> — 1개 이상 5000개 이하, 같은
+      <span class="code">symbol</span>(32자)이 두 번 나오면 거부됩니다.
+    </li>
+    <li>
+      <span class="code">common_stock</span> — KOSPI200·SP100 에서는
+      <strong>필수</strong>이고 정확히 true 또는 false 여야 합니다.
+      BINANCE_USDM 에서는 무기한 선물이 주식 클래스가 아니므로
+      <strong>넣으면 거부</strong>됩니다.
+    </li>
+    <li>
+      <span class="code">sector</span> — 선택(64자). 빠져도 업로드는 통과하지만,
+      그 종목은 판단에서 <span class="code">SECTOR_AUTHORITY_UNAVAILABLE</span> 로
+      막힙니다. 거부하지 않는 이유는 그 편이 더 정확한 사실을 남기기 때문입니다.
+    </li>
+    <li>파일은 1MB 이하여야 합니다.</li>
+  </ul>
+
+  <pre class="sample">{
+  "universe_code": "KOSPI200",
+  "effective_date": "2026-09-01",
+  "source": {
+    "name": "KRX",
+    "reference": "https://data.krx.co.kr/... (2026-09-01)",
+    "published_at": "2026-09-01T18:00:00+09:00"
+  },
+  "members": [
+    { "symbol": "005930", "common_stock": true, "sector": "it" },
+    { "symbol": "005935", "common_stock": false, "sector": "it" },
+    { "symbol": "000660", "common_stock": true, "sector": "it" }
+  ]
+}</pre>
+
+  <h4>다이제스트</h4>
+  <p>
+    업로드 칸의 다이제스트는 <strong>파일의 sha256 이 아닙니다</strong>.
+    <span class="code">universe_code</span> · <span class="code">effective_date</span> ·
+    <span class="code">members</span> 만 심볼 순으로 정렬한 정규형의 sha256 입니다.
+    그래서 같은 목록을 다른 곳에서 받아 들여쓰기와 순서가 달라도 같은 값이 나오고,
+    종목이 하나만 달라도 반드시 다른 값이 나옵니다.
+    발표자가 같은 규칙으로 계산한 값을 주지 않았다면 비워두십시오 —
+    파일 해시를 넣으면 맞는 파일이 거부됩니다.
+  </p>
+  <p>
+    아래 표의 다이제스트는 앞 16자리만 보여줍니다. 두 스냅샷이 같은 목록인지
+    확인하는 데는 충분하고, 전체 값이 필요하면 감사 기록에 남아 있습니다.
+  </p>
+
+  <h4>활성화하면 무엇이 달라지는가</h4>
+  <p>
+    <strong>KOSPI200 · SP100</strong> — 현금 주식 판단의 첫 관문입니다. 목록에 없으면
+    <span class="code">NOT_MEMBER_AS_OF</span>, 보통주가 아니면
+    <span class="code">NOT_COMMON_STOCK_AS_OF</span> 로 신규 진입이 막힙니다.
+  </p>
+  <p>
+    <strong>BINANCE_USDM</strong> — 지금 돌고 있는 무기한 선물 루프는 이 목록으로
+    걸러지지 않습니다. 엔진이 선물 시장의 유니버스 증거를
+    <span class="code">UNIVERSE_CASH_ONLY</span>(해당 없음)로 처리하기 때문입니다.
+    올려두면 기록으로는 유효하지만, 활성화해도 루프가 무엇을 거래하는지는
+    달라지지 않습니다.
+  </p>
+
+  <h4>자주 나오는 거부</h4>
+  <ul>
+    <li>
+      <span class="code">is not a known universe</span> —
+      <span class="code">universe_code</span> 오타.
+    </li>
+    <li><span class="code">appears twice</span> — 같은 심볼이 두 줄.</li>
+    <li>
+      <span class="code">needs an exact common_stock flag</span> —
+      주식 유니버스인데 플래그가 없거나 true/false 가 아님.
+    </li>
+    <li>
+      <span class="code">is not a share class</span> — BINANCE_USDM 에
+      <span class="code">common_stock</span> 을 넣음.
+    </li>
+    <li>
+      <span class="code">does not match the claimed digest</span> —
+      넣은 다이제스트와 계산한 값이 다름. 위의 다이제스트 설명을 보십시오.
+    </li>
+    <li>
+      <span class="code">a universe with no members filters nothing</span> —
+      <span class="code">members</span> 가 비어 있음.
+    </li>
+  </ul>
+</details>
 
 {% if view.missing_authorities %}
 <p class="danger">
@@ -131,7 +263,13 @@
     <span class="code">{{ facts.universe_code }}</span> 의 권위를
     {{ facts.current_effective_date or '없음' }} 에서
     <strong>{{ facts.effective_date }}</strong> 로 바꿉니다.
+    {% if facts.universe_code == 'BINANCE_USDM' %}
+    무기한 선물 판단은 유니버스로 걸러지지 않으므로
+    (<span class="code">UNIVERSE_CASH_ONLY</span>) 루프가 거래하는 대상은
+    달라지지 않고, 기록으로만 남습니다.
+    {% else %}
     다음 평가부터 전략은 이 목록으로 걸러집니다.
+    {% endif %}
   </p>
   <p>
     종목 {{ facts.current_member_count if facts.current_member_count is not none else 0 }}

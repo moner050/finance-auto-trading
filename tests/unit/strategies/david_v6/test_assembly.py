@@ -22,7 +22,7 @@ from autotrader.strategies.david_v6.assembly import (
 )
 from autotrader.strategies.david_v6.calendar import EventCalendar, MarketEvent
 from autotrader.strategies.david_v6.costs import FeeSchedule
-from autotrader.strategies.david_v6.engine import evaluate_v6
+from autotrader.strategies.david_v6.engine import _required_keys, evaluate_v6
 from autotrader.strategies.david_v6.grading import (
     DIRECTION_LONG,
     DIRECTION_SHORT,
@@ -592,3 +592,22 @@ def test_the_assembled_bundle_reaches_a_decision() -> None:
     assert "EXHAUSTION_ABSENT" not in decision.blockers
     assert "NO_MARKED_ZONE" not in decision.blockers
     assert "DIRECTION_EVIDENCE_MISSING" not in decision.blockers
+
+
+def test_the_perpetual_market_is_not_filtered_by_a_universe() -> None:
+    """The universe screen now says this in so many words, so it has to be
+    true here rather than only in a reviewer's memory.
+
+    A universe is a published constituent list of a cash market. A perpetual
+    future is not a constituent of anything, so the assembler marks the fact
+    NOT_APPLICABLE and the engine does not ask for it. Wiring one in later is
+    a legitimate change - it just has to take the screen's explanation with
+    it, and this is what will say so.
+    """
+    bundle = assemble_v6_evidence(_inputs(V6Market.BINANCE_USDM)).bundle
+
+    assert bundle.universe.state is EvidenceState.NOT_APPLICABLE
+    assert bundle.universe.blocker_code == "UNIVERSE_CASH_ONLY"
+    assert "universe" not in _required_keys(V6Market.BINANCE_USDM, StrategyFamily.HLIT)
+    # And the cash side still is filtered, or the claim would be vacuous.
+    assert "universe" in _required_keys(V6Market.US_CASH, StrategyFamily.HLIT)
