@@ -219,6 +219,7 @@
 {% endif %}
 
 {% if authority.history %}
+<div class="scroller">
 <table>
   <tr>
     <th>기준일</th><th>상태</th><th>종목</th><th>다이제스트</th>
@@ -251,6 +252,7 @@
   </tr>
   {% endfor %}
 </table>
+</div>
 {% else %}
 <p class="empty">저장된 스냅샷이 없습니다.</p>
 {% endif %}

@@ -10,23 +10,40 @@
          block, so the same table looked different depending on where the
          operator had clicked. One stylesheet, defined once. */
       :root {
-        --ink: #16181d;
+        /* Ink and paper. The canvas is a shade off white and the things you
+           read sit on true white, so depth comes from luminance rather than
+           from drawing a box around everything. */
+        --ink: #14161a;
         /* Was #6b6b6b, which fails contrast at the sizes it is used at.
            Secondary text on this screen is often the only label a number
            has. */
-        --muted: #5a6068;
-        --line: #e4e6ea;
-        --line-strong: #c3c7ce;
-        --page: #ffffff;
-        --rail: #f6f7f9;
-        --raised: #fbfcfd;
-        --hover: #f2f4f7;
-        --focus: #1a4fa0;
-        --danger: #b00020;
-        --danger-ink: #8a0018;
-        --ok: #00701a;
-        --accent: #1a4fa0;
-        --warn-bg: #fff8e1;
+        --muted: #5b626d;
+        --faint: #858c97;
+        --line: #e7e9ee;
+        --line-strong: #d0d5dd;
+        --page: #f6f7f9;
+        --surface: #ffffff;
+        --rail: #fbfbfc;
+        --raised: #ffffff;
+        --hover: #f4f6f9;
+        --focus: #17457f;
+        --danger: #a51c30;
+        --danger-ink: #7d1424;
+        --danger-bg: #fdf3f4;
+        --ok: #16663a;
+        --ok-bg: #f1f8f3;
+        --accent: #17457f;
+        --accent-soft: #eef3fa;
+        --warn-bg: #fdf8ec;
+
+        /* One radius scale and one elevation scale, so nothing is rounded or
+           lifted by a number somebody picked once. */
+        --radius-sm: 5px;
+        --radius: 8px;
+        --radius-lg: 12px;
+        --shadow-sm: 0 1px 2px rgb(16 18 22 / 4%), 0 1px 3px rgb(16 18 22 / 5%);
+        --shadow-md: 0 2px 4px rgb(16 18 22 / 4%), 0 8px 20px rgb(16 18 22 / 7%);
+        --shadow-lg: 0 12px 48px rgb(16 18 22 / 18%);
       }
       * { box-sizing: border-box; }
       html { -webkit-text-size-adjust: 100%; }
@@ -34,12 +51,21 @@
         margin: 0;
         color: var(--ink);
         background: var(--page);
-        font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic",
-          sans-serif;
+        /* Pretendard first where it is installed - it is the Korean face
+           most of this audience already has, and it sets Hangul and Latin at
+           one weight. Everything after it ships with the operating system:
+           no webfont is fetched, because an operations console should not
+           wait on a font server to say the loop has stopped. */
+        font-family: Pretendard, "Pretendard Variable", -apple-system,
+          "Apple SD Gothic Neo", system-ui, "Segoe UI Variable Text",
+          "Segoe UI", "Malgun Gothic", sans-serif;
         font-size: 15px;
-        line-height: 1.6;
+        line-height: 1.62;
+        letter-spacing: -.003em;
         -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
       }
+      ::selection { background: var(--accent-soft); }
 
       /* Every interactive thing gets the same visible focus ring. An
          operator driving this from the keyboard should never have to guess
@@ -47,7 +73,7 @@
       :where(a, button, input, select, textarea, summary):focus-visible {
         outline: 2px solid var(--focus);
         outline-offset: 2px;
-        border-radius: 3px;
+        border-radius: var(--radius-sm);
       }
 
       .shell { display: flex; min-height: 100vh; align-items: stretch; }
@@ -55,102 +81,164 @@
       /* The rail. Present on every screen so the operator always knows what
          else exists and where they are. */
       .rail {
-        flex: 0 0 216px;
+        flex: 0 0 228px;
         background: var(--rail);
         border-right: 1px solid var(--line);
-        padding: 1.25rem 0;
+        padding: 1.35rem .7rem;
       }
       .rail .brand {
         font-weight: 700;
         font-size: .95rem;
-        padding: 0 1.25rem 1rem;
-        letter-spacing: -.01em;
+        padding: .1rem .65rem 1.15rem;
+        letter-spacing: -.02em;
       }
       .rail a {
         display: block;
-        padding: .5rem 1.25rem;
-        color: var(--ink);
+        padding: .45rem .65rem;
+        margin: 1px 0;
+        color: var(--muted);
         text-decoration: none;
-        border-left: 3px solid transparent;
-        font-size: .92rem;
+        border-radius: var(--radius-sm);
+        font-size: .9rem;
       }
-      .rail a:hover { background: #efeff1; }
+      .rail a:hover { background: var(--hover); color: var(--ink); }
+      /* Where you are, said twice: the accent bar carries it at a glance and
+         the weight carries it for anyone who cannot see the colour. */
       .rail a[aria-current="page"] {
-        border-left-color: var(--accent);
-        background: #fff;
+        background: var(--surface);
+        box-shadow: var(--shadow-sm), inset 3px 0 0 var(--accent);
+        color: var(--ink);
         font-weight: 600;
       }
       .rail .group {
-        margin-top: 1rem;
-        padding: 0 1.25rem .25rem;
-        font-size: .72rem;
-        letter-spacing: .08em;
+        margin-top: 1.15rem;
+        padding: 0 .65rem .3rem;
+        font-size: .68rem;
+        letter-spacing: .09em;
         text-transform: uppercase;
-        color: var(--muted);
+        color: var(--faint);
       }
 
-      .main { flex: 1 1 auto; min-width: 0; padding: 1.5rem 2rem 4rem; }
+      /* Capped, because a table stretched across a wide monitor makes the
+         eye travel for nothing. */
+      .main {
+        flex: 1 1 auto;
+        min-width: 0;
+        padding: 1.75rem 2.25rem 5rem;
+        max-width: 1360px;
+      }
       .topline {
         display: flex;
         justify-content: space-between;
         align-items: baseline;
         gap: 1rem;
         border-bottom: 1px solid var(--line);
-        padding-bottom: .75rem;
-        margin-bottom: 1.5rem;
+        padding-bottom: .85rem;
+        margin-bottom: 1.6rem;
         flex-wrap: wrap;
       }
-      h1 { font-size: 1.3rem; margin: 0; letter-spacing: -.015em; }
+      h1 {
+        font-size: 1.35rem;
+        margin: 0;
+        letter-spacing: -.022em;
+        font-weight: 650;
+      }
       /* A rule under each section heading, so the eye finds the boundaries
          of a long screen without reading the words. */
       h2 {
         font-size: 1.02rem;
-        margin: 2.2rem 0 .7rem;
-        padding-bottom: .35rem;
+        font-weight: 650;
+        margin: 2.4rem 0 .8rem;
+        padding-bottom: .4rem;
         border-bottom: 1px solid var(--line);
-        letter-spacing: -.01em;
+        letter-spacing: -.016em;
       }
-      h3 { font-size: .93rem; margin: 1.5rem 0 .5rem; color: var(--ink); }
+      h3 {
+        font-size: .93rem;
+        font-weight: 650;
+        margin: 1.5rem 0 .5rem;
+        color: var(--ink);
+        letter-spacing: -.012em;
+      }
       p { margin: .5rem 0; }
       /* Prose stays inside a readable measure; tables and panels do not. */
       .main > p, .panel > p, .note { max-width: 68ch; }
+      .main > p.state { max-width: none; }
 
       /* Read-only summaries are plain; anything that mutates sits in a
          bordered panel. Section 12 asks for the two to be distinguishable
          without reading them. */
-      table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+      /* A table is a surface, not a grid of rules. Hairlines between rows,
+         nothing between columns, and the whole thing lifted a little off the
+         canvas - which is what makes the page read as a set of objects
+         rather than as one long sheet.
+
+         `separate` rather than `collapse` so the corners can be rounded; the
+         alternative, `overflow: hidden` on the table, would kill the sticky
+         header. */
+      table {
+        border-collapse: separate;
+        border-spacing: 0;
+        width: 100%;
+        font-size: .885rem;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow-sm);
+        margin: .9rem 0 1.4rem;
+        font-variant-numeric: tabular-nums;
+      }
       th, td {
         border-bottom: 1px solid var(--line);
-        padding: .55rem .7rem;
+        padding: .62rem .85rem;
         text-align: left;
         vertical-align: top;
       }
+      tr:last-child td, tr:last-child th { border-bottom: 0; }
       /* Held while a long table scrolls: a row of numbers with the headings
-         off screen is a row of numbers nobody can read. */
-      thead th {
+         off screen is a row of numbers nobody can read. The rule under a
+         sticky header is drawn with a shadow, because a border on a sticky
+         cell is painted out from under it as it moves. */
+      thead th, tr:first-child th {
         position: sticky;
         top: 0;
         z-index: 1;
-        background: var(--page);
-        color: var(--muted);
+        background: var(--surface);
+        color: var(--faint);
         font-weight: 600;
-        font-size: .78rem;
-        letter-spacing: .03em;
+        font-size: .715rem;
+        letter-spacing: .06em;
         text-transform: uppercase;
-        border-bottom: 1px solid var(--line-strong);
+        border-bottom: 0;
+        box-shadow: inset 0 -1px 0 var(--line-strong);
       }
-      tbody tr:nth-child(even) td { background: #fafbfc; }
-      tbody tr:hover td { background: var(--hover); }
+      tr:first-child th:first-child { border-top-left-radius: var(--radius); }
+      tr:first-child th:last-child { border-top-right-radius: var(--radius); }
+      /* A table with more columns than the window has room for used to
+         push its last column out past the card and clip it - which on the
+         universe history is the column holding the activate button. It
+         scrolls on its own now instead of the page scrolling sideways. */
+      .scroller {
+        overflow-x: auto;
+        margin: .9rem 0 1.4rem;
+        border-radius: var(--radius);
+      }
+      .scroller > table { margin: 0; min-width: 52rem; }
+
+      /* No zebra. At these widths the hairline and the hover carry the row,
+         and a stripe under every second row is ink spent on nothing. */
+      tbody tr:hover td, tr:hover td { background: var(--hover); }
       td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
       /* Identifiers line up so two that differ are visibly different. */
       td .code, td.code { font-variant-numeric: tabular-nums; }
 
       .panel {
-        border: 1px solid var(--line-strong);
-        border-radius: 6px;
-        padding: 1.1rem 1.35rem;
-        margin: 1.1rem 0;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 1.2rem 1.45rem;
+        margin: 1.2rem 0;
         background: var(--raised);
+        box-shadow: var(--shadow-sm);
       }
       .panel h2, .panel h3 { margin-top: 0; }
       .panel h2 { border-bottom: 0; padding-bottom: 0; }
@@ -181,19 +269,21 @@
       }
       .series .bar {
         width: 100%;
-        background: var(--accent);
-        border-radius: 2px 2px 0 0;
+        background: linear-gradient(180deg, #2a63a8 0%, var(--accent) 100%);
+        border-radius: 3px 3px 0 0;
         min-height: 2px;
       }
       /* An hour that produced an approved setup is the one thing on this
          chart worth interrupting for, so it is the only colour change. */
-      .series .bar.took { background: var(--ok); }
+      .series .bar.took {
+        background: linear-gradient(180deg, #1e7a47 0%, var(--ok) 100%);
+      }
       .series li.idle .bar {
         background: repeating-linear-gradient(
-          45deg, var(--line), var(--line) 2px, transparent 2px, transparent 4px);
+          45deg, var(--line), var(--line) 1px, transparent 1px, transparent 5px);
         height: 100%;
         border-radius: 0;
-        opacity: .55;
+        opacity: .8;
       }
       .axis {
         display: flex;
@@ -230,7 +320,9 @@
       }
       .figures dd {
         margin: 0;
-        font-size: 1.35rem;
+        font-size: 1.4rem;
+        font-weight: 600;
+        letter-spacing: -.02em;
         font-variant-numeric: tabular-nums;
         line-height: 1.2;
       }
@@ -240,19 +332,21 @@
          the same place, and never repeated per cell. */
       .zone {
         margin-left: .6rem;
-        padding: .1rem .4rem;
-        border: 1px solid var(--line-strong);
-        border-radius: 3px;
-        font-size: .72rem;
-        color: var(--muted);
+        padding: .12rem .45rem;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--surface);
+        font-size: .7rem;
+        color: var(--faint);
       }
 
       details.help {
-        border: 1px solid var(--line-strong);
-        border-radius: 6px;
-        margin: 1.1rem 0;
-        padding: 0 1.35rem;
-        background: var(--rail);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        margin: 1.2rem 0;
+        padding: 0 1.45rem;
+        background: var(--surface);
+        box-shadow: var(--shadow-sm);
       }
       details.help > summary {
         cursor: pointer;
@@ -279,7 +373,7 @@
         max-width: 68ch;
         background: var(--page);
         border: 1px solid var(--line);
-        border-radius: 4px;
+        border-radius: var(--radius-sm);
         padding: .8rem 1rem;
         font-family: ui-monospace, "Cascadia Mono", monospace;
         font-size: .78rem;
@@ -287,9 +381,11 @@
       }
 
       .code {
-        font-family: ui-monospace, "Cascadia Mono", monospace;
-        font-size: .82rem;
+        font-family: ui-monospace, "Cascadia Mono", "JetBrains Mono",
+          "Consolas", monospace;
+        font-size: .8rem;
         color: var(--muted);
+        font-variant-numeric: tabular-nums;
       }
       .ok { color: var(--ok); font-weight: 600; }
       .danger { color: var(--danger); font-weight: 600; }
@@ -299,14 +395,20 @@
       .removed { color: var(--danger); }
 
       input, select, textarea {
-        padding: .5rem .6rem;
+        padding: .5rem .65rem;
         font: inherit;
         font-size: .9rem;
+        color: var(--ink);
         border: 1px solid var(--line-strong);
-        border-radius: 4px;
-        background: #fff;
+        border-radius: var(--radius-sm);
+        background: var(--surface);
+        transition: border-color .12s ease, box-shadow .12s ease;
       }
-      input:focus, select:focus, textarea:focus { border-color: var(--focus); }
+      input:hover, select:hover, textarea:hover { border-color: #b9c0ca; }
+      input:focus, select:focus, textarea:focus {
+        border-color: var(--focus);
+        box-shadow: 0 0 0 3px var(--accent-soft);
+      }
       label { font-size: .9rem; display: inline-block; }
       /* A field and its label as one block, so a form reads down rather than
          wrapping unpredictably. */
@@ -314,47 +416,54 @@
       .field > span { display: block; margin-bottom: .25rem; color: var(--muted); }
       .field input, .field select { width: 100%; max-width: 22rem; }
       button {
-        padding: .5rem .95rem;
+        padding: .48rem 1rem;
         font: inherit;
-        font-size: .9rem;
+        font-size: .875rem;
+        font-weight: 550;
         cursor: pointer;
         border: 1px solid var(--line-strong);
-        border-radius: 3px;
-        background: #f2f2f4;
+        border-radius: var(--radius-sm);
+        background: var(--surface);
         color: var(--ink);
+        box-shadow: var(--shadow-sm);
+        transition: background .12s ease, border-color .12s ease;
       }
-      button:hover { background: #e8e8ec; }
+      button:hover { background: var(--hover); border-color: #b9c0ca; }
+      /* Pressed moves; it is the only motion on the page and it belongs to
+         the thing the operator just committed to. */
+      button:active { transform: translateY(1px); box-shadow: none; }
       /* Exposure-enabling actions are never the quiet default: they are
          deliberate and green, and they always follow a confirmation panel. */
       .go {
         background: var(--ok);
         color: #fff;
-        border-color: #005414;
-        font-weight: 600;
+        border-color: #10502d;
+        font-weight: 650;
       }
-      .go:hover { background: #005f16; }
+      .go:hover { background: #12572f; border-color: #0d431f; }
       /* Safety actions. Section 12 keeps them prominent and out of the
          dangerous-action dialog: one click, always reachable. */
       .stop {
         background: var(--danger);
         color: #fff;
         border-color: var(--danger-ink);
-        font-weight: 600;
+        font-weight: 650;
       }
-      .stop:hover { background: #970019; }
-      .quiet { background: #f2f2f4; }
+      .stop:hover { background: #8e1729; border-color: #6b101e; }
+      .quiet { background: transparent; box-shadow: none; color: var(--muted); }
+      .quiet:hover { background: var(--hover); }
 
       .safety {
         display: flex;
         gap: .6rem;
         align-items: center;
         flex-wrap: wrap;
-        padding: .8rem 1rem;
-        border: 1px solid var(--line-strong);
+        padding: .85rem 1.1rem;
+        border: 1px solid #edd3d8;
         border-left: 4px solid var(--danger);
-        border-radius: 4px;
-        background: #fffafa;
-        margin-bottom: 1.5rem;
+        border-radius: var(--radius);
+        background: var(--danger-bg);
+        margin-bottom: 1.6rem;
       }
       .safety button { padding: .55rem 1.1rem; }
 
@@ -378,15 +487,19 @@
       }
       html:not(.has-dialog) .opens-confirm { display: none; }
       dialog.confirm {
-        border: 1px solid var(--line-strong);
-        border-radius: 8px;
-        padding: 1.25rem 1.4rem;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-lg);
+        padding: 1.4rem 1.55rem;
         max-width: 32rem;
         width: calc(100% - 2rem);
-        box-shadow: 0 10px 40px rgb(0 0 0 / 18%);
+        box-shadow: var(--shadow-lg);
+        background: var(--surface);
         color: var(--ink);
       }
-      dialog.confirm::backdrop { background: rgb(16 18 22 / 45%); }
+      dialog.confirm::backdrop {
+        background: rgb(16 18 22 / 42%);
+        backdrop-filter: blur(2px);
+      }
       dialog.confirm h3 { margin-top: 0; }
       dialog.confirm .actions {
         display: flex;
@@ -412,11 +525,92 @@
         margin: 1rem 0;
       }
 
-      .flash { padding: .7rem 1rem; border-radius: 4px; margin-bottom: 1rem; }
-      .flash.bad { background: #fdecef; border: 1px solid #f3c2cc; }
-      .flash.good { background: #edf7ef; border: 1px solid #bfe0c6; }
+      .flash {
+        padding: .75rem 1rem;
+        border-radius: var(--radius);
+        margin-bottom: 1rem;
+        font-size: .9rem;
+      }
+      .flash.bad { background: var(--danger-bg); border: 1px solid #edd3d8; }
+      .flash.good { background: var(--ok-bg); border: 1px solid #cfe4d6; }
 
-      a { color: var(--accent); }
+      a { color: var(--accent); text-underline-offset: .2em; }
+
+      /* The most important line on the console: whether this account is
+         permitted to trade right now. It carried `state` and `running` or
+         `halted` and none of the three had a rule, so the one sentence an
+         operator opens this page to read rendered as plain text.
+
+         Armed is stated quietly and stopped is stated loudly. That asymmetry
+         is deliberate: running is the expected condition and does not need
+         to shout, and a halt that looked like ordinary text is how somebody
+         reads past it. */
+      .state {
+        display: flex;
+        align-items: baseline;
+        gap: .75rem;
+        flex-wrap: wrap;
+        margin: 0 0 1.1rem;
+        padding: 1rem 1.35rem;
+        border: 1px solid var(--line);
+        border-left: 5px solid var(--faint);
+        border-radius: var(--radius);
+        background: var(--surface);
+        box-shadow: var(--shadow-sm);
+        font-size: .82rem;
+        letter-spacing: .04em;
+        text-transform: uppercase;
+        color: var(--faint);
+      }
+      /* The status word is the sentence. Everything around it is a caption,
+         and it is sized that way rather than being one more phrase in a
+         line of grey text. */
+      .state strong {
+        font-size: 1.5rem;
+        font-weight: 650;
+        letter-spacing: -.025em;
+        text-transform: none;
+      }
+      .state .code { font-size: .72rem; letter-spacing: .06em; }
+      .state.running { border-left-color: var(--ok); }
+      .state.halted { border-left-color: var(--danger); }
+      /* The same word in a cell: a position with no stop behind it, or a
+         BLOCKING severity. Not a whole banner - a marked cell. */
+      td.halted {
+        color: var(--danger-ink);
+        font-weight: 600;
+        background: var(--danger-bg);
+      }
+
+      /* Four more that the same consolidation dropped, found by the test
+         that was written for `halted`. Each is the negative half of a pair
+         whose positive half (`ok`) survived, which is why nothing looked
+         obviously broken: the yes was green and the no was nothing.
+
+         `missing` is an account that is not enabled, a policy that is not
+         bound, a credential that is not stored. Not an error - a state that
+         has not been reached - so it is muted rather than red. */
+      .missing { color: var(--faint); }
+      .missing::before { content: "\00b7\00a0"; }
+      /* A row asking to be looked at rather than a row that is wrong:
+         withdrawal enabled on a key, a blocking configuration fact. */
+      tr.warn td { background: var(--warn-bg); }
+      tr.warn:hover td { background: #f9f0dc; }
+      /* A sizing field whose value differs from the one in force. The whole
+         point of the diff is that this row is not like the others. */
+      tr.changed td, tr.changed th {
+        background: var(--accent-soft);
+        font-weight: 600;
+      }
+      /* Turning something off is not a dangerous action and not the default
+         one either: available, unemphasised, and not red. */
+      button.off {
+        color: var(--danger-ink);
+        border-color: #e2c4ca;
+        background: var(--surface);
+        font-weight: 550;
+      }
+      button.off:hover { background: var(--danger-bg); border-color: #d3a9b1; }
 
       @media (max-width: 900px) {
         .shell { display: block; }
