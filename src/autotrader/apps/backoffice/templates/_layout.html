@@ -214,6 +214,51 @@
       }
       tr:first-child th:first-child { border-top-left-radius: var(--radius); }
       tr:first-child th:last-child { border-top-right-radius: var(--radius); }
+      /* What an evaluation found and what stopped it, as two rows of
+         labels rather than one comma-separated string. The codes are the
+         stable half - they are what a search of the audit trail matches on -
+         so they are shown verbatim and only grouped. */
+      .evidence {
+        margin: 0 0 .25rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: .25rem;
+        align-items: center;
+      }
+      .evidence:last-child { margin-bottom: 0; }
+      .evidence .chip {
+        font-size: .74rem;
+        padding: .1rem .45rem;
+        border-radius: 3px;
+        border: 1px solid var(--line);
+        background: var(--page);
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      /* The code the label stands for. Kept because it is the half an
+         operator can search the audit trail with, and set back because it is
+         not the half they are reading. */
+      .evidence .chip .raw {
+        font-family: ui-monospace, "Cascadia Mono", monospace;
+        font-size: .62rem;
+        opacity: .62;
+        margin-left: .35rem;
+      }
+      /* Found, and required-and-found. A mandatory indicator that matched is
+         the difference between a setup that could still be graded and one
+         that could not, so it is not the same colour as the rest. */
+      .evidence.found .chip {
+        border-color: #cfe0d6;
+        background: var(--ok-bg);
+        color: #14532b;
+      }
+      .evidence.found .chip.required { font-weight: 650; border-color: #a8ccb6; }
+      .evidence.stopped .chip {
+        border-color: #ecd6da;
+        background: var(--danger-bg);
+        color: var(--danger-ink);
+      }
+
       /* A table with more columns than the window has room for used to
          push its last column out past the card and clip it - which on the
          universe history is the column holding the activate button. It
@@ -224,11 +269,20 @@
         border-radius: var(--radius);
       }
       .scroller > table { margin: 0; min-width: 52rem; }
+      /* The decision table carries two lists of codes per row and needs
+         more room before it starts squeezing them. */
+      .scroller.roomy > table { min-width: 68rem; }
 
       /* No zebra. At these widths the hairline and the hover carry the row,
          and a stripe under every second row is ink spent on nothing. */
       tbody tr:hover td, tr:hover td { background: var(--hover); }
-      td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+      td.num, th.num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        /* A two-character heading over a one-digit column had nowhere to
+           wrap and was stacking one letter per line. */
+        white-space: nowrap;
+      }
       /* Identifiers line up so two that differ are visibly different. */
       td .code, td.code { font-variant-numeric: tabular-nums; }
 
@@ -501,6 +555,10 @@
         backdrop-filter: blur(2px);
       }
       dialog.confirm h3 { margin-top: 0; }
+      /* Wide enough for a before-and-after table. The narrow default is
+         right for a password and wrong for a diff. */
+      dialog.confirm.wide { max-width: 46rem; }
+      dialog.confirm table { font-size: .85rem; box-shadow: none; }
       dialog.confirm .actions {
         display: flex;
         gap: .6rem;
@@ -667,6 +725,17 @@
       // Progressive: the class is added only once this runs, so a page that
       // never gets here keeps the inline forms.
       document.documentElement.classList.add("has-dialog");
+      // A server-rendered step that is waiting on the operator opens on
+      // load. The page underneath is the one they were already looking at,
+      // so cancelling puts them back where they were rather than anywhere
+      // new. Without this the dialog still renders inline, which is what
+      // makes it safe to do at all.
+      var pending = document.querySelector("dialog.confirm[data-open]");
+      if (pending && typeof pending.showModal === "function") {
+        pending.showModal();
+        var opening = pending.querySelector("input:not([type=hidden])");
+        if (opening) { opening.focus(); }
+      }
       document.addEventListener("click", function (event) {
         var opener = event.target.closest("[data-opens]");
         if (opener) {

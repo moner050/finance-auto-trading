@@ -19,10 +19,11 @@ from uuid import UUID
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from autotrader.persistence.mysql.models.core import CoreInstrument
+from autotrader.persistence.mysql.models.core import CoreExchange, CoreInstrument
 from autotrader.persistence.mysql.models.david_v6 import (
     DavidV6BlockerRow,
     DavidV6DecisionRow,
+    DavidV6IndicatorRow,
 )
 from autotrader.persistence.mysql.models.operations import (
     OpsIncident,
@@ -51,6 +52,14 @@ class ControlView:
 
 
 @dataclass(frozen=True, slots=True)
+class MatchedIndicatorView:
+    """One indicator the engine actually found, and whether it had to."""
+
+    key: str
+    mandatory: bool
+
+
+@dataclass(frozen=True, slots=True)
 class DecisionView:
     id: UUID
     market: str
@@ -59,10 +68,23 @@ class DecisionView:
     side: str
     generated_at: datetime
     matched_indicator_count: int
+    blocker_count: int
+    # What the decision was about. A screen that lists twenty verdicts and no
+    # symbol tells the operator that the loop is running and nothing else -
+    # and this system already runs more than one instrument on one market.
+    instrument_code: str
+    # Where that instrument trades. A decision is not made under an account,
+    # so there is no credential provider on it; the exchange is the honest
+    # attribution and the one that is actually recorded.
+    exchange_code: str
     # Kept as the stored codes. Section 12 wants the operator's language on
     # screen with the stable reason code still visible beside it, and the code
     # is the half that survives a translation nobody updated.
     blockers: tuple[str, ...]
+    # The other half of the same question. Blockers say what stopped it;
+    # these say what it did find, which is what distinguishes a market that
+    # offered nothing from a setup that fell one gate short.
+    indicators: tuple[MatchedIndicatorView, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,19 +243,28 @@ class OperationsReadModel:
 
     async def decisions(self, *, limit: int) -> tuple[DecisionView, ...]:
         _require_limit(limit)
-        rows = list(
-            (
-                await self._session.scalars(
-                    select(DavidV6DecisionRow)
-                    .order_by(
-                        DavidV6DecisionRow.generated_at.desc(),
-                        DavidV6DecisionRow.id.desc(),
-                    )
-                    .limit(limit)
+        rows = (
+            await self._session.execute(
+                select(
+                    DavidV6DecisionRow,
+                    CoreInstrument.code,
+                    CoreExchange.code,
                 )
-            ).all()
-        )
-        blockers = await self._blockers({row.id for row in rows})
+                .join(
+                    CoreInstrument,
+                    CoreInstrument.id == DavidV6DecisionRow.instrument_id,
+                )
+                .join(CoreExchange, CoreExchange.id == CoreInstrument.exchange_id)
+                .order_by(
+                    DavidV6DecisionRow.generated_at.desc(),
+                    DavidV6DecisionRow.id.desc(),
+                )
+                .limit(limit)
+            )
+        ).all()
+        identifiers = {row.id for row, _, _ in rows}
+        blockers = await self._blockers(identifiers)
+        indicators = await self._indicators(identifiers)
         return tuple(
             DecisionView(
                 id=row.id,
@@ -243,10 +274,38 @@ class OperationsReadModel:
                 side=row.side,
                 generated_at=row.generated_at,
                 matched_indicator_count=row.matched_indicator_count,
+                blocker_count=row.blocker_count,
+                instrument_code=instrument_code,
+                exchange_code=exchange_code,
                 blockers=blockers.get(row.id, ()),
+                indicators=indicators.get(row.id, ()),
             )
-            for row in rows
+            for row, instrument_code, exchange_code in rows
         )
+
+    async def _indicators(
+        self, decision_ids: set[UUID]
+    ) -> dict[UUID, tuple[MatchedIndicatorView, ...]]:
+        """One query for the page, in the order the engine recorded them."""
+        if not decision_ids:
+            return {}
+        rows = (
+            await self._session.execute(
+                select(
+                    DavidV6IndicatorRow.decision_id,
+                    DavidV6IndicatorRow.indicator_key,
+                    DavidV6IndicatorRow.mandatory,
+                )
+                .where(DavidV6IndicatorRow.decision_id.in_(decision_ids))
+                .order_by(DavidV6IndicatorRow.decision_id, DavidV6IndicatorRow.ordinal)
+            )
+        ).all()
+        collected: dict[UUID, list[MatchedIndicatorView]] = {}
+        for decision_id, key, mandatory in rows:
+            collected.setdefault(decision_id, []).append(
+                MatchedIndicatorView(key=key, mandatory=bool(mandatory))
+            )
+        return {key: tuple(value) for key, value in collected.items()}
 
     async def activity(
         self, *, hours: int = ACTIVITY_HOURS, now: datetime | None = None
@@ -405,6 +464,7 @@ __all__ = (
     "DecisionView",
     "DriftView",
     "IncidentView",
+    "MatchedIndicatorView",
     "OperationsReadModel",
     "OperationsView",
     "PositionView",

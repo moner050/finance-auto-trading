@@ -484,3 +484,52 @@ def test_the_screen_draws_the_day_including_the_hours_it_was_down() -> None:
         assert all(0 <= height <= 100 for height in heights)
 
     _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_the_decision_list_names_the_instrument_and_reads_its_codes() -> None:
+    """The screen used to say a verdict and nothing about what it was a
+    verdict on: no symbol, no venue, no indicator the engine actually found -
+    only the blockers, as bare identifiers.
+
+    All four are recorded. The reading is asserted alongside the code because
+    section 12 asks for both, and because a table that silently dropped its
+    labels would look exactly like one whose codes had all been renamed.
+    """
+
+    async def scenario(sessions: async_sessionmaker[AsyncSession]) -> None:
+        ids = await _risk_seed(sessions)
+        await _arm(sessions, armed=True)
+        await _run_one_entry(sessions, ids)
+        async with sessions() as session:
+            code = await session.scalar(
+                select(CoreInstrument.code).where(
+                    CoreInstrument.id == ids.instrument_id  # type: ignore[attr-defined]
+                )
+            )
+
+        store = _Store()
+        app = _backoffice(sessions, store, ids.account_id)  # type: ignore[attr-defined]
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url=BASE_URL
+        ) as client:
+            client.cookies.set(
+                SESSION_COOKIE, await store.create_session(Operator(email=ALLOWED))
+            )
+            body = (await client.get("/")).text
+
+        assert code is not None and code in body
+        decisions = body[body.index('id="recent-decisions"') :]
+        # Whatever the market decided that pass, the row says what it was
+        # about and in whose language.
+        assert "종목" in decisions and "거래소" in decisions
+        for code_and_label in (
+            ("SETUP_REJECTED", "셋업 등급 미달"),
+            ("ROUNDED_QUANTITY_ZERO", "수량이 0으로 내림"),
+        ):
+            stored, label = code_and_label
+            if stored in decisions:
+                assert label in decisions, stored
+
+    _drive(scenario)

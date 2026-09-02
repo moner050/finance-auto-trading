@@ -72,6 +72,10 @@ from autotrader.apps.backoffice.commands import (
     SafetyAction,
     new_command,
 )
+from autotrader.apps.backoffice.decision_labels import (
+    blocker_label,
+    indicator_label,
+)
 from autotrader.apps.backoffice.display import in_kst
 from autotrader.apps.backoffice.evidence_read_model import EvidenceReadModel
 from autotrader.apps.backoffice.exposure import (
@@ -186,6 +190,11 @@ def create_app(
     # Registered once, here, so no template can print a bare UTC datetime
     # beside a converted one. See `display` for why the store stays UTC.
     templates.env.filters["kst"] = in_kst
+    # Section 12: the operator's language on screen, the stable code
+    # beside it. Filters rather than fields on the projection - a reason
+    # code is what the decision is; its Korean reading is how it is shown.
+    templates.env.filters["blocker_ko"] = blocker_label
+    templates.env.filters["indicator_ko"] = indicator_label
     controls = MySqlSafetyControls(sessions)
     passwords = MySqlSecondPasswords(sessions)
     account_reader = None if keys is None else AccountsReadModel(sessions, keys)

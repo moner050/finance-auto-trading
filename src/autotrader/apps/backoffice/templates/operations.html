@@ -135,18 +135,55 @@
 
 <h2 id="recent-decisions">최근 결정</h2>
 {% if view.decisions %}
+<p class="note">
+  각 평가가 무엇을 보고 무엇에 막혔는지입니다. <strong>거래소</strong>는 그 종목이
+  거래되는 곳이며, 결정은 계좌 아래에서 내려지지 않으므로 자격증명 provider가
+  아니라 이것이 기록되는 귀속입니다.
+  <strong>일치</strong>는 엔진이 실제로 찾은 지표, <strong>차단</strong>은 막은
+  사유입니다. 둘은 다른 질문에 답합니다 — 아무것도 없었던 시장과 한 관문 모자란
+  셋업은 차단 개수만으로는 구분되지 않습니다.
+  각 항목에는 한글 설명과 원본 코드를 함께 적습니다. 코드는 감사 기록에서 찾거나
+  물어볼 때 인용할 수 있는 쪽이고, 번역이 없는 코드는 코드 그대로 나옵니다.
+</p>
+<div class="scroller roomy">
 <table>
-  <tr><th>시각</th><th>시장</th><th>등급</th><th>방향</th><th>차단 사유</th></tr>
+  <tr>
+    <th>시각</th><th>종목</th><th>거래소</th><th>등급</th><th>방향</th>
+    <th class="num">일치</th><th class="num">차단</th><th>증거</th>
+  </tr>
   {% for decision in view.decisions %}
   <tr>
     <td class="code">{{ decision.generated_at | kst }}</td>
-    <td class="code">{{ decision.market }}</td>
-    <td>{{ decision.grade }}</td>
+    <td><strong>{{ decision.instrument_code }}</strong></td>
+    <td class="code">{{ decision.exchange_code }}</td>
+    <td class="{{ 'empty' if decision.grade == 'REJECT' else 'ok' }}">
+      {{ decision.grade }}
+    </td>
     <td>{{ decision.side }}</td>
-    <td class="code">{{ decision.blockers | join(', ') or '-' }}</td>
+    <td class="num">{{ decision.matched_indicator_count }}</td>
+    <td class="num">{{ decision.blocker_count }}</td>
+    <td>
+      {% if decision.indicators %}
+      <p class="evidence found">
+        {% for indicator in decision.indicators %}
+        <span class="chip{{ ' required' if indicator.mandatory }}">{{ indicator.key | indicator_ko }}<span class="raw">{{ indicator.key }}</span></span>
+        {% endfor %}
+      </p>
+      {% else %}
+      <p class="evidence"><span class="missing">찾은 지표 없음</span></p>
+      {% endif %}
+      {% if decision.blockers %}
+      <p class="evidence stopped">
+        {% for blocker in decision.blockers %}
+        <span class="chip">{{ blocker | blocker_ko }}<span class="raw">{{ blocker }}</span></span>
+        {% endfor %}
+      </p>
+      {% endif %}
+    </td>
   </tr>
   {% endfor %}
 </table>
+</div>
 {% else %}
 <p class="empty">기록된 결정이 없습니다.</p>
 {% endif %}
