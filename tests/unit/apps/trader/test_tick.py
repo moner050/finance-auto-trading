@@ -148,7 +148,6 @@ def _setup_context() -> TickContext:
         inputs=_inputs(
             Market.US_CASH,
             bars={"5m": _decelerating_decline_bars(), "1d": _daily_bars()},
-            at_observed_all_time_high=True,
             events=_quiet_calendar(),
         ),
         manifest=_manifest(),

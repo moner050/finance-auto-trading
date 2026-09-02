@@ -14,15 +14,32 @@ from autotrader.domain.completed_ohlcv import CompletedOhlcvBar
 _FIVE_MINUTES = timedelta(minutes=5)
 _MINIMUM_DISTINCT_TOUCHES = 3
 
+# Section 10: "제가 필요한 날짜까지입니다" - as far back as is needed, and at an
+# all-time high that is not far, because there is nothing marked above.
+ALL_TIME_HIGH_DATES = 3
+ORDINARY_DATES = 10
+
+# What a caller has to fetch for zones to be obtainable at all. Ten dates of
+# five-minute bars is more than one kline request returns, and reading the
+# per-request ceiling as the venue's limit is what left this empty on every
+# pass for the life of the system.
+ZONE_HISTORY = timedelta(days=ORDINARY_DATES + 1)
+
 
 @dataclass(frozen=True, slots=True)
 class ZoneConfig:
-    at_observed_all_time_high: bool
+    """What the caller knows that the bars do not say.
+
+    The lookback is deliberately absent. Section 10 writes it as
+    `3 if at_all_time_high(bars_5m) else 10` - a function of the same bars,
+    not something handed in - and the version of this that took it as an
+    input spent the system's whole life defaulted to False, which nobody
+    noticed because zones were empty for a different reason at the same time.
+    """
+
     source_timezone: str
 
     def __post_init__(self) -> None:
-        if type(self.at_observed_all_time_high) is not bool:
-            raise TypeError("at_observed_all_time_high must be bool")
         _zone_info(self.source_timezone)
 
 
@@ -77,6 +94,24 @@ class ZoneFacts:
             raise TypeError("zones must contain exact HlitZone values")
 
 
+def at_observed_all_time_high(bars: Sequence[CompletedOhlcvBar]) -> bool:
+    """Whether the last bar closed at the high of everything we can see.
+
+    Observed, and the word is load-bearing: this is a statement about the
+    window in hand, not about the instrument's history, and it cannot be
+    anything else because the window is all the evidence there is.
+
+    The test is exact rather than tolerant. A band - "within some fraction of
+    the high" - is not in section 10, and a tolerance invented here would
+    decide whether the lookback is three dates or ten, which decides whether
+    zones exist. That is too much to hang on a number nobody published.
+    """
+    values = tuple(bars)
+    if not values:
+        return False
+    return values[-1].close >= max(bar.high for bar in values)
+
+
 def build_hlit_zones(
     bars: Sequence[CompletedOhlcvBar], config: ZoneConfig
 ) -> ZoneFacts:
@@ -97,8 +132,10 @@ def build_hlit_zones(
             for earlier, later in pairwise(daily_bars)
         ):
             raise ValueError("zone evidence must be contiguous five-minute bars")
-    required_dates = 3 if config.at_observed_all_time_high else 10
     ordered_dates = tuple(by_date)
+    required_dates = (
+        ALL_TIME_HIGH_DATES if at_observed_all_time_high(values) else ORDINARY_DATES
+    )
     selected_dates = ordered_dates[-required_dates:]
     selected = tuple(bar for day in selected_dates for bar in by_date[day])
     observations = tuple(
@@ -182,4 +219,13 @@ def _cube_root_ceiling(value: int) -> int:
     return candidate
 
 
-__all__ = ("HlitZone", "ZoneConfig", "ZoneFacts", "build_hlit_zones")
+__all__ = (
+    "ALL_TIME_HIGH_DATES",
+    "ORDINARY_DATES",
+    "ZONE_HISTORY",
+    "HlitZone",
+    "ZoneConfig",
+    "ZoneFacts",
+    "at_observed_all_time_high",
+    "build_hlit_zones",
+)

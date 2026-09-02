@@ -31,7 +31,7 @@ def test_zone_touches_count_distinct_completed_bars_not_ohlc_ticks() -> None:
 
     facts = build_hlit_zones(
         bars,
-        ZoneConfig(at_observed_all_time_high=True, source_timezone="UTC"),
+        ZoneConfig(source_timezone="UTC"),
     )
 
     hundred = next(
@@ -53,7 +53,7 @@ def test_zone_strength_caps_at_five_distinct_bar_touches() -> None:
 
     facts = build_hlit_zones(
         bars,
-        ZoneConfig(at_observed_all_time_high=True, source_timezone="UTC"),
+        ZoneConfig(source_timezone="UTC"),
     )
 
     assert any(zone.touch_count >= 6 and zone.strength == 5 for zone in facts.zones)

@@ -260,22 +260,81 @@ class BinanceUsdmMarketData:
         self,
         timeframe: timedelta,
         end_at: datetime,
+        *,
+        history: timedelta | None = None,
     ) -> tuple[CompletedOhlcvBar, ...]:
+        """Completed bars up to `end_at`, reaching `history` back if asked.
+
+        One request returns at most 1500 bars, which at five minutes is 5.2
+        days. That is a per-request ceiling rather than a limit on what the
+        venue holds, and reading it as the latter is what left the zone
+        builder - which wants ten distinct dates - permanently empty. Callers
+        that need a stated depth ask for it and get it or get what exists.
+
+        Depth is the caller's to state because it differs by consumer: zones
+        want ten days, the MACD warm-up wants far less, and a default here
+        would be a number nobody chose deciding what the strategy can see.
+        """
         end_at = _require_utc(end_at, "completed bar end_at")
         if timeframe == _THIRTY_SECONDS:
+            if history is not None:
+                raise ValueError("thirty-second bars are built from the tape")
             return await self._aggregate_bars(_THIRTY_SECONDS, end_at)
         interval = _TIMEFRAMES.get(timeframe)
         if interval is None:
             raise ValueError(
                 "Binance USD-M completed bars require a supported timeframe"
             )
-        rows = await self._rest.klines(
-            symbol=_SYMBOL,
-            interval=interval,
-            end_time_ms=_epoch_ms(end_at),
-            limit=_REST_LIMIT,
+        if history is not None and history <= timedelta(0):
+            raise ValueError("requested history must be positive")
+        rows = await self._paged_klines(
+            interval=interval, end_at=end_at, history=history
         )
         return _compile_klines(rows, timeframe=timeframe, end_at=end_at)
+
+    async def _paged_klines(
+        self,
+        *,
+        interval: str,
+        end_at: datetime,
+        history: timedelta | None,
+    ) -> tuple[object, ...]:
+        """Page backwards until the requested depth is covered.
+
+        Every page is kept raw and compiled together at the end, because the
+        compiler is what checks the joins: it collapses a bar seen in two
+        pages, refuses two different bars for one open time, and refuses a
+        gap. Stitching the pages here instead would mean writing those three
+        checks a second time, and a seam that drops one bar looks exactly
+        like a market that was quiet.
+        """
+        collected: list[object] = []
+        cursor = _epoch_ms(end_at)
+        earliest = None if history is None else _epoch_ms(end_at - history)
+        while True:
+            page = await self._rest.klines(
+                symbol=_SYMBOL,
+                interval=interval,
+                end_time_ms=cursor,
+                limit=_REST_LIMIT,
+            )
+            if type(page) is not tuple:
+                raise BinanceUsdmMarketDataError(
+                    "Binance USD-M kline response is invalid"
+                )
+            collected.extend(page)
+            if earliest is None or not page:
+                return tuple(collected)
+            oldest = min(_integer(_sequence(raw)[0], "kline open time") for raw in page)
+            if oldest <= earliest:
+                return tuple(collected)
+            if len(page) < _REST_LIMIT:
+                # The venue has no more history behind this page. Fewer days
+                # than asked for is an answer; inventing the rest is not.
+                return tuple(collected)
+            # One millisecond before the oldest open, so the next page ends
+            # where this one began without repeating its first bar.
+            cursor = oldest - 1
 
     async def telemetry_bars(
         self,

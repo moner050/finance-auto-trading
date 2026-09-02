@@ -148,7 +148,6 @@ class AssemblyInputs:
     quantity: Decimal | None = None
     stop_slippage_q95: Decimal | None = None
     tick_size: Decimal | None = None
-    at_observed_all_time_high: bool = False
 
     def __post_init__(self) -> None:
         if type(cast(object, self.market)) is not V6Market:
@@ -161,8 +160,6 @@ class AssemblyInputs:
         object.__setattr__(self, "decision_at", require_utc(self.decision_at))
         if type(cast(object, self.source)) is not AssemblySource:
             raise TypeError("source must be an exact AssemblySource")
-        if type(self.at_observed_all_time_high) is not bool:
-            raise TypeError("at_observed_all_time_high must be bool")
 
 
 @dataclass(frozen=True, slots=True)
@@ -400,11 +397,7 @@ def _zones(
         return _unavailable("ZONES_BARS_UNAVAILABLE")
     try:
         facts = build_hlit_zones(
-            bars,
-            ZoneConfig(
-                at_observed_all_time_high=inputs.at_observed_all_time_high,
-                source_timezone=inputs.source.timezone,
-            ),
+            bars, ZoneConfig(source_timezone=inputs.source.timezone)
         )
     except ValueError:
         return _unavailable("ZONES_EVIDENCE_INVALID")

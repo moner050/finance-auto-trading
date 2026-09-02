@@ -380,10 +380,18 @@ def _decelerating_decline_bars() -> tuple[CompletedOhlcvBar, ...]:
     prints marginal new lows while momentum turns up. That is a regular
     bullish divergence and an exhaustion sequence at the same time.
     """
+    # Long enough to span the ten distinct dates section 10 asks for. The
+    # baseline used to run 700 bars, which is 2.7 days, and the zone builder
+    # only accepted it because the all-time-high flag was forced on. Now that
+    # the flag is measured, the window has to actually be as deep as the rule
+    # requires.
+    baseline = 3000
     closes: list[Decimal] = [
-        Decimal(120) + Decimal((index * 7) % 11) - Decimal(5) for index in range(700)
+        Decimal(120) + Decimal((index * 7) % 11) - Decimal(5)
+        for index in range(baseline)
     ]
     closes += [Decimal(120) + Decimal(index) * Decimal("0.5") for index in range(40)]
+    decline_start = len(closes)
     price = closes[-1]
     for step in ("6", "4.5", "3.2", "2.2", "1.4", "0.9", "0.5", "0.3", "0.2", "0.1"):
         for _ in range(4):
@@ -393,9 +401,12 @@ def _decelerating_decline_bars() -> tuple[CompletedOhlcvBar, ...]:
     bars: list[CompletedOhlcvBar] = []
     for index, close in enumerate(closes):
         volume = (
-            Decimal(5000) - Decimal(index)
-            if index < 740
-            else Decimal(2000) - Decimal((index - 740) * 30)
+            # Cycled rather than counted down, so a longer baseline does not
+            # become one enormous volume decline and read as its own
+            # exhaustion. Over the original 700 bars this is the same series.
+            Decimal(5000) - Decimal(index % 700)
+            if index < decline_start
+            else Decimal(2000) - Decimal((index - decline_start) * 30)
         )
         bars.append(
             CompletedOhlcvBar(
@@ -414,7 +425,6 @@ def _setup_inputs() -> AssemblyInputs:
     return _inputs(
         V6Market.US_CASH,
         bars={"5m": _decelerating_decline_bars(), "1d": _daily_bars()},
-        at_observed_all_time_high=True,
     )
 
 

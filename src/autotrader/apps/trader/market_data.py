@@ -39,7 +39,11 @@ DAILY_TIMEFRAME = timedelta(days=1)
 
 class CompletedBars(Protocol):
     async def completed_bars(
-        self, timeframe: timedelta, end_at: datetime
+        self,
+        timeframe: timedelta,
+        end_at: datetime,
+        *,
+        history: timedelta | None = None,
     ) -> tuple[CompletedOhlcvBar, ...]: ...
 
     async def trade_prints(

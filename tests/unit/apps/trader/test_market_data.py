@@ -45,7 +45,11 @@ class _Bars:
         self.trade_calls = 0
 
     async def completed_bars(
-        self, timeframe: timedelta, end_at: datetime
+        self,
+        timeframe: timedelta,
+        end_at: datetime,
+        *,
+        history: timedelta | None = None,
     ) -> tuple[CompletedOhlcvBar, ...]:
         del end_at
         self.bar_calls += 1

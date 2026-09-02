@@ -25,6 +25,7 @@ from autotrader.apps.trader.shadow_inputs import LiveBinanceInputs
 from autotrader.apps.trader.tick import TickContext
 from autotrader.shared.time import require_utc
 from autotrader.strategies.david_v6.models import V6Market
+from autotrader.strategies.david_v6.zones import ZONE_HISTORY
 
 TRADE_WINDOW = timedelta(minutes=30)
 
@@ -52,7 +53,13 @@ class ShadowContextSource:
 
     async def context_for(self, now: datetime) -> TickContext | None:
         moment = require_utc(now)
-        bars = await self._market_data.completed_bars(HLIT_TIMEFRAME, moment)
+        # Deep enough for the zone builder's ten dates. One kline request
+        # returns 5.2 days at this timeframe, which is why the zones were
+        # empty on every pass; the depth is stated here rather than assumed
+        # there so that the consumer with the longest reach decides it.
+        bars = await self._market_data.completed_bars(
+            HLIT_TIMEFRAME, moment, history=ZONE_HISTORY
+        )
         if not bars:
             return None
         latest = bars[-1].timestamp

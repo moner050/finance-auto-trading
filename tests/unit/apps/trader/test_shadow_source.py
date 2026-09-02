@@ -91,11 +91,17 @@ def _bars(count: int, *, end: datetime = NOW) -> tuple[CompletedOhlcvBar, ...]:
 class _Market:
     def __init__(self, bars: tuple[CompletedOhlcvBar, ...]) -> None:
         self.bars = bars
+        self.asked_history: list[timedelta | None] = []
 
     async def completed_bars(
-        self, timeframe: timedelta, now: datetime
+        self,
+        timeframe: timedelta,
+        now: datetime,
+        *,
+        history: timedelta | None = None,
     ) -> tuple[CompletedOhlcvBar, ...]:
         del timeframe, now
+        self.asked_history.append(history)
         return self.bars
 
     async def trade_prints(

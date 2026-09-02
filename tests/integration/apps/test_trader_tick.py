@@ -133,7 +133,6 @@ def _context(manifest: V6Manifest, instrument_id: UUID) -> TickContext:
             Market.US_CASH,
             instrument_id=instrument_id,
             bars={"5m": _decelerating_decline_bars(), "1d": _daily_bars()},
-            at_observed_all_time_high=True,
             events=_quiet_calendar(),
         ),
         manifest=manifest,
