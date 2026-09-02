@@ -270,9 +270,13 @@ def test_only_submit_commands_reach_the_paper_broker() -> None:
                     command_id=command_id, now=NOW
                 )
                 assert broker_command is not None
-                with pytest.raises(ValueError, match="cannot cancel"):
+                # `e50e877` gave the paper broker a real cancel and replace,
+                # so these no longer refuse the operation - they refuse a
+                # SUBMIT command handed to the wrong method, which is what
+                # this test was always about.
+                with pytest.raises(ValueError, match="needs a CANCEL command"):
                     await submitter.cancel(broker_command)
-                with pytest.raises(ValueError, match="cannot replace"):
+                with pytest.raises(ValueError, match="needs a REPLACE command"):
                     await submitter.replace(broker_command)
         finally:
             await engine.dispose()

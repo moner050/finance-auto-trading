@@ -77,7 +77,7 @@ def test_concurrent_duplicate_and_distinct_reservations_are_serialized() -> None
                 # lock, so concurrent callers on one key can deadlock. InnoDB
                 # answers a deadlock by asking for the transaction to be
                 # retried, which every caller of this repository must do.
-                for _ in range(_DEADLOCK_ATTEMPTS):
+                for attempt in range(_DEADLOCK_ATTEMPTS):
                     async with sessions() as session:
                         intent = _intent(
                             id=uuid7(),
@@ -95,6 +95,14 @@ def test_concurrent_duplicate_and_distinct_reservations_are_serialized() -> None
                             await session.rollback()
                             if not _is_deadlock(error):
                                 raise
+                            # Backing off rather than spinning. Twenty
+                            # coroutines retrying the same row in lockstep
+                            # deadlock each other again immediately, so on a
+                            # busy machine the ten attempts were being spent
+                            # in a burst and this failed for load rather than
+                            # for anything it is testing. Seen once in a full
+                            # suite run; the same test passes alone.
+                            await asyncio.sleep(0.02 * (attempt + 1))
                             continue
                         return stored.id
                 raise AssertionError("deadlock did not clear within the retries")
