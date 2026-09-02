@@ -19,6 +19,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from autotrader.apps.backoffice.display import FULL_PATTERN, in_kst
 from autotrader.persistence.mysql.models.accounts import Account
 from autotrader.persistence.mysql.models.binance_usdm import (
     BinanceUsdmConfigurationFactRow,
@@ -133,7 +134,10 @@ def _age(moment: datetime, *, now: datetime) -> str:
 
 
 def _stamp(moment: datetime | None) -> str | None:
-    return None if moment is None else require_utc(moment).isoformat(timespec="seconds")
+    # `require_utc` first: this reads timestamps written by other processes,
+    # and one that is not UTC is a fault to raise on rather than to convert
+    # and display as though it were fine.
+    return None if moment is None else in_kst(require_utc(moment), FULL_PATTERN)
 
 
 class EvidenceReadModel:

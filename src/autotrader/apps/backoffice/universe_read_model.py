@@ -22,6 +22,7 @@ from autotrader.application.universe_manifest import (
     UniverseProvenance,
     compare,
 )
+from autotrader.apps.backoffice.display import FULL_PATTERN, in_kst
 from autotrader.persistence.mysql.repositories.universe import (
     StoredSnapshot,
     UniverseAuthorities,
@@ -161,24 +162,24 @@ def _row(snapshot: StoredSnapshot) -> SnapshotRow:
         source_name=snapshot.provenance.name,
         source_reference=snapshot.provenance.reference,
         published_at=_moment(snapshot.provenance),
-        staged_at=snapshot.staged_at.isoformat(timespec="seconds"),
+        staged_at=in_kst(snapshot.staged_at, FULL_PATTERN),
         staged_by=snapshot.staged_by,
         activated_at=(
             None
             if snapshot.activated_at is None
-            else snapshot.activated_at.isoformat(timespec="seconds")
+            else in_kst(snapshot.activated_at, FULL_PATTERN)
         ),
         activated_by=snapshot.activated_by,
         superseded_at=(
             None
             if snapshot.superseded_at is None
-            else snapshot.superseded_at.isoformat(timespec="seconds")
+            else in_kst(snapshot.superseded_at, FULL_PATTERN)
         ),
     )
 
 
 def _moment(provenance: UniverseProvenance) -> str:
-    return provenance.published_at.isoformat(timespec="seconds")
+    return in_kst(provenance.published_at, FULL_PATTERN)
 
 
 __all__ = (

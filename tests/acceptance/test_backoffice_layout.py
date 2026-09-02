@@ -278,3 +278,32 @@ def test_no_two_dialogs_on_a_screen_share_an_identifier() -> None:
                 assert opens <= set(ids), f"{path}: {opens - set(ids)} open nothing"
 
     _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_no_screen_prints_a_utc_timestamp() -> None:
+    """One clock for the whole backoffice.
+
+    The store is UTC and the screens are KST, and the danger is not the
+    conversion - it is a screen that misses it. A page showing
+    `2026-09-02T05:58:30+00:00` beside another showing `2026-09-02 14:58:30`
+    gives the operator two times nine hours apart for the same moment, and
+    nothing on either page says which is which.
+
+    `+00:00` is the fingerprint: it can only come from a stamp that was
+    written out without being converted. The manifest sample on the universe
+    screen carries a `+09:00` offset and is meant to.
+    """
+
+    async def scenario(
+        sessions: async_sessionmaker[AsyncSession], approvals: object
+    ) -> None:
+        app, session_id = await _signed_in(sessions, approvals)
+        async with _client(app, session_id) as http:
+            for path in SCREENS:
+                page = await http.get(path)
+                assert page.status_code == 200, path
+                assert "+00:00" not in page.text, f"{path} prints a UTC timestamp"
+
+    _drive(scenario)

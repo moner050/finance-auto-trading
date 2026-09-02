@@ -18,6 +18,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from autotrader.apps.backoffice.display import FULL_PATTERN, in_kst
 from autotrader.execution.promotion.models import (
     REQUIRED_SESSIONS,
     PromotionMode,
@@ -159,15 +160,13 @@ class PromotionReadModel:
                                 mode=view.session.mode.value,
                                 exchange_date=view.session.exchange_date.isoformat(),
                                 status=view.session.status.value,
-                                claimed_at=view.session.claimed_at.isoformat(
-                                    timespec="seconds"
+                                claimed_at=in_kst(
+                                    view.session.claimed_at, FULL_PATTERN
                                 ),
                                 completed_at=(
                                     None
                                     if view.session.completed_at is None
-                                    else view.session.completed_at.isoformat(
-                                        timespec="seconds"
-                                    )
+                                    else in_kst(view.session.completed_at, FULL_PATTERN)
                                 ),
                                 decision_count=view.evidence.decision_count,
                                 order_count=view.evidence.order_count,

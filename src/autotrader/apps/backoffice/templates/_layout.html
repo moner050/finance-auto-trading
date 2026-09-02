@@ -236,6 +236,17 @@
       }
       .figures dd .unit { font-size: .8rem; color: var(--muted); }
 
+      /* The clock this whole backoffice is written in. Small, always in
+         the same place, and never repeated per cell. */
+      .zone {
+        margin-left: .6rem;
+        padding: .1rem .4rem;
+        border: 1px solid var(--line-strong);
+        border-radius: 3px;
+        font-size: .72rem;
+        color: var(--muted);
+      }
+
       details.help {
         border: 1px solid var(--line-strong);
         border-radius: 6px;
@@ -452,7 +463,8 @@
       <main class="main">
         <div class="topline">
           <h1>{% block heading %}{{ self.title() }}{% endblock %}</h1>
-          <span class="code">{{ session.operator.email }}</span>
+          <span class="code">{{ session.operator.email }}
+            <span class="zone" title="저장은 UTC입니다">시각 KST</span></span>
         </div>
         {% block content %}{% endblock %}
       </main>

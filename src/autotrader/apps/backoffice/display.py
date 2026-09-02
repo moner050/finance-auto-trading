@@ -25,6 +25,10 @@ KST = timezone(timedelta(hours=9), "KST")
 # Enough to line up in a column and to tell two decisions apart. Seconds are
 # kept because five-minute passes land within the same minute often enough.
 DEFAULT_PATTERN = "%m-%d %H:%M:%S"
+# For tables that reach back further than a day - a universe history or a
+# promotion record - where dropping the year would make two Septembers look
+# like the same one.
+FULL_PATTERN = "%Y-%m-%d %H:%M:%S"
 ABSENT = "-"
 
 
@@ -44,4 +48,4 @@ def in_kst(value: datetime | None, pattern: str = DEFAULT_PATTERN) -> str:
     return moment.astimezone(KST).strftime(pattern)
 
 
-__all__ = ("ABSENT", "DEFAULT_PATTERN", "KST", "in_kst")
+__all__ = ("ABSENT", "DEFAULT_PATTERN", "FULL_PATTERN", "KST", "in_kst")

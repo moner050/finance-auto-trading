@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from autotrader.apps.backoffice.account_removal import unreferenced_accounts
+from autotrader.apps.backoffice.display import FULL_PATTERN, in_kst
 from autotrader.apps.backoffice.provider_secrets import (
     BINANCE,
     KIS,
@@ -136,7 +137,7 @@ def _provider_binding_view(binding: ProviderBinding) -> ProviderBindingView:
         account_seq=binding.account_seq,
         revision=binding.revision,
         active=binding.active,
-        observed_at=binding.observed_at.isoformat(timespec="seconds"),
+        observed_at=in_kst(binding.observed_at, FULL_PATTERN),
     )
 
 
