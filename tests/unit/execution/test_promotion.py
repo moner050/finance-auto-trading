@@ -7,6 +7,7 @@ comes from, and this is it — no database, no screen, just the rule.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime
 
 import pytest
@@ -18,6 +19,7 @@ from autotrader.execution.promotion.models import (
     PromotionSession,
     SessionEvidence,
     SessionStatus,
+    StrategyGate,
     promotion_state,
     verify,
 )
@@ -212,16 +214,44 @@ def test_readiness_needs_both_modes() -> None:
     assert state.ready is False
 
 
-def test_both_modes_at_two_distinct_dates_is_ready() -> None:
-    sessions = tuple(
+def _both_modes() -> tuple[PromotionSession, ...]:
+    return tuple(
         _session(mode=mode, exchange_date=date(2026, 8, day))
         for mode in (PromotionMode.SHADOW, PromotionMode.PAPER)
         for day in (24, 25)
     )
 
-    state = promotion_state(sessions, manifest_id=MANIFEST)
 
-    assert state.ready is True
+def test_both_modes_at_two_distinct_dates_satisfies_the_sessions() -> None:
+    state = promotion_state(_both_modes(), manifest_id=MANIFEST)
+
+    assert state.sessions_satisfied is True
+
+
+def test_satisfying_the_sessions_is_not_readiness() -> None:
+    """Two days with a decision on each say the loop evaluated and recorded.
+    Section 22.9 asks whether the strategy makes money, and no count of days
+    addresses that - so the count alone must not answer what LIVE asks."""
+    state = promotion_state(_both_modes(), manifest_id=MANIFEST)
+
+    assert state.strategy_gate is StrategyGate.NOT_EVALUATED
+    assert state.ready is False
+
+
+def test_readiness_needs_the_strategy_gate_judged() -> None:
+    counted = promotion_state(_both_modes(), manifest_id=MANIFEST)
+
+    assert replace(counted, strategy_gate=StrategyGate.PASSED).ready is True
+    assert replace(counted, strategy_gate=StrategyGate.FAILED).ready is False
+
+
+def test_nothing_counts_its_way_to_a_judged_gate() -> None:
+    """`promotion_state` reads sessions. A session is a day that was watched,
+    and no number of them is a judgement about the strategy."""
+    assert (
+        promotion_state(_both_modes(), manifest_id=MANIFEST).strategy_gate
+        is StrategyGate.NOT_EVALUATED
+    )
 
 
 def test_sessions_under_another_manifest_do_not_count() -> None:

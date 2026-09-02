@@ -54,6 +54,35 @@ class PromotionBlocker(StrEnum):
     SESSION_NOT_OVER = "SESSION_NOT_OVER"
 
 
+class StrategyGate(StrEnum):
+    """Whether the strategy's own promotion gate has been judged.
+
+    Section 22.9 wants out-of-sample expectancy above 0.15R, a profit factor
+    of at least 1.15, fifty setups per regime, a repaint test and no more than
+    eight free parameters. None of that is countable here - expectancy is
+    undefined until a trade happens - so this records a judgement rather than
+    computing one.
+
+    NOT_EVALUATED is the only value anything in this system can currently
+    produce, and that is the point. Nothing counts its way to PASSED.
+    """
+
+    NOT_EVALUATED = "NOT_EVALUATED"
+    PASSED = "PASSED"
+    FAILED = "FAILED"
+
+
+# The criteria this system does not evaluate, named so a screen can say what
+# is unevaluated rather than leaving a reader to assume it is nothing.
+STRATEGY_GATE_CRITERIA = (
+    "OUT_OF_SAMPLE_EXPECTANCY_R",
+    "PROFIT_FACTOR",
+    "SETUPS_PER_REGIME",
+    "REPAINT_TEST",
+    "FREE_PARAMETER_COUNT",
+)
+
+
 @dataclass(frozen=True, slots=True)
 class SessionEvidence:
     """What the day left behind, counted rather than described.
@@ -176,11 +205,40 @@ class PromotionState:
     manifest_id: UUID
     shadow: ModeProgress
     paper: ModeProgress
+    # Never derived. Counting sessions cannot reach anything but
+    # NOT_EVALUATED, which is why it is a field and not a property.
+    strategy_gate: StrategyGate = StrategyGate.NOT_EVALUATED
+
+    @property
+    def sessions_satisfied(self) -> bool:
+        """The operational precondition: two Shadow days and two Paper days.
+
+        What it says is that the system ran and recorded. What it does not say
+        is whether the strategy is worth running, and it used to be called
+        `ready`, which invited exactly that reading - a screen showing
+        "Shadow 2/2" beside a word like ready is where the mistake gets made.
+        """
+        return self.shadow.satisfied and self.paper.satisfied
 
     @property
     def ready(self) -> bool:
-        """Both requirements met. This is what LIVE activation asks."""
-        return self.shadow.satisfied and self.paper.satisfied
+        """What LIVE activation asks.
+
+        Sessions alone cannot answer it. Two days with a decision on each say
+        the loop evaluated and recorded; section 22.9 asks whether the
+        strategy makes money, and no count of days addresses that.
+
+        So this needs both, and the second half is a recorded judgement rather
+        than a computation. Nothing in this system can set it to PASSED today,
+        which means LIVE is not reachable today - the correct answer while
+        every decision so far has been a REJECT with no entries.
+
+        Putting section 22.9's numbers in here directly was the alternative
+        and it fails on its own terms: expectancy is undefined without a
+        single trade, so the gate would be permanently unsatisfiable, and a
+        gate that can never pass is one somebody eventually deletes.
+        """
+        return self.sessions_satisfied and self.strategy_gate is StrategyGate.PASSED
 
 
 def promotion_state(
@@ -204,6 +262,10 @@ def promotion_state(
         completed[session.mode].add(session.exchange_date)
     return PromotionState(
         manifest_id=manifest_id,
+        # Left at its default: no source of a judgement exists yet, and
+        # defaulting it to PASSED would be this function asserting something
+        # nobody decided.
+        strategy_gate=StrategyGate.NOT_EVALUATED,
         shadow=ModeProgress(
             mode=PromotionMode.SHADOW,
             completed_dates=tuple(sorted(completed[PromotionMode.SHADOW])),
@@ -217,6 +279,7 @@ def promotion_state(
 
 __all__ = (
     "REQUIRED_SESSIONS",
+    "STRATEGY_GATE_CRITERIA",
     "ModeProgress",
     "PromotionBlocker",
     "PromotionMode",
@@ -224,6 +287,7 @@ __all__ = (
     "PromotionState",
     "SessionEvidence",
     "SessionStatus",
+    "StrategyGate",
     "promotion_state",
     "verify",
 )
