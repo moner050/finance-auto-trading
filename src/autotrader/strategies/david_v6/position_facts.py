@@ -34,6 +34,7 @@ from autotrader.strategies.david_v6.order_flow import (
     OrderFlowFacts,
     blocking_big_trade_ahead,
 )
+from autotrader.strategies.david_v6.sessions import SessionFacts
 
 
 def position_facts(
@@ -78,6 +79,7 @@ def position_facts(
         blocking_big_trade=_blocking(bundle, side=side, price=current_price),
         metodo_exit_signal=_metodo_exit(bundle, side=side),
         protection_failed=protection_failed,
+        must_be_flat=_must_be_flat(bundle),
     )
 
 
@@ -104,6 +106,26 @@ def _blocking(bundle: V6EvidenceBundle, *, side: Side, price: Decimal) -> bool:
         return blocking_big_trade_ahead(value, side=side, reference_price=price)
     except BigTradesUnmeasured:
         return False
+
+
+def _must_be_flat(bundle: V6EvidenceBundle) -> bool:
+    """Whether the session says the book has to be flat by now.
+
+    False when the session evidence is absent, and that is the one place in
+    this module where absence is not obviously the safe answer: a clock that
+    cannot be read is not a reason to hold, but it is also not a reason to
+    close. It resolves the same way as the rest - the position keeps the stop
+    it already has, and the entry path independently refuses to open anything
+    while the session evidence is missing, so nothing new accumulates behind
+    a deadline nobody can see.
+    """
+    item = bundle.session
+    if item.state is not EvidenceState.AVAILABLE:
+        return False
+    value = item.value
+    if type(value) is not SessionFacts:
+        return False
+    return value.must_be_flat
 
 
 def _metodo_exit(bundle: V6EvidenceBundle, *, side: Side) -> bool:

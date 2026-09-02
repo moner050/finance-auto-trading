@@ -14,6 +14,7 @@ from autotrader.domain.enums import Side
 from autotrader.strategies.david_v6.metodo import MetodoFacts
 from autotrader.strategies.david_v6.models import EvidenceState
 from autotrader.strategies.david_v6.position_facts import position_facts
+from autotrader.strategies.david_v6.sessions import SessionFacts
 
 PRICE = Decimal("100")
 
@@ -27,9 +28,16 @@ class _Item:
 
 
 class _Bundle:
-    def __init__(self, *, order_flow: _Item, metodo: _Item) -> None:
+    def __init__(
+        self,
+        *,
+        order_flow: _Item,
+        metodo: _Item,
+        session: _Item | None = None,
+    ) -> None:
         self.order_flow = order_flow
         self.metodo = metodo
+        self.session = session or _Item(available=False)
 
 
 class _Fees:
@@ -147,3 +155,51 @@ def test_a_missing_fee_reads_as_zero_rather_than_refusing() -> None:
 
 def test_protection_failure_is_carried_through_untouched() -> None:
     assert _facts(protection_failed=True).protection_failed is True
+
+
+def _session(*, flat: bool) -> object:
+    return SessionFacts(
+        state=EvidenceState.AVAILABLE,
+        session_open=True,
+        entry_allowed=not flat,
+        reduce_only=flat,
+        must_be_flat=flat,
+        overnight_allowed=False,
+        pre_open=False,
+        size_multiplier=Decimal(1),
+        max_micro_contracts=None,
+        entry_cutoff_at=datetime(2026, 9, 2, 19, 30, tzinfo=UTC),
+        flat_at=datetime(2026, 9, 2, 19, 50, tzinfo=UTC),
+        blockers=(),
+    )
+
+
+def test_the_session_flat_deadline_reaches_the_manager() -> None:
+    """Section 7 wants the book flat before the close and forbids overnight.
+    The session evaluation already computed this and it was only ever read as
+    a blocker on a new entry, which does nothing about what is already held."""
+    bundle = _Bundle(
+        order_flow=_Item(available=False),
+        metodo=_Item(available=False),
+        session=_Item(_session(flat=True)),
+    )
+
+    assert _facts(bundle=bundle).must_be_flat is True
+
+
+def test_an_open_session_does_not_ask_for_a_flat_book() -> None:
+    bundle = _Bundle(
+        order_flow=_Item(available=False),
+        metodo=_Item(available=False),
+        session=_Item(_session(flat=False)),
+    )
+
+    assert _facts(bundle=bundle).must_be_flat is False
+
+
+def test_an_unreadable_clock_is_not_a_reason_to_close() -> None:
+    """Nor a reason to hold. It resolves like every other absence here: the
+    position keeps the stop it already has, and the entry path independently
+    refuses to open while the session evidence is missing, so nothing new
+    accumulates behind a deadline nobody can see."""
+    assert _facts().must_be_flat is False

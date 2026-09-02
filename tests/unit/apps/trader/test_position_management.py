@@ -113,6 +113,7 @@ class _Bundle:
     def __init__(self) -> None:
         self.order_flow = _Absent()
         self.metodo = _Absent()
+        self.session = _Absent()
 
 
 class _Absent:

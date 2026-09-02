@@ -863,6 +863,7 @@ _EXIT_KINDS = frozenset(
         V6PositionActionKind.EXIT_FULL_FIB_66,
         V6PositionActionKind.EXIT_FULL_METODO_CROSS_DOWN,
         V6PositionActionKind.EXIT_FULL_BLOCKING_BIG_TRADE,
+        V6PositionActionKind.EXIT_FULL_SESSION_CLOSE,
         V6PositionActionKind.EMERGENCY_EXIT_FULL,
     }
 )

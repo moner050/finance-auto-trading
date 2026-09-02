@@ -20,6 +20,7 @@ class V6PositionActionKind(StrEnum):
     EXIT_FULL_FIB_66 = "EXIT_FULL_FIB_66"
     EXIT_FULL_METODO_CROSS_DOWN = "EXIT_FULL_METODO_CROSS_DOWN"
     EXIT_FULL_BLOCKING_BIG_TRADE = "EXIT_FULL_BLOCKING_BIG_TRADE"
+    EXIT_FULL_SESSION_CLOSE = "EXIT_FULL_SESSION_CLOSE"
     EMERGENCY_EXIT_FULL = "EMERGENCY_EXIT_FULL"
 
 
@@ -101,6 +102,11 @@ class V6PositionFacts:
     blocking_big_trade: bool
     metodo_exit_signal: bool
     protection_failed: bool
+    # Section 7 wants a flat book before the close and forbids holding
+    # overnight. The session evaluation already computes this and it was only
+    # ever read as a blocker on a new entry, which does nothing about what is
+    # already held.
+    must_be_flat: bool = False
 
     def __post_init__(self) -> None:
         for name in ("current_price", "atr_5m", "tick_size"):
@@ -176,6 +182,13 @@ def manage_v6_position(
 
     if facts.protection_failed:
         return (_full_exit(position, V6PositionActionKind.EMERGENCY_EXIT_FULL, True),)
+    if facts.must_be_flat:
+        # Above the market reads and below a broken stop. A deadline cannot be
+        # argued with - the position is out whatever the tape says - but a
+        # position with no working protection is more urgent still.
+        return (
+            _full_exit(position, V6PositionActionKind.EXIT_FULL_SESSION_CLOSE, False),
+        )
     if facts.blocking_big_trade:
         return (
             _full_exit(

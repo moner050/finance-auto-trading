@@ -373,3 +373,49 @@ def test_the_fibonacci_observations_place_no_orders() -> None:
         )
         assert action.quantity is None
         assert action.order_style is None
+
+
+def test_the_session_deadline_closes_the_position() -> None:
+    """Section 7 wants a flat book before the close and forbids overnight.
+    Until this, `must_be_flat` was computed and read only as a blocker on a
+    new entry, which does nothing about what is already held - the position
+    stayed open through the night, and through the thin liquidity the session
+    boundary was measured to avoid."""
+    actions = manage_v6_position(
+        _position(), _facts(must_be_flat=True), mode=RuntimeMode.PAPER
+    )
+
+    assert _kinds(actions) == (V6PositionActionKind.EXIT_FULL_SESSION_CLOSE,)
+
+
+def test_a_broken_stop_outranks_the_session_deadline() -> None:
+    """A deadline cannot be argued with, but a position with no working
+    protection is more urgent still - and only the emergency halts the
+    account."""
+    actions = manage_v6_position(
+        _position(),
+        _facts(must_be_flat=True, protection_failed=True),
+        mode=RuntimeMode.PAPER,
+    )
+
+    assert _kinds(actions) == (V6PositionActionKind.EMERGENCY_EXIT_FULL,)
+
+
+def test_the_session_deadline_outranks_the_market_reads() -> None:
+    """The tape can say whatever it likes; the position is out either way, and
+    the recorded reason should be the one that was not negotiable."""
+    actions = manage_v6_position(
+        _position(),
+        _facts(must_be_flat=True, blocking_big_trade=True, metodo_exit_signal=True),
+        mode=RuntimeMode.PAPER,
+    )
+
+    assert _kinds(actions) == (V6PositionActionKind.EXIT_FULL_SESSION_CLOSE,)
+
+
+def test_an_open_session_leaves_the_position_alone() -> None:
+    actions = manage_v6_position(
+        _position(), _facts(must_be_flat=False), mode=RuntimeMode.PAPER
+    )
+
+    assert V6PositionActionKind.EXIT_FULL_SESSION_CLOSE not in _kinds(actions)
