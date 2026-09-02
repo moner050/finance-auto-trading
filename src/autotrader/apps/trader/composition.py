@@ -56,6 +56,11 @@ from autotrader.integrations.brokers.paper_submitter import (
     ExecutionBars,
     resolve_paper_fills,
 )
+from autotrader.operations.david_v6_position import (
+    V6ManagedPosition,
+    V6PositionAction,
+    V6PositionActionKind,
+)
 from autotrader.persistence.mysql.dispatch_store import MySqlDispatchStore
 from autotrader.persistence.mysql.models.accounts import Account
 from autotrader.persistence.mysql.models.david_v6 import DavidV6DecisionRow
@@ -82,6 +87,9 @@ from autotrader.persistence.mysql.models.strategy import (
 )
 from autotrader.persistence.mysql.paper_journal import MySqlPaperJournal
 from autotrader.persistence.mysql.repositories.david_v6 import DavidV6Repository
+from autotrader.persistence.mysql.repositories.david_v6_position import (
+    MySqlManagedPositions,
+)
 from autotrader.persistence.mysql.repositories.fills import MySqlFillStore
 from autotrader.persistence.mysql.repositories.intents import OrderIntentRepository
 from autotrader.persistence.mysql.repositories.operations import (
@@ -846,6 +854,204 @@ _LEG_ROLES = {
     IntentType.EXIT: ChargeLegRole.EXIT_TARGET,
     IntentType.PROTECTIVE: ChargeLegRole.EXIT_STOP,
 }
+
+
+# The reason an exit order carries, so an operator reading the intent sees the
+# rule that produced it rather than only that something closed.
+_EXIT_KINDS = frozenset(
+    {
+        V6PositionActionKind.EXIT_FULL_FIB_66,
+        V6PositionActionKind.EXIT_FULL_METODO_CROSS_DOWN,
+        V6PositionActionKind.EXIT_FULL_BLOCKING_BIG_TRADE,
+        V6PositionActionKind.EMERGENCY_EXIT_FULL,
+    }
+)
+
+
+class PositionActionUnsupportedError(RuntimeError):
+    """Raised for an action this sink cannot carry out.
+
+    Loud on purpose. An action decided and then quietly dropped is the exact
+    failure this whole path exists to fix, so anything not built yet stops the
+    run and names itself rather than passing silently.
+    """
+
+
+class MySqlPositionActions:
+    """Turn a decided action into an order, or refuse to pretend.
+
+    What is built is the half that gets a position out: the four full exits,
+    which are what `exit_before_blocking_big_trade` and the fibonacci target
+    come to, plus the telemetry that only records a level was reached.
+
+    What is not built is the half that improves a position - moving the stop
+    to break-even, and adding at thirty points. Both need machinery this does
+    not have. Replacing a working stop means cancelling one first, and two
+    stops behind one position is worse than a stop that never moved. An add
+    increases exposure, so it needs a real risk reservation rather than the
+    REDUCE a closing order carries.
+
+    Leaving those out changes nothing about how a position behaves today,
+    because neither happened before either. Doing them half-right would change
+    how much money is at risk.
+
+    An emergency exit closes first and refuses the halt second, in that order.
+    The position is out because that is the urgent part, and the run then
+    stops with its reason rather than carrying on with an account that was
+    supposed to be halted and was not.
+    """
+
+    def __init__(
+        self,
+        *,
+        sessions: async_sessionmaker[AsyncSession],
+        account: ExecutionAccount,
+        instrument_id: UUID,
+        broker: BrokerSubmitter,
+    ) -> None:
+        self._sessions = sessions
+        self._account = account
+        self._instrument_id = instrument_id
+        self._broker = broker
+
+    async def apply(
+        self,
+        action: V6PositionAction,
+        *,
+        position: V6ManagedPosition,
+        position_id: UUID,
+        now: datetime,
+    ) -> None:
+        moment = require_utc(now)
+        if action.telemetry_only:
+            async with self._sessions() as session:
+                await MySqlManagedPositions(session).record_mark(
+                    position_id=position_id, mark=action.kind.value, now=moment
+                )
+                await session.commit()
+            return
+        if action.kind not in _EXIT_KINDS:
+            raise PositionActionUnsupportedError(
+                f"{action.kind.value} is decided but this sink cannot carry it out"
+            )
+        await self._close(
+            action, position=position, position_id=position_id, now=moment
+        )
+        if action.account_halt:
+            raise PositionActionUnsupportedError(
+                f"{action.kind.value} closed the position and asks for an "
+                "account halt, which this sink cannot set"
+            )
+
+    async def _close(
+        self,
+        action: V6PositionAction,
+        *,
+        position: V6ManagedPosition,
+        position_id: UUID,
+        now: datetime,
+    ) -> None:
+        # `or` would read an explicit zero as "unspecified" and close the
+        # whole position, which is the opposite of what a zero asks for.
+        quantity = (
+            position.remaining_quantity if action.quantity is None else action.quantity
+        )
+        if quantity <= 0:
+            return
+        async with self._sessions() as session:
+            command_id = await self._create_exit_order(
+                session,
+                action=action,
+                position=position,
+                position_id=position_id,
+                quantity=quantity,
+                now=now,
+            )
+            await session.commit()
+        if command_id is None:
+            return
+        async with self._sessions() as session:
+            await DispatchService(
+                store=MySqlDispatchStore(session), broker=self._broker
+            ).dispatch(command_id=command_id, now=now)
+            await session.commit()
+
+    async def _create_exit_order(
+        self,
+        session: AsyncSession,
+        *,
+        action: V6PositionAction,
+        position: V6ManagedPosition,
+        position_id: UUID,
+        quantity: Decimal,
+        now: datetime,
+    ) -> UUID | None:
+        intent = OrderIntentFactory().from_protection(
+            account=self._account.account,
+            request=ProtectionRequest(
+                locked_position_id=position_id,
+                reason_code=action.kind.value,
+                instrument_id=self._instrument_id,
+                intent_type=IntentType.EXIT,
+                # Closing, so the opposite of what is held.
+                side=Side.SELL if position.side is Side.BUY else Side.BUY,
+                order_style=OrderStyle.MARKET,
+                terms=OrderTerms(
+                    requested_quantity=quantity,
+                    limit_price=None,
+                    trigger_price=None,
+                ),
+            ),
+        )
+        row = _persisted_intent(intent, position_id, now)
+        # Owed to a position rather than to a signal, and the row records
+        # which rule closed it so an operator sees why, not only that it did.
+        row.strategy_signal_id = None
+        row.protection_position_id = position_id
+        row.protection_reason_code = action.kind.value
+        stored = await OrderIntentRepository(session).create_or_get(row)
+        risk_decision = _reduction_decision(
+            intent_id=stored.id,
+            quantity=quantity,
+            account=self._account,
+            now=now,
+        )
+        await RiskReservationService(
+            uow=cast(RiskReservationUow, MySqlRiskReservationUow(session))
+        ).persist_approval(
+            decision=cast(RiskDecisionRecord, risk_decision),
+            reservation=cast(
+                RiskReservationRecord,
+                _consumed_reservation(risk_decision, self._account.account.id, now),
+            ),
+            account_id=self._account.account.id,
+            currency=self._account.currency,
+        )
+        order = await OrderService(
+            store=MySqlOrderStore(session)
+        ).create_from_risk_decision(
+            decision=_domain_decision(risk_decision, stored.id),
+            intent=intent,
+            submission=OrderSubmissionContext(
+                broker_client_order_id=f"exit-{stored.id.hex}",
+                owner_runtime_instance_id=self._account.runtime_instance_id,
+                fencing_token=self._account.fencing_token,
+                not_after=now + _RESERVATION_WINDOW,
+                time_in_force="GTC",
+                # Closing only, the same authority the stop carries, because
+                # this is the same kind of act.
+                authority_class=STRICT_REDUCTION,
+                created_at=now,
+            ),
+        )
+        if order is None:
+            return None
+        await session.flush()
+        return await session.scalar(
+            select(PersistedOrderCommand.id).where(
+                PersistedOrderCommand.order_id == order.id
+            )
+        )
 
 
 class MySqlFillSettlement:
