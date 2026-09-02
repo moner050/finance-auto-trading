@@ -30,6 +30,7 @@ from autotrader.apps.backoffice.auth import (
     new_session_id,
 )
 from autotrader.apps.backoffice.ledger import SOLE_OPERATOR_EMAIL
+from autotrader.apps.backoffice.provider_secrets import registerable_secrets
 from autotrader.apps.backoffice.second_password import (
     APPROVAL_PREFIX,
     ATTEMPT_PREFIX,
@@ -164,12 +165,24 @@ def _approval_id(body: str) -> str:
     return body[start : body.index('"', start)]
 
 
+def _register_slot() -> str:
+    """The catalogue entry for the secret these tests register.
+
+    Taken from the catalogue rather than written out, because the slot string
+    is the form's own encoding of a choice and no operator ever types one.
+    What the test is entitled to assert is that this secret can be
+    registered, not how the option is spelled.
+    """
+    for entry in registerable_secrets():
+        if entry.logical_name == NAME:
+            return entry.slot
+    raise AssertionError(f"{NAME} is not registerable")
+
+
 def _register_form() -> dict[str, str]:
     return {
         "csrf_token": CSRF,
-        "logical_name": NAME,
-        "provider": "GOOGLE",
-        "environment": "",
+        "slot": _register_slot(),
         "plaintext": VALUE,
     }
 

@@ -31,6 +31,7 @@ from autotrader.persistence.mysql.engine import create_engine
 from autotrader.persistence.mysql.models.accounts import Account, Broker
 from autotrader.persistence.mysql.models.bindings import ProviderAccountBinding
 from autotrader.persistence.mysql.seeds.core import (
+    BINANCE_BROKER_ID,
     BINANCE_USDM_EXCHANGE_CODE,
     seed_core_reference_session,
 )
@@ -62,7 +63,12 @@ async def _account(
     async with sessions() as session:
         broker = await session.scalar(select(Broker).where(Broker.code == "BINANCE"))
         if broker is None:
-            broker = Broker(id=uuid7(), code="BINANCE", name="Binance")
+            # The seeded identity, not a fresh one. `exec_broker` has a
+            # natural key on the code, and the reference seed refuses a row
+            # that holds its code under a different id - so a test that
+            # invents an id here makes seeding fail for every test that runs
+            # after it.
+            broker = Broker(id=BINANCE_BROKER_ID, code="BINANCE", name="Binance")
             session.add(broker)
             await session.flush()
         account = Account(
