@@ -24,8 +24,6 @@ from autotrader.strategies.david_v6.grading import (
     _RESEARCH_WEIGHTS,
     ABNORMAL_SPREAD_OR_SLIPPAGE,
     CANDIDATE_SCORE,
-    FIBONACCI_EXTENSION_CLUSTER,
-    HIGHER_TIMEFRAME_BIAS,
     V1_CERO_OSMOTICO,
     indicator_weight,
 )
@@ -49,8 +47,6 @@ ASSEMBLY = (
 # so producing it would add a row that cannot matter.
 WITHOUT_A_PRODUCER = frozenset(
     {
-        HIGHER_TIMEFRAME_BIAS,
-        FIBONACCI_EXTENSION_CLUSTER,
         ABNORMAL_SPREAD_OR_SLIPPAGE,
         V1_CERO_OSMOTICO,
     }
@@ -80,6 +76,7 @@ def test_the_scan_finds_the_producers() -> None:
     assert len(producible) >= 6
     assert "regular_hlit_divergence" in producible
     assert "v1_secado" in producible, "wired by F14"
+    assert "higher_timeframe_bias_aligned" in producible, "wired by F14"
 
 
 def test_every_weight_has_a_producer_or_is_named() -> None:

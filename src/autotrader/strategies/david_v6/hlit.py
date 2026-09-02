@@ -29,6 +29,14 @@ FIB_66 = Decimal("0.66")
 FIB_LEVELS = (FIB_25, FIB_50, FIB_66)
 TARGET_LEVEL = FIB_66
 
+# Section 21.4's targets beyond the retracement:
+# `high_confidence_target: [1.272_extension, 1.618_extension, ...]`. Section
+# 15.2 rates the GOLD numbers HIGH on the value and MEDIUM on the use, so the
+# two ratios are taken as given and what is done with them is not.
+FIB_127 = Decimal("1.272")
+FIB_162 = Decimal("1.618")
+EXTENSION_LEVELS = (FIB_127, FIB_162)
+
 
 @dataclass(frozen=True, slots=True)
 class HlitSetup:
@@ -103,6 +111,22 @@ class HlitFacts:
         if type(side) is not Side:
             raise TypeError("side must be an exact Side")
         return self.bullish if side is Side.BUY else self.bearish
+
+
+def extension_prices(setup: HlitSetup) -> tuple[Decimal, ...]:
+    """Where the move projects to past its own origin.
+
+    The retracement runs from `anchor_b` back toward `anchor_a`; an extension
+    is the same span carried beyond it, which is why these are section 21.4's
+    targets rather than its entries. The span is recovered from the drawn 66%
+    level so this cannot disagree with the anchors the setup was built from.
+    """
+    if type(setup) is not HlitSetup:
+        raise TypeError("setup must be an exact HlitSetup")
+    span = (setup.fib_66 - setup.anchor_b) / FIB_66
+    if setup.direction is Side.BUY:
+        return tuple(setup.anchor_b + span * level for level in EXTENSION_LEVELS)
+    return tuple(setup.anchor_b - abs(span) * level for level in EXTENSION_LEVELS)
 
 
 def build_hlit_setups(
@@ -196,12 +220,16 @@ def _bars(values: Sequence[CompletedOhlcvBar]) -> tuple[CompletedOhlcvBar, ...]:
 
 
 __all__ = (
+    "EXTENSION_LEVELS",
     "FIB_25",
     "FIB_50",
     "FIB_66",
+    "FIB_127",
+    "FIB_162",
     "FIB_LEVELS",
     "TARGET_LEVEL",
     "HlitFacts",
     "HlitSetup",
     "build_hlit_setups",
+    "extension_prices",
 )

@@ -566,6 +566,10 @@ def test_every_derived_indicator_is_backed_by_bundle_provenance() -> None:
             result.bundle.profile,
             result.bundle.order_flow,
             result.bundle.calendar,
+            # Scored since the higher-timeframe bias was wired. The engine
+            # takes provenance from every fact in `_facts`, so this list
+            # being shorter than that one is what dated it.
+            result.bundle.regime,
         )
         if item.provenance is not None
     }
