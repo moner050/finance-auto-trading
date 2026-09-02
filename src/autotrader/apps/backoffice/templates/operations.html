@@ -27,6 +27,76 @@
   2차 비밀번호가 필요하며, 무장 대상과 정책을 확인한 뒤 진행합니다.
 </p>
 
+<h2>최근 24시간</h2>
+<div class="panel">
+  <p class="note">
+    시간별 평가 건수입니다. 이 화면의 모든 시각은 <strong>KST</strong>이고,
+    저장은 UTC입니다.
+    빗금 친 칸은 그 시간에 평가가 하나도 없었다는 뜻 — 루프가 돌지 않았다는 신호이고,
+    이 그림에서 가장 먼저 봐야 할 것입니다.
+    <span class="ok">초록 막대</span>는 승인된 셋업이 나온 시간입니다.
+  </p>
+  <ul class="series">
+    {% for bucket in view.activity %}
+    <li class="{{ 'idle' if bucket.idle }}"
+        title="{{ bucket.hour | kst('%m-%d %H') }}시 · 평가 {{ bucket.decisions }}건{% if bucket.accepted %} · 승인 {{ bucket.accepted }}건{% endif %}{% if bucket.best_matched is not none %} · 최다 일치 {{ bucket.best_matched }} · 최소 차단 {{ bucket.fewest_blockers }}{% endif %}">
+      <span class="bar {{ 'took' if bucket.accepted }}"
+            style="height: {{ (bucket.decisions * 100 // view.busiest_hour) if not bucket.idle else 100 }}%"></span>
+    </li>
+    {% endfor %}
+  </ul>
+  <ul class="axis">
+    {% for bucket in view.activity %}
+    <li class="{{ '' if loop.index0 % 3 == 0 else 'quiet' }}">{{ bucket.hour | kst('%H') }}</li>
+    {% endfor %}
+  </ul>
+
+  <dl class="figures">
+    <div>
+      <dt>평가</dt>
+      <dd>{{ view.evaluated_recently }}<span class="unit"> 건</span></dd>
+    </div>
+    <div>
+      <dt>승인된 셋업</dt>
+      <dd class="{{ 'ok' if view.accepted_recently else 'empty' }}">
+        {{ view.accepted_recently }}<span class="unit"> 건</span>
+      </dd>
+    </div>
+    <div>
+      <dt>평가 없던 시간</dt>
+      <dd class="{{ 'danger' if view.idle_hours > 2 else '' }}">
+        {{ view.idle_hours }}<span class="unit"> / 24</span>
+      </dd>
+    </div>
+    {% if view.closest_recently %}
+    <div>
+      <dt>가장 근접했던 시간</dt>
+      <dd>
+        {{ view.closest_recently.hour | kst('%m-%d %H') }}<span class="unit">시</span>
+      </dd>
+    </div>
+    <div>
+      <dt>그때 일치 / 차단</dt>
+      <dd>
+        {{ view.closest_recently.best_matched }}<span class="unit"> / </span>{{ view.closest_recently.fewest_blockers }}
+      </dd>
+    </div>
+    {% endif %}
+  </dl>
+
+  {% if view.evaluated_recently and not view.accepted_recently %}
+  <p class="note">
+    24시간 동안 승인된 셋업이 없습니다. 평가가 돌고 있는 한 이것 자체는 결함이 아닙니다 —
+    전략이 거절한 것과 시스템이 평가하지 못한 것은 다르고, 위 막대가 서 있다는 것은
+    앞쪽이라는 뜻입니다. 거절 사유는 아래 <a href="#recent-decisions">최근 결정</a>에 있습니다.
+  </p>
+  {% elif not view.evaluated_recently %}
+  <p class="danger">
+    24시간 동안 평가가 한 건도 없습니다. 루프가 돌지 않았거나 리스를 잡지 못했습니다.
+  </p>
+  {% endif %}
+</div>
+
 <h2>제어</h2>
 {% if view.controls %}
 <table>
@@ -36,7 +106,7 @@
     <td>{{ control.scope_type }} / {{ control.scope_key }}</td>
     <td>{{ '예' if control.armed else '아니오' }}</td>
     <td class="code">{{ control.kill_switch_level }}</td>
-    <td>{{ control.lease_expires_at or '-' }}</td>
+    <td class="code">{{ control.lease_expires_at | kst }}</td>
   </tr>
   {% endfor %}
 </table>
@@ -64,13 +134,13 @@
 <p class="empty">열린 포지션이 없습니다.</p>
 {% endif %}
 
-<h2>최근 결정</h2>
+<h2 id="recent-decisions">최근 결정</h2>
 {% if view.decisions %}
 <table>
   <tr><th>시각</th><th>시장</th><th>등급</th><th>방향</th><th>차단 사유</th></tr>
   {% for decision in view.decisions %}
   <tr>
-    <td>{{ decision.generated_at }}</td>
+    <td class="code">{{ decision.generated_at | kst }}</td>
     <td class="code">{{ decision.market }}</td>
     <td>{{ decision.grade }}</td>
     <td>{{ decision.side }}</td>
@@ -88,7 +158,7 @@
   <tr><th>시각</th><th>종목</th><th>심각도</th><th>구분</th></tr>
   {% for drift in view.drifts %}
   <tr>
-    <td>{{ drift.created_at }}</td>
+    <td class="code">{{ drift.created_at | kst }}</td>
     <td>{{ drift.instrument_code or '-' }}</td>
     <td class="{{ 'halted' if drift.severity == 'BLOCKING' else '' }}">{{ drift.severity }}</td>
     <td class="code">{{ drift.diff_key }}</td>
@@ -105,7 +175,7 @@
   <tr><th>시각</th><th>심각도</th><th>사유</th><th>범위</th></tr>
   {% for incident in view.incidents %}
   <tr>
-    <td>{{ incident.created_at }}</td>
+    <td class="code">{{ incident.created_at | kst }}</td>
     <td class="{{ 'halted' if incident.severity == 'BLOCKING' else '' }}">{{ incident.severity }}</td>
     <td class="code">{{ incident.reason_code }}</td>
     <td>{{ incident.scope_type or '-' }} / {{ incident.scope_key or '-' }}</td>

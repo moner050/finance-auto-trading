@@ -9,14 +9,15 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import fields
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from itertools import pairwise
 from uuid import UUID, uuid7
 
 import pytest
 from conftest import integration_database_url
 from integration.risk.test_concurrent_reservation import _seed as _risk_seed
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from autotrader.apps.backoffice.read_model import (
     ControlView,
@@ -222,3 +223,41 @@ def test_no_projection_field_can_carry_a_secret() -> None:
         assert not any(
             forbidden in name for name in names for forbidden in _FORBIDDEN
         ), f"{view.__name__} exposes {names}"
+
+
+@pytest.mark.integration
+def test_the_day_is_whole_even_where_nothing_was_evaluated() -> None:
+    """The gaps are the point.
+
+    A GROUP BY returns the hours that have rows, so an idle night comes back
+    as an absence and the chart would draw a busy day with the quiet part cut
+    out. The buckets are generated from the clock and filled from the query,
+    and this is what says so.
+    """
+
+    async def scenario(sessions: async_sessionmaker[AsyncSession]) -> None:
+        async with sessions() as session:
+            buckets = await OperationsReadModel(session).activity(now=NOW)
+
+        assert len(buckets) == 24
+        assert buckets[-1].hour == NOW.replace(minute=0, second=0, microsecond=0)
+        assert buckets[0].hour == buckets[-1].hour - timedelta(hours=23)
+        # Contiguous and in order: the axis labels are printed by position.
+        for earlier, later in pairwise(buckets):
+            assert later.hour - earlier.hour == timedelta(hours=1)
+
+    _drive(scenario)
+
+
+@pytest.mark.integration
+def test_the_window_is_refused_rather_than_silently_clamped() -> None:
+    """A caller asking for a year would ask the database for a year."""
+
+    async def scenario(sessions: async_sessionmaker[AsyncSession]) -> None:
+        async with sessions() as session:
+            model = OperationsReadModel(session)
+            for hours in (0, -1, 169):
+                with pytest.raises(ValueError):
+                    await model.activity(hours=hours, now=NOW)
+
+    _drive(scenario)

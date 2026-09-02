@@ -442,3 +442,45 @@ def test_a_resubmitted_form_is_the_same_command_not_a_second_one() -> None:
         )
 
     _drive(scenario)
+
+
+@pytest.mark.acceptance
+@pytest.mark.integration
+def test_the_screen_draws_the_day_including_the_hours_it_was_down() -> None:
+    """A read model that nobody renders is the defect this codebase keeps
+    producing, so the assertion is on the page rather than on the projection.
+
+    Twenty-four columns whatever happened: the operator's first question on
+    arriving is whether the loop ran all night, and a chart that only draws
+    the busy hours answers yes every time.
+    """
+    import re
+
+    async def scenario(sessions: async_sessionmaker[AsyncSession]) -> None:
+        ids = await _risk_seed(sessions)
+        await _arm(sessions, armed=True)
+
+        store = _Store()
+        app = _backoffice(sessions, store, ids.account_id)  # type: ignore[attr-defined]
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url=BASE_URL
+        ) as client:
+            client.cookies.set(
+                SESSION_COOKIE, await store.create_session(Operator(email=ALLOWED))
+            )
+            response = await client.get("/")
+
+        assert response.status_code == 200
+        body = response.text
+        assert "최근 24시간" in body
+        chart = body[
+            body.index('<ul class="series">') : body.index('<ul class="axis">')
+        ]
+        assert chart.count("<li") == 24, "every hour gets a column"
+        # Heights are a percentage of the tallest hour and are printed into
+        # the style attribute, so they have to be there and be in range.
+        heights = [int(value) for value in re.findall(r"height: (\d+)%", chart)]
+        assert len(heights) == 24
+        assert all(0 <= height <= 100 for height in heights)
+
+    _drive(scenario)

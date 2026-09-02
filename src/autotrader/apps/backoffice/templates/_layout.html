@@ -155,6 +155,126 @@
       .panel h2, .panel h3 { margin-top: 0; }
       .panel h2 { border-bottom: 0; padding-bottom: 0; }
 
+      /* A long explanation belongs on the screen it explains, not in a
+         document somebody has to already know exists. Collapsed, because
+         after the first read it is in the way of the work. */
+      /* A day of evaluation as bars. No canvas and no script: the shape
+         of the series is a column per hour whose height is a percentage,
+         which CSS already draws. What the operator reads off it first is the
+         gaps - an hour with no bar is an hour the loop was not running. */
+      .series {
+        display: flex;
+        align-items: flex-end;
+        gap: 2px;
+        height: 84px;
+        padding: 0;
+        margin: .2rem 0 0;
+        border-bottom: 1px solid var(--line-strong);
+      }
+      .series > li {
+        flex: 1 1 0;
+        min-width: 0;
+        list-style: none;
+        height: 100%;
+        display: flex;
+        align-items: flex-end;
+      }
+      .series .bar {
+        width: 100%;
+        background: var(--accent);
+        border-radius: 2px 2px 0 0;
+        min-height: 2px;
+      }
+      /* An hour that produced an approved setup is the one thing on this
+         chart worth interrupting for, so it is the only colour change. */
+      .series .bar.took { background: var(--ok); }
+      .series li.idle .bar {
+        background: repeating-linear-gradient(
+          45deg, var(--line), var(--line) 2px, transparent 2px, transparent 4px);
+        height: 100%;
+        border-radius: 0;
+        opacity: .55;
+      }
+      .axis {
+        display: flex;
+        gap: 2px;
+        margin: .3rem 0 0;
+        padding: 0;
+      }
+      .axis > li {
+        flex: 1 1 0;
+        min-width: 0;
+        list-style: none;
+        text-align: center;
+        font-size: .68rem;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+        /* Every third hour, or twenty-four labels collide into a smear. */
+        overflow: hidden;
+      }
+      .axis > li.quiet { visibility: hidden; }
+      /* The numbers under the chart, each one labelled. A bare row of digits
+         needs the legend read first, and it never is. */
+      .figures {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.6rem;
+        margin: 1rem 0 0;
+        padding: 0;
+      }
+      .figures > div { min-width: 7rem; }
+      .figures dt {
+        font-size: .8rem;
+        color: var(--muted);
+        margin: 0 0 .15rem;
+      }
+      .figures dd {
+        margin: 0;
+        font-size: 1.35rem;
+        font-variant-numeric: tabular-nums;
+        line-height: 1.2;
+      }
+      .figures dd .unit { font-size: .8rem; color: var(--muted); }
+
+      details.help {
+        border: 1px solid var(--line-strong);
+        border-radius: 6px;
+        margin: 1.1rem 0;
+        padding: 0 1.35rem;
+        background: var(--rail);
+      }
+      details.help > summary {
+        cursor: pointer;
+        padding: .75rem 0;
+        font-weight: 600;
+        font-size: .92rem;
+      }
+      details.help[open] > summary {
+        border-bottom: 1px solid var(--line);
+        margin-bottom: .9rem;
+      }
+      details.help > :last-child { margin-bottom: 1.1rem; }
+      details.help h4 {
+        margin: 1.2rem 0 .4rem;
+        font-size: .9rem;
+      }
+      details.help ol, details.help ul { max-width: 68ch; padding-left: 1.3rem; }
+      details.help li { margin: .4rem 0; font-size: .9rem; }
+      details.help p { max-width: 68ch; font-size: .9rem; }
+      /* Sample documents scroll on their own rather than widening the page:
+         a manifest line is longer than the column and always will be. */
+      pre.sample {
+        overflow-x: auto;
+        max-width: 68ch;
+        background: var(--page);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: .8rem 1rem;
+        font-family: ui-monospace, "Cascadia Mono", monospace;
+        font-size: .78rem;
+        line-height: 1.55;
+      }
+
       .code {
         font-family: ui-monospace, "Cascadia Mono", monospace;
         font-size: .82rem;

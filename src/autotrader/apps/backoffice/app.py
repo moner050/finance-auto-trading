@@ -7,6 +7,7 @@ anything added beside it, gets the operator or never runs.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -71,6 +72,7 @@ from autotrader.apps.backoffice.commands import (
     SafetyAction,
     new_command,
 )
+from autotrader.apps.backoffice.display import in_kst
 from autotrader.apps.backoffice.evidence_read_model import EvidenceReadModel
 from autotrader.apps.backoffice.exposure import (
     DangerousAction,
@@ -79,8 +81,12 @@ from autotrader.apps.backoffice.exposure import (
     new_exposure_command,
 )
 from autotrader.apps.backoffice.ledger import SourceAddressUnknownError
-from autotrader.apps.backoffice.policies_read_model import PoliciesReadModel
+from autotrader.apps.backoffice.policies_read_model import (
+    PoliciesReadModel,
+    PolicyVersionView,
+)
 from autotrader.apps.backoffice.policy_commands import (
+    CreatableVersion,
     MySqlPolicyCommands,
     PolicyFacts,
     new_create_command,
@@ -177,6 +183,9 @@ def create_app(
     app = FastAPI(title="Autotrader Backoffice", docs_url=None, redoc_url=None)
     app.state.session_store = store
     templates = Jinja2Templates(directory=str(TEMPLATES))
+    # Registered once, here, so no template can print a bare UTC datetime
+    # beside a converted one. See `display` for why the store stays UTC.
+    templates.env.filters["kst"] = in_kst
     controls = MySqlSafetyControls(sessions)
     passwords = MySqlSecondPasswords(sessions)
     account_reader = None if keys is None else AccountsReadModel(sessions, keys)
@@ -1327,6 +1336,83 @@ async def _render_universe(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _SizingRow:
+    name: str
+    display: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PolicyVersionRow:
+    """One policy version on the screen, whatever state it is in."""
+
+    policy_code: str
+    version: str
+    state: str
+    scope: str | None
+    version_id: UUID | None
+    rows: tuple[_SizingRow, ...]
+
+
+def _policy_versions(
+    stored: tuple[PolicyVersionView, ...], creatable: tuple[CreatableVersion, ...]
+) -> tuple[_PolicyVersionRow, ...]:
+    """Every policy version on one list, whatever state it is in.
+
+    The screen used to have "버전 생성" and "버전" as separate sections with
+    the account bindings between them, and both showed the same thing: a
+    policy version and its sizing table. Which section a version appeared in
+    was the only way to tell whether it existed yet, so the operator joined
+    the two lists by reading.
+
+    One list, and the state is a column. The action follows from the state: a
+    definition with no row is created, a stored row that is not in force is
+    applied, and the one in force offers nothing because there is nothing to
+    do to it.
+    """
+    merged: list[_PolicyVersionRow] = []
+    for item in creatable:
+        merged.append(
+            _PolicyVersionRow(
+                policy_code=item.policy_code,
+                version=item.version,
+                state="NOT_CREATED",
+                scope=f"{item.market} · {item.scope}",
+                version_id=None,
+                # The definition names them `right` because the creation
+                # screen was a diff. Read out here so the template does not
+                # have to know which list an entry came from.
+                rows=tuple(
+                    _SizingRow(name=field.name, display=field.right)
+                    for field in item.sizing
+                ),
+            )
+        )
+    for version in stored:
+        merged.append(
+            _PolicyVersionRow(
+                policy_code=version.policy_code,
+                version=version.version,
+                state="ACTIVE" if version.active else "STORED",
+                scope=None,
+                version_id=version.version_id,
+                rows=tuple(
+                    _SizingRow(name=field.name, display=field.display)
+                    for field in (
+                        *version.sizing,
+                        *version.counts,
+                        *version.freshness,
+                    )
+                ),
+            )
+        )
+    # Grouped by policy, and within a policy the one in force first: an
+    # operator looking at this screen is nearly always asking what is in
+    # force right now.
+    order = {"ACTIVE": 0, "STORED": 1, "NOT_CREATED": 2}
+    return tuple(sorted(merged, key=lambda item: (item.policy_code, order[item.state])))
+
+
 async def _render_policies(
     request: Request,
     session: Session,
@@ -1339,13 +1425,16 @@ async def _render_policies(
     binding: BindingFacts | None = None,
     approval_id: str | None = None,
 ) -> Response:
+    view = await reader.load()
+    creatable = () if commands is None else await commands.creatable()
     return templates.TemplateResponse(
         request=request,
         name="policies.html",
         context={
             "session": session,
-            "view": await reader.load(),
-            "creatable": () if commands is None else await commands.creatable(),
+            "view": view,
+            "versions": _policy_versions(view.versions, creatable),
+            "creatable": creatable,
             "error": error,
             "facts": facts,
             "binding": binding,

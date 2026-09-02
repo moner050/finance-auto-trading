@@ -12,11 +12,11 @@ Everything here is a read. Nothing on this path may authorize anything.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from autotrader.persistence.mysql.models.core import CoreInstrument
@@ -35,6 +35,8 @@ from autotrader.persistence.mysql.models.reconciliation import (
 from autotrader.persistence.mysql.repositories.protection import ProtectionRepository
 
 DEFAULT_DECISION_LIMIT = 20
+# A day, so an operator arriving in the morning sees the night.
+ACTIVITY_HOURS = 24
 DEFAULT_INCIDENT_LIMIT = 20
 
 
@@ -91,9 +93,30 @@ class IncidentView:
 
 
 @dataclass(frozen=True, slots=True)
+class ActivityBucket:
+    """One hour of evaluation, including the hours with nothing in them.
+
+    An empty hour is the most important thing this series can say - it means
+    the loop was not running - so the buckets are generated from the clock and
+    filled from the query rather than taken from whatever the query returned.
+    """
+
+    hour: datetime
+    decisions: int
+    accepted: int
+    best_matched: int | None
+    fewest_blockers: int | None
+
+    @property
+    def idle(self) -> bool:
+        return self.decisions == 0
+
+
+@dataclass(frozen=True, slots=True)
 class OperationsView:
     controls: tuple[ControlView, ...]
     decisions: tuple[DecisionView, ...]
+    activity: tuple[ActivityBucket, ...]
     positions: tuple[PositionView, ...]
     drifts: tuple[DriftView, ...]
     incidents: tuple[IncidentView, ...]
@@ -105,6 +128,52 @@ class OperationsView:
             control.armed and control.kill_switch_level == "NONE"
             for control in self.controls
         )
+
+    @property
+    def busiest_hour(self) -> int:
+        """The tallest bar, so the chart has something to scale against.
+
+        One rather than zero when nothing has happened: the bars are a
+        percentage of this, and an empty day should draw a flat axis rather
+        than divide by zero.
+        """
+        return max((bucket.decisions for bucket in self.activity), default=0) or 1
+
+    @property
+    def evaluated_recently(self) -> int:
+        return sum(bucket.decisions for bucket in self.activity)
+
+    @property
+    def accepted_recently(self) -> int:
+        return sum(bucket.accepted for bucket in self.activity)
+
+    @property
+    def closest_recently(self) -> ActivityBucket | None:
+        """The hour that came nearest to a setup.
+
+        Nearest means most indicators matched, and fewest blockers breaks the
+        tie. Both are needed: a pass can be blocked by one thing having
+        matched nothing, and that is not close.
+        """
+        scored = [
+            bucket
+            for bucket in self.activity
+            if bucket.best_matched is not None and bucket.fewest_blockers is not None
+        ]
+        if not scored:
+            return None
+        return max(
+            scored,
+            key=lambda bucket: (
+                bucket.best_matched or 0,
+                -(bucket.fewest_blockers or 0),
+                bucket.hour,
+            ),
+        )
+
+    @property
+    def idle_hours(self) -> int:
+        return sum(1 for bucket in self.activity if bucket.idle)
 
     @property
     def unprotected_positions(self) -> tuple[PositionView, ...]:
@@ -121,10 +190,12 @@ class OperationsReadModel:
         account_id: UUID,
         decision_limit: int = DEFAULT_DECISION_LIMIT,
         incident_limit: int = DEFAULT_INCIDENT_LIMIT,
+        now: datetime | None = None,
     ) -> OperationsView:
         return OperationsView(
             controls=await self.controls(),
             decisions=await self.decisions(limit=decision_limit),
+            activity=await self.activity(now=now),
             positions=await self.positions(account_id=account_id),
             drifts=await self.open_drifts(),
             incidents=await self.open_incidents(limit=incident_limit),
@@ -176,6 +247,66 @@ class OperationsReadModel:
             )
             for row in rows
         )
+
+    async def activity(
+        self, *, hours: int = ACTIVITY_HOURS, now: datetime | None = None
+    ) -> tuple[ActivityBucket, ...]:
+        """Evaluation per hour, oldest first, with the empty hours kept.
+
+        Aggregated in the database rather than by reading the decisions back:
+        a day of five-minute passes is around three hundred rows, and the
+        screen wants five numbers per hour, not the rows.
+
+        The clock is the caller's so a test can state the hour it means. The
+        buckets are UTC because everything else on this screen prints UTC, and
+        one panel on local time beside tables on UTC is worse than either.
+        """
+        if type(hours) is not int or not 1 <= hours <= 168:
+            raise ValueError("activity window must be between 1 and 168 hours")
+        moment = (now or datetime.now(UTC)).astimezone(UTC)
+        latest = moment.replace(minute=0, second=0, microsecond=0)
+        earliest = latest - timedelta(hours=hours - 1)
+        bucket = func.date_format(DavidV6DecisionRow.generated_at, "%Y-%m-%d %H")
+        rows = (
+            await self._session.execute(
+                select(
+                    bucket.label("hour"),
+                    func.count().label("decisions"),
+                    func.sum(
+                        case((DavidV6DecisionRow.grade != "REJECT", 1), else_=0)
+                    ).label("accepted"),
+                    func.max(DavidV6DecisionRow.matched_indicator_count),
+                    func.min(DavidV6DecisionRow.blocker_count),
+                )
+                .where(DavidV6DecisionRow.generated_at >= earliest)
+                .group_by(bucket)
+            )
+        ).all()
+        found = {
+            str(row[0]): (
+                int(row[1]),
+                int(row[2] or 0),
+                None if row[3] is None else int(row[3]),
+                None if row[4] is None else int(row[4]),
+            )
+            for row in rows
+        }
+        buckets: list[ActivityBucket] = []
+        for step in range(hours):
+            hour = earliest + timedelta(hours=step)
+            decisions, accepted, matched, blockers = found.get(
+                hour.strftime("%Y-%m-%d %H"), (0, 0, None, None)
+            )
+            buckets.append(
+                ActivityBucket(
+                    hour=hour,
+                    decisions=decisions,
+                    accepted=accepted,
+                    best_matched=matched,
+                    fewest_blockers=blockers,
+                )
+            )
+        return tuple(buckets)
 
     async def _blockers(self, decision_ids: set[UUID]) -> dict[UUID, tuple[str, ...]]:
         """One query for the page, rather than one per decision."""
@@ -266,8 +397,10 @@ def _require_limit(limit: int) -> None:
 
 
 __all__ = (
+    "ACTIVITY_HOURS",
     "DEFAULT_DECISION_LIMIT",
     "DEFAULT_INCIDENT_LIMIT",
+    "ActivityBucket",
     "ControlView",
     "DecisionView",
     "DriftView",
