@@ -16,7 +16,7 @@
 | F1 | 모든 평가가 영구적으로 BUY — 문서가 금지한 `permanent_long_only` | **치명** | **해결** (`b614ae5`) |
 | F2 | 마크된 존이 구조적으로 획득 불가 → 모든 결정 영구 REJECT | **치명** | **해결** (`bc0db51`) |
 | F3 | F2의 분기를 가르는 `at_observed_all_time_high`에 생산자 없음 | 높음 | **해결** (`bc0db51`) |
-| F4 | 소진(Agotamiento) 부재는 F2의 결과 — 독립 결함 아님 | 정보 | **예측 빗나감** — 아래 정정 |
+| F4 | 소진(Agotamiento) 부재는 F2의 결과 — 독립 결함 아님 | 정보 | **메커니즘 확인** — 프로덕션에서 발견됨 |
 | F5 | 라이브 리스크 비율이 문서 수치를 67~100% 초과 | 높음 | **코드 반영** (`bdd4ba5`) · 활성화 대기 |
 | F6 | 포지션 관리 모듈 전체가 호출되지 않음 (청산 9종 도달 불가) | **높음** | **부분 해결** — 청산 5종·텔레메트리 4종·halt 배선, 2종 미구현 |
 | F8 | 존 관측점이 원문의 스윙 피벗이 아니라 모든 봉의 OHLC | 중간 | **해결** (`20dbb76`) |
@@ -216,9 +216,30 @@ left right  pivots  %bars  best low run  run at end
 
 **이 수치를 그대로 믿으면 안 된다.** 프로브가 각 과거 시점에 **현재 창으로 만든 존**을 썼다. 실제 루프는 그 시점의 창으로 존을 만든다. 즉 미래를 참조했고 발견율은 과대평가다.
 
-### 지켜볼 것
+### 프로덕션에서 발견됨 (09-02 04:06:35)
 
-존 수정 이후 결정 약 21건 중 소진이 잡힌 것은 **0건**이다. 위 발견율이 과대평가라 해도 0은 낮다. **결함으로 단정할 근거는 없고, 관측을 이어가야 할 항목이다.**
+관측을 이어간 결과 **첫 소진이 결정에 도달했다.**
+
+```
+09-02 04:06:35  HLIT  REJECT  BUY   matched=3 blockers=7
+  blocked by : BLOCKING_BIG_TRADE_AHEAD, CALENDAR_BLOCKED,
+               DIRECTION_EVIDENCE_MISSING, EXHAUSTION_UNCONFIRMED,
+               REGULAR_DIVERGENCE_ABSENT, ROUNDED_QUANTITY_ZERO, SETUP_REJECTED
+  matched    : blocking_big_trade_ahead, high_impact_news_risk,
+               profile_value_confluence
+```
+
+**`EXHAUSTION_ABSENT`가 `EXHAUSTION_UNCONFIRMED`로 바뀌었다.** 시퀀스가 발견됐고, 피벗이 2개라 확정(3개 필요)에 미달했을 뿐이다.
+
+존 수정 전에는 `_inside_zone`이 빈 튜플에 항상 False였으므로 **시장이 무엇을 하든 ABSENT**였다. 이제 경로가 프로덕션에서 살아 있음이 확인됐다. **F4의 메커니즘 주장은 옳았고, 예측한 시점만 틀렸다.**
+
+**발견율은 되짚기 프로브가 크게 과대평가했다.** 존 보유 결정 31건 중 1건(3.2%)이고, 프로브의 56%와는 자릿수가 다르다. 미래 참조 결함을 결과와 함께 기록해둔 것이 옳았다.
+
+같은 결정에 `CALENDAR_BLOCKED`와 `high_impact_news_risk`가 함께 붙어 있다. 04:06은 유럽 지표 시간대이고, §8 뉴스 필터가 의도대로 발동했다.
+
+### 아직 확인되지 않은 것
+
+`entry` · `stop` · `target`이 여전히 전부 None이다. 셋업이 REJECT면 레벨이 채워지지 않으므로 **사이징과 주문 형성 경로는 미검증**이다. 확정된 소진(피벗 3개)이 나오고 다른 블로커가 없는 봉이 필요하다.
 
 ---
 
