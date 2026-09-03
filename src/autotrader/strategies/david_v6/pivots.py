@@ -120,13 +120,25 @@ def confirmed_pivots(
 
 
 def evaluate_divergence(
-    prices: Sequence[CompletedOhlcvBar], oscillator: Sequence[Decimal]
+    prices: Sequence[CompletedOhlcvBar],
+    oscillator: Sequence[Decimal],
+    config: PivotConfig | None = None,
 ) -> DivergenceFacts:
+    """The last two pivots of each kind, and what the oscillator did between.
+
+    `config` decides how large a swing has to be to count as one, which
+    section 3.4 calls the matryoshka trade-off and treats as A0: the larger
+    swing is the more reliable one and costs more when it fails. It was
+    fixed here at the default and appears in neither of §13.2's lists, so
+    §13.3's rule applies - a threshold we define ourselves is exposed as a
+    parameter and sensitivity-analysed. The default is unchanged, so
+    production behaves exactly as before.
+    """
     bars = _bars(prices)
     oscillator_values = tuple(require_decimal(value) for value in oscillator)
     if len(oscillator_values) != len(bars):
         raise ValueError("oscillator must align with completed bars")
-    pivots = confirmed_pivots(bars, PivotConfig())
+    pivots = confirmed_pivots(bars, config or PivotConfig())
     signals: list[DivergenceSignal] = []
     for kind in (PivotKind.LOW, PivotKind.HIGH):
         selected = tuple(pivot for pivot in pivots if pivot.kind is kind)

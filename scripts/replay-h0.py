@@ -154,7 +154,9 @@ async def fetch(symbol: str, days: int, cache: Path) -> tuple[CompletedOhlcvBar,
     )
 
 
-def evaluation_points(bars: Sequence[CompletedOhlcvBar]) -> tuple[int, ...]:
+def evaluation_points(
+    bars: Sequence[CompletedOhlcvBar], config: PivotConfig | None = None
+) -> tuple[int, ...]:
     """Bars where a new pivot was confirmed.
 
     Between confirmations the last two pivots of each kind are unchanged, so
@@ -165,7 +167,7 @@ def evaluation_points(bars: Sequence[CompletedOhlcvBar]) -> tuple[int, ...]:
         sorted(
             {
                 pivot.confirmation_index
-                for pivot in confirmed_pivots(bars, PivotConfig())
+                for pivot in confirmed_pivots(bars, config or PivotConfig())
             }
         )
     )
@@ -451,6 +453,7 @@ def replay(
     floor_atr: Decimal = STOP_DISTANCE_MINIMUM_ATR,
     ceiling_atr: Decimal = STOP_DISTANCE_MAXIMUM_ATR,
     minutes: Sequence[CompletedOhlcvBar] = (),
+    pivot_left: int = PivotConfig().left,
 ) -> list[dict[str, object]]:
     trades: list[dict[str, object]] = []
     refused = 0
@@ -464,7 +467,8 @@ def replay(
     executed = bool(minutes)
     horizon = HORIZON * 5 if executed else HORIZON
     zoned = gate == "h2" or entry_model == "retrace"
-    points = evaluation_points(bars)
+    pivots_config = PivotConfig(left=pivot_left)
+    points = evaluation_points(bars, pivots_config)
     print(f"{len(bars)} bars, {len(points)} evaluation points", flush=True)
     busy_until = -1
     zone_bucket = -1
@@ -486,12 +490,12 @@ def replay(
         if aligned is None:
             continue
         aligned_bars, histogram = aligned
-        divergence = evaluate_divergence(aligned_bars, histogram)
+        divergence = evaluate_divergence(aligned_bars, histogram, pivots_config)
         if not divergence.regular:
             continue
         facts = build_hlit_setups(aligned_bars, divergence)
         aligned_pivots = (
-            confirmed_pivots(aligned_bars, PivotConfig())
+            confirmed_pivots(aligned_bars, pivots_config)
             if gate in ("h1", "h2")
             else ()
         )
@@ -693,6 +697,7 @@ async def main() -> None:
         "--stop-max-atr", type=Decimal, default=STOP_DISTANCE_MAXIMUM_ATR
     )
     parser.add_argument("--execution-scale", choices=("5m", "1m"), default="5m")
+    parser.add_argument("--pivot-left", type=int, default=PivotConfig().left)
     arguments = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
@@ -713,6 +718,7 @@ async def main() -> None:
         + (f", zone {arguments.zone}" if arguments.entry == "retrace" else "")
         + f", stop {arguments.stop_min_atr}-{arguments.stop_max_atr} ATR"
         + f", execution {arguments.execution_scale}"
+        + f", pivot left {arguments.pivot_left}"
         + (f", min_legs {arguments.min_legs}" if arguments.gate == "h1" else ""),
         flush=True,
     )
@@ -725,6 +731,7 @@ async def main() -> None:
         floor_atr=arguments.stop_min_atr,
         ceiling_atr=arguments.stop_max_atr,
         minutes=minutes,
+        pivot_left=arguments.pivot_left,
     )
     (root / arguments.out).write_text(json.dumps(trades, indent=1), encoding="utf-8")
     report(trades)
