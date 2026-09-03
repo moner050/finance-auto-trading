@@ -196,7 +196,12 @@ def exhaustion_legs(
 
 
 def _stop_price(
-    entry: Decimal, invalidation: Decimal, side: Side, atr: Decimal
+    entry: Decimal,
+    invalidation: Decimal,
+    side: Side,
+    atr: Decimal,
+    floor_atr: Decimal = STOP_DISTANCE_MINIMUM_ATR,
+    ceiling_atr: Decimal = STOP_DISTANCE_MAXIMUM_ATR,
 ) -> Decimal | None:
     """The structural level, or None where production would refuse the setup.
 
@@ -212,10 +217,16 @@ def _stop_price(
     half of H0's sample sat in that sub-1R bucket and carried all of the
     loss. The constants are still imported rather than repeated, but now
     they are read the way production reads them.
+
+    The two bounds are arguments because §13.2 lists them as free parameters -
+    `stop_min_atr: [0.3, 0.4, 0.5]` and `stop_max_atr: [1.2, 1.5, 2.0]` - and
+    production's 0.40 and 1.50 are one point of that grid that was never
+    swept. The defaults are still production's, so a run that says nothing
+    reproduces production.
     """
     distance = entry - invalidation if side is Side.BUY else invalidation - entry
-    floor = STOP_DISTANCE_MINIMUM_ATR * atr
-    ceiling = STOP_DISTANCE_MAXIMUM_ATR * atr
+    floor = floor_atr * atr
+    ceiling = ceiling_atr * atr
     if not floor <= distance <= ceiling:
         return None
     return entry - distance if side is Side.BUY else entry + distance
@@ -365,6 +376,8 @@ def replay(
     min_legs: int,
     entry_model: str,
     zone_model: str,
+    floor_atr: Decimal = STOP_DISTANCE_MINIMUM_ATR,
+    ceiling_atr: Decimal = STOP_DISTANCE_MAXIMUM_ATR,
 ) -> list[dict[str, object]]:
     trades: list[dict[str, object]] = []
     refused = 0
@@ -476,7 +489,14 @@ def replay(
             atr = average_true_range(window)
             if atr is None or atr <= 0:
                 continue
-            stop = _stop_price(entry, setup.invalidation_price, setup.direction, atr)
+            stop = _stop_price(
+                entry,
+                setup.invalidation_price,
+                setup.direction,
+                atr,
+                floor_atr,
+                ceiling_atr,
+            )
             if stop is None:
                 refused += 1
                 continue
@@ -577,6 +597,12 @@ async def main() -> None:
     parser.add_argument("--min-legs", type=int, default=3)
     parser.add_argument("--entry", choices=("close", "retrace"), default="close")
     parser.add_argument("--zone", choices=("nearest", "anchor"), default="anchor")
+    parser.add_argument(
+        "--stop-min-atr", type=Decimal, default=STOP_DISTANCE_MINIMUM_ATR
+    )
+    parser.add_argument(
+        "--stop-max-atr", type=Decimal, default=STOP_DISTANCE_MAXIMUM_ATR
+    )
     arguments = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
@@ -587,6 +613,7 @@ async def main() -> None:
     print(
         f"gate {arguments.gate}, entry {arguments.entry}"
         + (f", zone {arguments.zone}" if arguments.entry == "retrace" else "")
+        + f", stop {arguments.stop_min_atr}-{arguments.stop_max_atr} ATR"
         + (f", min_legs {arguments.min_legs}" if arguments.gate == "h1" else ""),
         flush=True,
     )
@@ -596,6 +623,8 @@ async def main() -> None:
         min_legs=arguments.min_legs,
         entry_model=arguments.entry,
         zone_model=arguments.zone,
+        floor_atr=arguments.stop_min_atr,
+        ceiling_atr=arguments.stop_max_atr,
     )
     (root / arguments.out).write_text(json.dumps(trades, indent=1), encoding="utf-8")
     report(trades)
