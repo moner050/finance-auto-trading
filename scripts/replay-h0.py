@@ -250,7 +250,7 @@ def resolve(
     return "scratch", min(opened + HORIZON, len(bars) - 1), best, worst
 
 
-def _pullback_level(
+def _nearest_zone_level(
     setup: HlitSetup, zones: Sequence[HlitZone], price: Decimal
 ) -> Decimal | None:
     """The nearest pre-marked zone between the current price and the anchor.
@@ -261,9 +261,11 @@ def _pullback_level(
     long, because that is the direction price has to come back from, and
     above the invalidation, because below it the setup is finished.
 
-    The nearest one is taken. A further zone is a better price and a trade
-    that happens less often, and choosing between the two on the result is
-    the thing section 4 forbids.
+    Measured: this waits a median of one bar. Price dips for a single
+    five-minute candle and the entry fires, which is not the step [2] of
+    section 4.2 that it was written for. Kept because it is what the
+    two-year runs in section 11.4 used, and replacing a reading rather than
+    measuring beside it is how a comparison stops being possible.
     """
     if setup.direction is Side.BUY:
         below = [
@@ -278,6 +280,43 @@ def _pullback_level(
         if price < zone.lower_boundary < setup.invalidation_price
     ]
     return min(above) if above else None
+
+
+def _anchor_zone_level(
+    setup: HlitSetup, zones: Sequence[HlitZone], price: Decimal
+) -> Decimal | None:
+    """Section 4.1's own zone: the one the setup's anchor sits inside.
+
+    "나는 그 존이 표시되어 있었지만" - that zone, one specific rectangle
+    marked before the setup existed, not whichever happens to lie nearest
+    below the price. For a bullish setup the anchor is min#2, the low that
+    made the divergence (§3.1 STEP 1 and 3), so the zone in question is the
+    one holding that low, and its upper boundary is where price coming back
+    down first touches it.
+
+    None where no zone holds the anchor. That is not a filter chosen here -
+    section 4.1's entry is a return to a marked zone, and a setup whose
+    anchor was never in one has no such zone to return to.
+    """
+    if setup.direction is Side.BUY:
+        holding = [
+            zone.upper_boundary
+            for zone in zones
+            if zone.lower_boundary <= setup.invalidation_price <= zone.upper_boundary
+        ]
+        if not holding:
+            return None
+        # Above the price means price is inside the zone already: the
+        # approach has happened and there is nothing left to wait for.
+        return min(max(holding), price)
+    holding = [
+        zone.lower_boundary
+        for zone in zones
+        if zone.lower_boundary <= setup.invalidation_price <= zone.upper_boundary
+    ]
+    if not holding:
+        return None
+    return max(min(holding), price)
 
 
 def _retrace_entry(
@@ -325,10 +364,12 @@ def replay(
     gate: str,
     min_legs: int,
     entry_model: str,
+    zone_model: str,
 ) -> list[dict[str, object]]:
     trades: list[dict[str, object]] = []
     refused = 0
     never_returned = 0
+    no_zone = 0
     zoned = gate == "h2" or entry_model == "retrace"
     points = evaluation_points(bars)
     print(f"{len(bars)} bars, {len(points)} evaluation points", flush=True)
@@ -409,14 +450,28 @@ def replay(
             opened = cut
             if entry_model == "retrace":
                 assert zone_facts is not None
-                level = _pullback_level(setup, zone_facts.zones, bars[cut].close)
+                choose = (
+                    _anchor_zone_level
+                    if zone_model == "anchor"
+                    else _nearest_zone_level
+                )
+                level = choose(setup, zone_facts.zones, bars[cut].close)
                 if level is None:
+                    no_zone += 1
                     continue
-                touched = _retrace_entry(bars, cut, setup, level)
-                if touched is None:
-                    never_returned += 1
-                    continue
-                opened = touched
+                # Already at the level: the approach happened before the
+                # divergence confirmed, so there is nothing to wait for.
+                reached = (
+                    bars[cut].low <= level
+                    if setup.direction is Side.BUY
+                    else bars[cut].high >= level
+                )
+                if not reached:
+                    touched = _retrace_entry(bars, cut, setup, level)
+                    if touched is None:
+                        never_returned += 1
+                        continue
+                    opened = touched
             entry = bars[opened].close
             atr = average_true_range(window)
             if atr is None or atr <= 0:
@@ -456,6 +511,7 @@ def replay(
     print(f"손절 거리로 거부된 셋업 {refused}", flush=True)
     if entry_model == "retrace":
         print(f"존으로 돌아오지 않은 셋업 {never_returned}", flush=True)
+        print(f"해당 존이 없는 셋업 {no_zone}", flush=True)
     return trades
 
 
@@ -520,6 +576,7 @@ async def main() -> None:
     parser.add_argument("--gate", choices=("h0", "h1", "h2"), default="h0")
     parser.add_argument("--min-legs", type=int, default=3)
     parser.add_argument("--entry", choices=("close", "retrace"), default="close")
+    parser.add_argument("--zone", choices=("nearest", "anchor"), default="anchor")
     arguments = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
@@ -529,6 +586,7 @@ async def main() -> None:
     print(f"{bars[0].timestamp} → {bars[-1].timestamp}", flush=True)
     print(
         f"gate {arguments.gate}, entry {arguments.entry}"
+        + (f", zone {arguments.zone}" if arguments.entry == "retrace" else "")
         + (f", min_legs {arguments.min_legs}" if arguments.gate == "h1" else ""),
         flush=True,
     )
@@ -537,6 +595,7 @@ async def main() -> None:
         gate=arguments.gate,
         min_legs=arguments.min_legs,
         entry_model=arguments.entry,
+        zone_model=arguments.zone,
     )
     (root / arguments.out).write_text(json.dumps(trades, indent=1), encoding="utf-8")
     report(trades)
