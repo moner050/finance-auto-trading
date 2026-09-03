@@ -213,12 +213,18 @@ class BackofficeCommandRow(CoreBase):
         # schema still guarantees is the shape: an address, an address that
         # is trimmed, and every other column present.
         CheckConstraint(
-            "CHAR_LENGTH(actor_email) > 0 AND actor_email = TRIM(actor_email) "
-            "AND CHAR_LENGTH(source_ip) > 0 AND source_ip = TRIM(source_ip) "
-            "AND CHAR_LENGTH(action) > 0 AND action = TRIM(action) "
-            "AND CHAR_LENGTH(target_type) > 0 AND target_type = TRIM(target_type) "
-            "AND CHAR_LENGTH(target_key) > 0 AND target_key = TRIM(target_key) "
-            "AND CHAR_LENGTH(status) > 0 AND status = TRIM(status)",
+            # `col = TRIM(col)` alone does not catch a value that is only
+            # whitespace: the column collation pads spaces, so ' ' equals ''
+            # and the comparison holds. Every column here had that gap;
+            # actor_email's was covered by the pinned-address clause until
+            # that was removed. CHAR_LENGTH(TRIM(col)) closes it for all six.
+            "CHAR_LENGTH(TRIM(actor_email)) > 0 AND actor_email = TRIM(actor_email) "
+            "AND CHAR_LENGTH(TRIM(source_ip)) > 0 AND source_ip = TRIM(source_ip) "
+            "AND CHAR_LENGTH(TRIM(action)) > 0 AND action = TRIM(action) "
+            "AND CHAR_LENGTH(TRIM(target_type)) > 0 "
+            "AND target_type = TRIM(target_type) "
+            "AND CHAR_LENGTH(TRIM(target_key)) > 0 AND target_key = TRIM(target_key) "
+            "AND CHAR_LENGTH(TRIM(status)) > 0 AND status = TRIM(status)",
             name="ck_backoffice_command_scope",
         ),
         CheckConstraint(
