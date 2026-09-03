@@ -52,6 +52,7 @@ import asyncio
 import json
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from itertools import pairwise
@@ -74,6 +75,8 @@ from autotrader.strategies.david_v6.direction import (
 from autotrader.strategies.david_v6.exhaustion import evaluate_exhaustion
 from autotrader.strategies.david_v6.hlit import HlitSetup, build_hlit_setups
 from autotrader.strategies.david_v6.pivots import (
+    DivergenceFacts,
+    DivergenceKind,
     Pivot,
     PivotConfig,
     PivotKind,
@@ -458,6 +461,49 @@ def _five_minute_index(moment: datetime, five_at: Mapping[datetime, int]) -> int
     return five_at.get(floored, -1)
 
 
+_AS_REGULAR = {
+    DivergenceKind.HIDDEN_BULLISH: DivergenceKind.REGULAR_BULLISH,
+    DivergenceKind.HIDDEN_BEARISH: DivergenceKind.REGULAR_BEARISH,
+}
+
+
+def _selected(facts: DivergenceFacts, mode: str) -> DivergenceFacts:
+    """Which divergences get a retracement drawn for them.
+
+    §13.1's H4 adds the hidden ones. The document gives no separate anchor
+    construction for them - §3.1 STEP 3 wants the absolute high between two
+    lows and the second low, and says nothing about which divergence
+    produced the pair - so the same construction is used. `_setup` keys on
+    the signal's kind, so a hidden signal has to be relabelled to reach it.
+
+    The relabelling is mechanical and no geometry is invented here. What it
+    does mean is that `hlit.build_hlit_setups` still believes it is drawing
+    for a regular divergence, which is why this lives in the harness and not
+    in the strategy: §22.10's runtime profile says
+    `hlit_regular_divergence: true`, and H4 is a question about that, not a
+    change to it.
+
+    Regular wins a tie. §4.4 is explicit - "의심의 여지 없이 정규를
+    선호합니다" - so where both exist for a direction, the regular one is
+    the setup and the hidden one is not a second trade.
+    """
+    if mode == "regular":
+        return facts
+    promoted = tuple(
+        replace(signal, kind=_AS_REGULAR[signal.kind])
+        for signal in facts.hidden
+        if signal.kind in _AS_REGULAR
+    )
+    regular = facts.regular if mode == "both" else ()
+    taken = {signal.kind for signal in regular}
+    return DivergenceFacts(
+        observed_at=facts.observed_at,
+        regular=regular
+        + tuple(signal for signal in promoted if signal.kind not in taken),
+        hidden=(),
+    )
+
+
 def replay(
     bars: tuple[CompletedOhlcvBar, ...],
     *,
@@ -470,6 +516,7 @@ def replay(
     minutes: Sequence[CompletedOhlcvBar] = (),
     pivot_left: int = PivotConfig().left,
     distances: list[dict[str, object]] | None = None,
+    divergence_model: str = "regular",
 ) -> list[dict[str, object]]:
     trades: list[dict[str, object]] = []
     refused = 0
@@ -512,7 +559,10 @@ def replay(
         if aligned is None:
             continue
         aligned_bars, histogram = aligned
-        divergence = evaluate_divergence(aligned_bars, histogram, pivots_config)
+        divergence = _selected(
+            evaluate_divergence(aligned_bars, histogram, pivots_config),
+            divergence_model,
+        )
         if not divergence.regular:
             continue
         facts = build_hlit_setups(aligned_bars, divergence)
@@ -744,6 +794,9 @@ async def main() -> None:
     parser.add_argument("--execution-scale", choices=("5m", "1m"), default="5m")
     parser.add_argument("--pivot-left", type=int, default=PivotConfig().left)
     parser.add_argument("--distances", default=None)
+    parser.add_argument(
+        "--divergence", choices=("regular", "hidden", "both"), default="regular"
+    )
     arguments = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
@@ -765,6 +818,7 @@ async def main() -> None:
         + f", stop {arguments.stop_min_atr}-{arguments.stop_max_atr} ATR"
         + f", execution {arguments.execution_scale}"
         + f", pivot left {arguments.pivot_left}"
+        + f", divergence {arguments.divergence}"
         + (f", min_legs {arguments.min_legs}" if arguments.gate == "h1" else ""),
         flush=True,
     )
@@ -780,6 +834,7 @@ async def main() -> None:
         minutes=minutes,
         pivot_left=arguments.pivot_left,
         distances=distances,
+        divergence_model=arguments.divergence,
     )
     if arguments.distances is not None and distances is not None:
         (root / arguments.distances).write_text(
