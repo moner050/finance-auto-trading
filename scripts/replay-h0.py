@@ -52,7 +52,7 @@ import asyncio
 import json
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from itertools import pairwise
@@ -105,12 +105,50 @@ WINDOW = 600
 # A day. The strategy is intraday and flattens before the close; without a
 # session rule in H0, something has to bound the wait.
 HORIZON = 288
-# One hour of one-minute bars. §4.2 drops to the execution scale straight
-# after the five-minute signal and enters there; an entry an hour later is a
-# different trade, so the search gives up rather than taking it.
-ENTRY_WINDOW = 60
-# Enough one-minute bars for the pivots the chain is built from.
+# Enough execution-scale bars for the pivots the chain is built from. Counted
+# in bars rather than in time, because that is what `PivotConfig` counts.
 EXECUTION_WINDOW = 240
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionScale:
+    """One way of reading §13.2's `execution_scale: [1m, 30s, 5s]`.
+
+    `entry_window` is one hour in bars of this scale. §4.2 drops to the
+    execution scale straight after the five-minute signal and enters there,
+    so the search is given the same hour whichever scale it runs at - sixty
+    one-minute bars or a hundred and twenty thirty-second ones. Leaving it at
+    sixty would have given thirty seconds half the chance to find a chain and
+    called the difference a result.
+
+    Five seconds is not here: the klines endpoint stops at one minute, and
+    `scripts/aggregate-tape-bars.py` can build five-second bars from the tape
+    the same way, but the tape does not yet reach back far enough to be worth
+    a run. See the plan's section 26.
+    """
+
+    step: timedelta
+    entry_window: int
+    cache: str
+
+    @property
+    def per_five_minutes(self) -> int:
+        return int(STEP / self.step)
+
+
+EXECUTION_SCALES = {
+    "1m": ExecutionScale(
+        step=timedelta(minutes=1),
+        entry_window=60,
+        cache="klines-{symbol}-1m-{days}d.json",
+    ),
+    "30s": ExecutionScale(
+        step=timedelta(seconds=30),
+        entry_window=120,
+        # Built from the tape, which has one span rather than a day count.
+        cache="klines-{symbol}-30s-tape.json",
+    ),
+}
 
 
 async def fetch(symbol: str, days: int, cache: Path) -> tuple[CompletedOhlcvBar, ...]:
@@ -347,10 +385,11 @@ def _anchor_zone_level(
 
 
 def _execution_entry(
-    minutes: Sequence[CompletedOhlcvBar],
+    bars: Sequence[CompletedOhlcvBar],
     start: int,
     setup: HlitSetup,
     min_legs: int,
+    entry_window: int,
 ) -> tuple[int, Decimal] | None:
     """The bar where the chain completes at the execution scale, and its stop.
 
@@ -375,8 +414,8 @@ def _execution_entry(
     """
     long = setup.direction is Side.BUY
     kind = PivotKind.LOW if long else PivotKind.HIGH
-    for index in range(start, min(start + ENTRY_WINDOW, len(minutes))):
-        bar = minutes[index]
+    for index in range(start, min(start + entry_window, len(bars))):
+        bar = bars[index]
         if long:
             if bar.low <= setup.invalidation_price:
                 return None
@@ -389,7 +428,7 @@ def _execution_entry(
                 return None
         if index < EXECUTION_WINDOW:
             continue
-        window = minutes[index - EXECUTION_WINDOW : index + 1]
+        window = bars[index - EXECUTION_WINDOW : index + 1]
         pivots = confirmed_pivots(window, PivotConfig())
         if exhaustion_legs(window, pivots, setup.direction) < min_legs:
             continue
@@ -636,7 +675,8 @@ def replay(
     zone_model: str,
     floor_atr: Decimal = STOP_DISTANCE_MINIMUM_ATR,
     ceiling_atr: Decimal = STOP_DISTANCE_MAXIMUM_ATR,
-    minutes: Sequence[CompletedOhlcvBar] = (),
+    execution_bars: Sequence[CompletedOhlcvBar] = (),
+    scale: ExecutionScale | None = None,
     pivot_left: int = PivotConfig().left,
     distances: list[dict[str, object]] | None = None,
     divergence_model: str = "regular",
@@ -652,15 +692,15 @@ def replay(
     # The entry scale is a different series, so a five-minute bar has to name
     # the minute that follows its close. Its `timestamp` is the open time, so
     # the first minute we may act on opens one step later.
-    minute_at = {bar.timestamp: index for index, bar in enumerate(minutes)}
+    execution_at = {bar.timestamp: index for index, bar in enumerate(execution_bars)}
     # `busy_until` gates the five-minute loop, so a position closed on the
     # minute series has to come back as a five-minute index. Comparing the two
     # directly is how the one-minute runs looked like they had no setups:
     # a minute index runs to a million against two hundred thousand, so the
     # first trade blocked every evaluation point after it.
     five_at = {bar.timestamp: index for index, bar in enumerate(bars)}
-    executed = bool(minutes)
-    horizon = HORIZON * 5 if executed else HORIZON
+    executed = bool(execution_bars) and scale is not None
+    horizon = HORIZON * scale.per_five_minutes if executed and scale else HORIZON
     zoned = gate == "h2" or entry_model == "retrace"
     pivots_config = PivotConfig(left=pivot_left)
     points = evaluation_points(bars, pivots_config)
@@ -792,16 +832,18 @@ def replay(
             atr = average_true_range(window)
             if atr is None or atr <= 0:
                 continue
-            if executed:
-                start = minute_at.get(bars[cut].timestamp + STEP)
+            if executed and scale is not None:
+                start = execution_at.get(bars[cut].timestamp + STEP)
                 if start is None:
                     continue
-                found = _execution_entry(minutes, start, setup, min_legs)
+                found = _execution_entry(
+                    execution_bars, start, setup, min_legs, scale.entry_window
+                )
                 if found is None:
                     no_chain += 1
                     continue
                 opened, reference = found
-                series = minutes
+                series = execution_bars
             entry = series[opened].close
             if distances is not None:
                 # Every setup that gets this far, whichever side of the band
@@ -943,7 +985,9 @@ async def main() -> None:
     parser.add_argument(
         "--stop-max-atr", type=Decimal, default=STOP_DISTANCE_MAXIMUM_ATR
     )
-    parser.add_argument("--execution-scale", choices=("5m", "1m"), default="5m")
+    parser.add_argument(
+        "--execution-scale", choices=("5m", *EXECUTION_SCALES), default="5m"
+    )
     parser.add_argument("--pivot-left", type=int, default=PivotConfig().left)
     parser.add_argument("--distances", default=None)
     parser.add_argument(
@@ -959,14 +1003,14 @@ async def main() -> None:
     cache = root / "build" / f"klines-{arguments.symbol}-{arguments.days}d.json"
     cache.parent.mkdir(parents=True, exist_ok=True)
     bars = await fetch(arguments.symbol, arguments.days, cache)
-    minutes: tuple[CompletedOhlcvBar, ...] = ()
-    if arguments.execution_scale == "1m":
-        minute_cache = (
-            root / "build" / f"klines-{arguments.symbol}-1m-{arguments.days}d.json"
-        )
-        if not minute_cache.exists():
-            raise SystemExit(f"no minute cache at {minute_cache}")
-        minutes = await fetch(arguments.symbol, arguments.days, minute_cache)
+    execution_bars: tuple[CompletedOhlcvBar, ...] = ()
+    scale = EXECUTION_SCALES.get(arguments.execution_scale)
+    if scale is not None:
+        name = scale.cache.format(symbol=arguments.symbol, days=arguments.days)
+        execution_cache = root / "build" / name
+        if not execution_cache.exists():
+            raise SystemExit(f"no execution cache at {execution_cache}")
+        execution_bars = await fetch(arguments.symbol, arguments.days, execution_cache)
     print(f"{bars[0].timestamp} → {bars[-1].timestamp}", flush=True)
     print(
         f"gate {arguments.gate}, entry {arguments.entry}"
@@ -990,7 +1034,8 @@ async def main() -> None:
         zone_model=arguments.zone,
         floor_atr=arguments.stop_min_atr,
         ceiling_atr=arguments.stop_max_atr,
-        minutes=minutes,
+        execution_bars=execution_bars,
+        scale=scale,
         pivot_left=arguments.pivot_left,
         distances=distances,
         divergence_model=arguments.divergence,

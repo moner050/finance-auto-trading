@@ -32,6 +32,7 @@ import sys
 import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from itertools import pairwise
 from pathlib import Path
 
 from sqlalchemy import text
@@ -75,7 +76,14 @@ async def aggregate(
     """One row per bucket that had at least one trade, ordered by open time."""
     duration_ms = seconds * 1000
     rows: list[list[object]] = []
-    cursor = start
+    # Page from a bucket boundary, not from the first trade's own timestamp.
+    # `PAGE` is a whole number of buckets, so an aligned cursor keeps every
+    # bucket inside one page; an unaligned one splits the boundary bucket
+    # across two and emits it twice, which the replay refuses as bars that
+    # are not strictly ascending.
+    cursor = EPOCH + timedelta(
+        milliseconds=(epoch_ms(start) // duration_ms) * duration_ms
+    )
     while cursor < end:
         stop = min(cursor + PAGE, end)
         async with sessions() as session:
@@ -111,6 +119,9 @@ async def aggregate(
             )
         print(f"  {cursor:%Y-%m-%d %H:%M} → {len(rows):,} bars", flush=True)
         cursor = stop
+    opens = [int(row[0]) for row in rows]
+    if any(later <= earlier for earlier, later in pairwise(opens)):
+        raise SystemExit("buckets are not strictly ascending; paging is misaligned")
     return rows
 
 
