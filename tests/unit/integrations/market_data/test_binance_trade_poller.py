@@ -37,11 +37,13 @@ class _Rest:
     def __init__(self, *pages: tuple[dict[str, object], ...]) -> None:
         self._pages = list(pages)
         self.asked: list[int | None] = []
+        self.symbols: list[str] = []
 
     async def aggregate_trades(
         self, *, symbol: str, from_id: int | None, limit: int
     ) -> tuple[object, ...]:
-        del symbol, limit
+        del limit
+        self.symbols.append(symbol)
         self.asked.append(from_id)
         return self._pages.pop(0) if self._pages else ()
 
@@ -63,7 +65,8 @@ class _Failing(_Rest):
 
 
 class _Store:
-    def __init__(self, checkpoint: int | None = None) -> None:
+    def __init__(self, checkpoint: int | None = None, symbol: str = "BTCUSDT") -> None:
+        self.symbol = symbol
         self.checkpoint = checkpoint
         self.seen: list[int] = []
         self.pages = 0
@@ -331,3 +334,24 @@ async def test_leadership_is_asked_before_the_venue_is() -> None:
     await poller.run(stop=stop)
 
     assert lease.asked == 1
+
+
+@pytest.mark.asyncio
+async def test_the_symbol_fetched_is_the_one_the_reader_writes() -> None:
+    """Asked of the reader, never given twice.
+
+    The poller used to take its own `symbol`, so a caller could hand it
+    ETHUSDT alongside a reader bound to BTCUSDT: the fetch would return ETH
+    prints and the store would file them under BTC, with the ids in sequence
+    and every counter reporting healthy.
+    """
+    stop = asyncio.Event()
+    store = _Store(checkpoint=1, symbol="ETHUSDT")
+    rest = _Rest((_row(2),))
+
+    poller = _poller(store, rest, _Sleeps(stop))
+    await poller.run(stop=stop)
+
+    assert poller.symbol == "ETHUSDT"
+    assert rest.symbols == ["ETHUSDT"]
+    assert store.seen == [2]

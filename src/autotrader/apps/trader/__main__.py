@@ -58,6 +58,20 @@ _USAGE_LINES = (
 USAGE = "\n".join(_USAGE_LINES)
 MARKET = V6Market.BINANCE_USDM
 
+# Collected, not evaluated. A walk-forward on a second instrument needs a tape
+# that already reaches back, and a tape only ever starts on the day somebody
+# switches it on - so these start now, ahead of anything that reads them. No
+# decision consults them, and nothing here promotes one to a traded symbol.
+TAPE_ONLY_SYMBOLS = ("ETHUSDT",)
+
+# Slower than the evaluated tape, because nothing waits on these rows. Each
+# `/fapi/v1/aggTrades` page costs 20 against a 2400/minute IP budget with no
+# client-side limiter in front of it, so a second symbol at the loop's own
+# 2-second cadence would take the tape alone to half the budget. A full page
+# still fetches the next one immediately, so a burst is caught up on rather
+# than lost - the interval only sets how often a quiet tape is asked.
+TAPE_ONLY_INTERVAL_SECONDS = 5.0
+
 
 # Seconds, minutes, hours. A bare number is refused rather than guessed at:
 # `--for 30` means half a minute to one operator and half an hour to another,
@@ -111,7 +125,9 @@ async def _run_shadow(alias: str, leverage: int, run_for: timedelta | None) -> i
         POLL_INTERVAL_SECONDS,
         BinanceUsdmTradePoller,
     )
+    from autotrader.integrations.market_data.binance_usdm import BinanceUsdmMarketData
     from autotrader.integrations.market_data.economic_calendar import FEED_URL
+    from autotrader.persistence.mysql.repositories.market_tape import MySqlMarketTape
 
     settings = Settings()
     engine = create_engine(settings)
@@ -152,6 +168,24 @@ async def _run_shadow(alias: str, leverage: int, run_for: timedelta | None) -> i
             lease=loop.lease,
             clock=SystemClock(),
         )
+        # One reader per instrument. The dedup cache, the checkpoint and the
+        # gap recovery inside each one all assume the ids they hold come from
+        # a single tape, so a second symbol is a second reader rather than an
+        # argument - sharing one would file ETHUSDT rows under BTCUSDT.
+        aside = tuple(
+            BinanceUsdmTradePoller(
+                market_data=BinanceUsdmMarketData(
+                    rest=loop.rest,
+                    store=MySqlMarketTape(sessions),
+                    symbol=symbol,
+                ),
+                rest=loop.rest,
+                lease=loop.lease,
+                clock=SystemClock(),
+                interval=TAPE_ONLY_INTERVAL_SECONDS,
+            )
+            for symbol in TAPE_ONLY_SYMBOLS
+        )
         heartbeat = LeaseHeartbeat(
             lease=loop.lease,
             clock=SystemClock(),
@@ -164,12 +198,39 @@ async def _run_shadow(alias: str, leverage: int, run_for: timedelta | None) -> i
         print(f"account       {alias} ({resolved.account.environment})")
         print(f"equity        {loop.equity} USDT")
         print(f"tick size     {loop.tick_size}")
-        print(f"tape          /fapi/v1/aggTrades every {POLL_INTERVAL_SECONDS:g}s")
+        print(
+            f"tape          /fapi/v1/aggTrades: {tape.symbol} every "
+            f"{POLL_INTERVAL_SECONDS:g}s"
+            + "".join(
+                f", {poller.symbol} every {TAPE_ONLY_INTERVAL_SECONDS:g}s "
+                "(collected, not evaluated)"
+                for poller in aside
+            )
+        )
         print(f"calendar      {FEED_URL}")
         print("orders        none; this loop has no execution port to submit to")
         print("runs for      " + ("until stopped" if run_for is None else str(run_for)))
         print("stop with Ctrl-C")
         stop = asyncio.Event()
+        halted: dict[str, BaseException] = {}
+
+        async def collect(poller: BinanceUsdmTradePoller) -> None:
+            """Fill a tape nothing evaluates yet, without risking the session.
+
+            `run_together` ends the session when any part of it ends, which
+            is right for the tape the loop reads and wrong for one it does
+            not: a correction conflict on a collected-only symbol would stop
+            BTCUSDT evaluation over rows no decision consults. So a failure
+            here ends this collection alone and waits out the session, and
+            the summary says which tape stopped and why.
+            """
+            try:
+                await poller.run(stop=stop)
+            except Exception as error:
+                halted[poller.symbol] = error
+                print(f"tape {poller.symbol} stopped: {error}", file=sys.stderr)
+                await stop.wait()
+
         try:
             # A termination signal becomes the stop both halves already watch,
             # so a supervisor ending the run gets the same wind-down as an
@@ -180,6 +241,7 @@ async def _run_shadow(alias: str, leverage: int, run_for: timedelta | None) -> i
                 # the tape fills a table nobody reads.
                 await run_together(
                     tape.run(stop=stop),
+                    *(collect(poller) for poller in aside),
                     run_forever(
                         ports=loop.ports,
                         clock=SystemClock(),
@@ -196,10 +258,14 @@ async def _run_shadow(alias: str, leverage: int, run_for: timedelta | None) -> i
             # Reachable only in the window before the handlers are installed.
             print("stopped")
         finally:
-            print(
-                f"tape          {tape.trades} trades over {tape.polls} polls "
-                f"({tape.failures} failures, {tape.deferred} not leader)"
-            )
+            for poller in (tape, *aside):
+                stopped = halted.get(poller.symbol)
+                print(
+                    f"tape {poller.symbol:<9}{poller.trades} trades over "
+                    f"{poller.polls} polls ({poller.failures} failures, "
+                    f"{poller.deferred} not leader)"
+                    + ("" if stopped is None else f" - stopped: {stopped}")
+                )
             print(
                 f"calendar      {loop.events.fetches} fetches "
                 f"({loop.events.failures} failures)"

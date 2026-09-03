@@ -32,7 +32,7 @@ _FIVE_SECONDS = timedelta(seconds=5)
 
 
 class BinanceUsdmMarketDataError(ValueError):
-    """Raised when completed BTCUSDT evidence cannot be proven exactly."""
+    """Raised when completed evidence for a symbol cannot be proven exactly."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,8 +42,16 @@ class BinanceUsdmMarketCheckpoint:
     last_trade_at: datetime
 
     def __post_init__(self) -> None:
-        if self.symbol != _SYMBOL:
-            raise ValueError("Binance USD-M market checkpoint requires BTCUSDT")
+        # This used to insist on BTCUSDT. The pin moved to the reader that
+        # owns it: one `BinanceUsdmMarketData` still handles exactly one
+        # symbol and still refuses a frame belonging to another. All this
+        # check was doing here was stopping the tape for a second instrument.
+        if (
+            type(self.symbol) is not str
+            or not self.symbol
+            or self.symbol != self.symbol.strip().upper()
+        ):
+            raise ValueError("Binance USD-M market checkpoint needs a symbol")
         if (
             type(self.last_aggregate_trade_id) is not int
             or self.last_aggregate_trade_id < 0
@@ -99,20 +107,35 @@ class BinanceUsdmMarketStore(Protocol):
 
 
 class BinanceUsdmMarketData:
-    """Completed BTCUSDT bars and deduplicated aggregate trade evidence."""
+    """Completed bars and deduplicated aggregate trades, for one symbol.
+
+    One instance reads one instrument. The store is keyed by symbol and the
+    dedup cache, checkpoint and gap recovery below all assume the ids they
+    hold come from a single tape, so a second instrument is a second
+    instance rather than an argument to these methods.
+    """
 
     def __init__(
         self,
         *,
         rest: BinanceUsdmMarketRest,
         store: BinanceUsdmMarketStore,
+        symbol: str = _SYMBOL,
     ) -> None:
+        if not symbol or symbol != symbol.strip().upper():
+            raise ValueError("the symbol must be given, trimmed and upper case")
+        self._symbol = symbol
         self._rest = rest
         self._store = store
         self._checkpoint: BinanceUsdmMarketCheckpoint | None = None
         self._checkpoint_loaded = False
         self._trades: dict[int, TradePrint] = {}
         self._ingest_lock = asyncio.Lock()
+
+    @property
+    def symbol(self) -> str:
+        """The one instrument this reader is bound to."""
+        return self._symbol
 
     async def checkpoint_trade_id(self) -> int | None:
         """The last aggregate-trade id stored, or None when there is none.
@@ -128,7 +151,9 @@ class BinanceUsdmMarketData:
 
     async def ingest_agg_trade(self, event: Mapping[str, object]) -> None:
         """One aggregate trade as the websocket sends it."""
-        await self._ingest(_decode_aggregate_trade(event, websocket=True))
+        await self._ingest(
+            _decode_aggregate_trade(event, websocket=True, symbol=self._symbol)
+        )
 
     async def ingest_rest_agg_trade(self, row: Mapping[str, object]) -> None:
         """One aggregate trade as `/fapi/v1/aggTrades` returns it.
@@ -164,7 +189,10 @@ class BinanceUsdmMarketData:
         nothing at all.
         """
         await self._ingest_page(
-            tuple(_decode_aggregate_trade(row, websocket=False) for row in rows)
+            tuple(
+                _decode_aggregate_trade(row, websocket=False, symbol=self._symbol)
+                for row in rows
+            )
         )
 
     async def _ingest(self, incoming: TradePrint) -> None:
@@ -203,11 +231,11 @@ class BinanceUsdmMarketData:
             _require_trade_sequence(new_trades, after=checkpoint)
             last = new_trades[-1]
             next_checkpoint = BinanceUsdmMarketCheckpoint(
-                symbol=_SYMBOL,
+                symbol=self._symbol,
                 last_aggregate_trade_id=_trade_id(last),
                 last_trade_at=last.occurred_at,
             )
-            await self._store.persist(_SYMBOL, new_trades, next_checkpoint)
+            await self._store.persist(self._symbol, new_trades, next_checkpoint)
             self._checkpoint = next_checkpoint
             self._remember(new_trades)
 
@@ -234,7 +262,9 @@ class BinanceUsdmMarketData:
             return True
         if checkpoint is None or incoming_id > checkpoint.last_aggregate_trade_id:
             return False
-        persisted = await self._store.find_trade(_SYMBOL, incoming.provider_trade_id)
+        persisted = await self._store.find_trade(
+            self._symbol, incoming.provider_trade_id
+        )
         if persisted is not None and persisted != incoming:
             raise BinanceUsdmMarketDataError(
                 "Binance USD-M aggregate trade correction conflict"
@@ -313,7 +343,7 @@ class BinanceUsdmMarketData:
         earliest = None if history is None else _epoch_ms(end_at - history)
         while True:
             page = await self._rest.klines(
-                symbol=_SYMBOL,
+                symbol=self._symbol,
                 interval=interval,
                 end_time_ms=cursor,
                 limit=_REST_LIMIT,
@@ -354,7 +384,7 @@ class BinanceUsdmMarketData:
         end_at = _require_utc(end_at, "trade end_at")
         if start_at >= end_at:
             raise ValueError("Binance USD-M trade range is invalid")
-        persisted = await self._store.load_trades(_SYMBOL, start_at, end_at)
+        persisted = await self._store.load_trades(self._symbol, start_at, end_at)
         if type(persisted) is not tuple or any(
             type(trade) is not TradePrint for trade in persisted
         ):
@@ -381,7 +411,7 @@ class BinanceUsdmMarketData:
     async def _load_checkpoint(self) -> None:
         if self._checkpoint_loaded:
             return
-        checkpoint = await self._store.load_checkpoint(_SYMBOL)
+        checkpoint = await self._store.load_checkpoint(self._symbol)
         if (
             checkpoint is not None
             and type(checkpoint) is not BinanceUsdmMarketCheckpoint
@@ -402,7 +432,7 @@ class BinanceUsdmMarketData:
         while next_id < incoming_id:
             limit = min(_GAP_LIMIT, incoming_id - next_id)
             rows = await self._rest.aggregate_trades(
-                symbol=_SYMBOL,
+                symbol=self._symbol,
                 from_id=next_id,
                 limit=limit,
             )
@@ -411,7 +441,10 @@ class BinanceUsdmMarketData:
                     "Binance USD-M aggregate trade gap is unresolved"
                 )
             page = tuple(
-                _decode_aggregate_trade(_object(row), websocket=False) for row in rows
+                _decode_aggregate_trade(
+                    _object(row), websocket=False, symbol=self._symbol
+                )
+                for row in rows
             )
             for trade in page:
                 trade_id = _trade_id(trade)
@@ -510,14 +543,15 @@ def _decode_aggregate_trade(
     value: Mapping[str, object],
     *,
     websocket: bool,
+    symbol: str = _SYMBOL,
 ) -> TradePrint:
-    if websocket and (value.get("e") != "aggTrade" or value.get("s") != _SYMBOL):
+    if websocket and (value.get("e") != "aggTrade" or value.get("s") != symbol):
         raise BinanceUsdmMarketDataError(
-            "Binance USD-M websocket aggregate trade requires BTCUSDT"
+            f"Binance USD-M websocket aggregate trade requires {symbol}"
         )
-    if not websocket and "s" in value and value.get("s") != _SYMBOL:
+    if not websocket and "s" in value and value.get("s") != symbol:
         raise BinanceUsdmMarketDataError(
-            "Binance USD-M REST aggregate trade requires BTCUSDT"
+            f"Binance USD-M REST aggregate trade requires {symbol}"
         )
     trade_id = _integer(value.get("a"), "aggregate trade ID")
     first_id = _integer(value.get("f"), "first trade ID")

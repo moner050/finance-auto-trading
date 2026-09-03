@@ -74,6 +74,9 @@ class Clock(Protocol):
 
 
 class RestTradeIngest(Protocol):
+    @property
+    def symbol(self) -> str: ...
+
     async def ingest_rest_agg_trades(
         self, rows: Sequence[Mapping[str, object]]
     ) -> None: ...
@@ -91,7 +94,6 @@ class BinanceUsdmTradePoller:
         rest: AggregateTradeRest,
         lease: Leadership,
         clock: Clock,
-        symbol: str = "BTCUSDT",
         interval: float = POLL_INTERVAL_SECONDS,
         limit: int = PAGE_LIMIT,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -106,7 +108,10 @@ class BinanceUsdmTradePoller:
         self._rest = rest
         self._lease = lease
         self._clock = clock
-        self._symbol = symbol
+        # Asked, not told. The fetch symbol and the tape being written have
+        # to be the same one, and a second parameter here is how they come
+        # apart: ETHUSDT rows filed under BTCUSDT, with nothing to notice it.
+        self._symbol = market_data.symbol
         self._interval = interval
         self._limit = limit
         self._sleep = sleep
@@ -116,6 +121,11 @@ class BinanceUsdmTradePoller:
         self.polls = 0
         self.failures = 0
         self.deferred = 0
+
+    @property
+    def symbol(self) -> str:
+        """The instrument this poller fills, taken from the reader."""
+        return self._symbol
 
     async def run(self, *, stop: asyncio.Event) -> None:
         backoff = self._first_backoff

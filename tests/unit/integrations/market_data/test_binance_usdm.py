@@ -46,10 +46,11 @@ def event(
     price: str = "100",
     quantity: str = "1",
     buyer_maker: bool = False,
+    symbol: str = "BTCUSDT",
 ) -> dict[str, object]:
     return {
         "e": "aggTrade",
-        "s": "BTCUSDT",
+        "s": symbol,
         "a": trade_id,
         "p": price,
         "q": quantity,
@@ -114,9 +115,10 @@ class Store:
     checkpoint: BinanceUsdmMarketCheckpoint | None = None
     trades: dict[str, TradePrint] = field(default_factory=dict[str, TradePrint])
     batches: list[tuple[str, ...]] = field(default_factory=list[tuple[str, ...]])
+    symbol: str = "BTCUSDT"
 
     async def load_checkpoint(self, symbol: str) -> BinanceUsdmMarketCheckpoint | None:
-        assert symbol == "BTCUSDT"
+        assert symbol == self.symbol
         return self.checkpoint
 
     async def find_trade(
@@ -124,7 +126,7 @@ class Store:
         symbol: str,
         provider_trade_id: str,
     ) -> TradePrint | None:
-        assert symbol == "BTCUSDT"
+        assert symbol == self.symbol
         return self.trades.get(provider_trade_id)
 
     async def persist(
@@ -133,7 +135,7 @@ class Store:
         trades: tuple[TradePrint, ...],
         checkpoint: BinanceUsdmMarketCheckpoint,
     ) -> None:
-        assert symbol == "BTCUSDT"
+        assert symbol == self.symbol
         for trade in trades:
             previous = self.trades.get(trade.provider_trade_id)
             if previous is not None and previous != trade:
@@ -148,7 +150,7 @@ class Store:
         start_at: datetime,
         end_at: datetime,
     ) -> tuple[TradePrint, ...]:
-        assert symbol == "BTCUSDT"
+        assert symbol == self.symbol
         return tuple(
             trade
             for trade in sorted(
@@ -162,10 +164,12 @@ class Store:
 def market(
     rest: Rest | None = None,
     store: Store | None = None,
+    symbol: str = "BTCUSDT",
 ) -> BinanceUsdmMarketData:
     return BinanceUsdmMarketData(
         rest=Rest() if rest is None else rest,
-        store=Store() if store is None else store,
+        store=Store(symbol=symbol) if store is None else store,
+        symbol=symbol,
     )
 
 
@@ -345,3 +349,35 @@ async def test_trade_print_range_is_start_inclusive_end_exclusive() -> None:
     )
 
     assert [trade.provider_trade_id for trade in trades] == ["2"]
+
+
+@pytest.mark.asyncio
+async def test_a_reader_holds_one_symbol_and_refuses_the_others() -> None:
+    """The pin is per instance, and a frame for another instrument is refused.
+
+    It used to be a module constant, which is why only one instrument could
+    ever be collected. Moving it onto the reader is what allows a second
+    tape; what it must not allow is one reader accepting another's frames,
+    because that files ETHUSDT prints under BTCUSDT where the symbol column
+    then says the wrong thing and nothing downstream can tell.
+    """
+    store = Store(symbol="ETHUSDT")
+    ethereum = market(store=store, symbol="ETHUSDT")
+
+    await ethereum.ingest_agg_trade(event(1, START, symbol="ETHUSDT"))
+
+    assert ethereum.symbol == "ETHUSDT"
+    assert store.checkpoint is not None
+    assert store.checkpoint.symbol == "ETHUSDT"
+    with pytest.raises(BinanceUsdmMarketDataError, match="requires ETHUSDT"):
+        await ethereum.ingest_agg_trade(event(2, START, symbol="BTCUSDT"))
+
+
+def test_a_checkpoint_still_needs_a_symbol() -> None:
+    """Dropping the BTCUSDT-only rule is not dropping the check."""
+    with pytest.raises(ValueError, match="needs a symbol"):
+        BinanceUsdmMarketCheckpoint(
+            symbol="ethusdt",
+            last_aggregate_trade_id=1,
+            last_trade_at=START,
+        )
