@@ -598,6 +598,35 @@ def _regime_at(regimes: tuple[tuple[datetime, int], ...], moment: datetime) -> i
     return regimes[low - 1][1] if low else 0
 
 
+# §8: "실업/고용지표(매월 첫 금요일 14:30) → 세션 전체". Spanish 14:30 is
+# 12:30 UTC in summer and 13:30 in winter; the earlier one is used so the
+# window never starts after the release.
+_NFP_MINUTE = 12 * 60 + 30
+
+
+def _news_blocked(moment: datetime, rule: str) -> bool:
+    """Whether §8's first-Friday rule blocks this bar.
+
+    The rest of §8 needs a calendar we do not have. `block_stars: [2, 3]`
+    wants every two- and three-star release for two years, and the feed the
+    loop uses is `ff_calendar_thisweek.json` - this week only. What can be
+    computed from the date alone is `nfp_first_friday`, which is also the
+    strongest rule §8 states: block the whole session rather than minutes.
+
+    Two readings of "세션 전체", both from the same clause and both run:
+    `day` blocks the whole first Friday, `after` blocks it from the release
+    onward. The document says `block_entire_session: true` and does not say
+    whether the session starts before the release.
+    """
+    if rule == "none":
+        return False
+    if not (moment.weekday() == 4 and moment.day <= 7):
+        return False
+    if rule == "day":
+        return True
+    return moment.hour * 60 + moment.minute >= _NFP_MINUTE
+
+
 def replay(
     bars: tuple[CompletedOhlcvBar, ...],
     *,
@@ -613,6 +642,7 @@ def replay(
     divergence_model: str = "regular",
     session: tuple[int, int] | None = None,
     veto: str = "none",
+    news: str = "none",
 ) -> list[dict[str, object]]:
     trades: list[dict[str, object]] = []
     refused = 0
@@ -641,6 +671,7 @@ def replay(
     exhaustion = None
     seen: set[tuple[str, str]] = set()
     outside_session = 0
+    blocked_by_news = 0
     vetoed = 0
     regimes = (
         _regimes(_higher_frame(bars, _VETO_STEPS[veto])) if veto in _VETO_STEPS else ()
@@ -650,6 +681,9 @@ def replay(
             continue
         if not _in_session(bars[cut].timestamp, session):
             outside_session += 1
+            continue
+        if _news_blocked(bars[cut].timestamp, news):
+            blocked_by_news += 1
             continue
         if done % 2000 == 0:
             print(f"  {done}/{len(points)}  trades {len(trades)}", flush=True)
@@ -828,6 +862,8 @@ def replay(
             break
     if session is not None:
         print(f"세션 밖이라 건너뛴 평가 지점 {outside_session}", flush=True)
+    if news != "none":
+        print(f"뉴스로 막힌 평가 지점 {blocked_by_news}", flush=True)
     if regimes:
         print(f"상위 프레임이 거부한 셋업 {vetoed}", flush=True)
     print(f"손절 거리로 거부된 셋업 {refused}", flush=True)
@@ -916,6 +952,7 @@ async def main() -> None:
     # "HH:MM-HH:MM" in UTC, or absent for no window.
     parser.add_argument("--session", default=None)
     parser.add_argument("--veto", choices=("none", "1h", "1d"), default="none")
+    parser.add_argument("--news", choices=("none", "day", "after"), default="none")
     arguments = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
@@ -940,6 +977,7 @@ async def main() -> None:
         + f", divergence {arguments.divergence}"
         + (f", session {arguments.session} UTC" if arguments.session else "")
         + (f", veto {arguments.veto}" if arguments.veto != "none" else "")
+        + (f", news {arguments.news}" if arguments.news != "none" else "")
         + (f", min_legs {arguments.min_legs}" if arguments.gate == "h1" else ""),
         flush=True,
     )
@@ -957,6 +995,7 @@ async def main() -> None:
         distances=distances,
         divergence_model=arguments.divergence,
         veto=arguments.veto,
+        news=arguments.news,
         session=(
             tuple(_minutes(part) for part in arguments.session.split("-"))
             if arguments.session
