@@ -27,7 +27,7 @@
 param(
     [string] $Repository = "C:\workspace\personal\finance-auto-trading-main",
     [string] $Python = "C:\workspace\personal\finance-auto-trading-task-2\.venv\Scripts\python.exe",
-    [string] $Account = $env:AUTOTRADER_ACCOUNT_ALIAS,
+    [string] $Account = "",
     [int]    $Leverage = 3,
     [string] $RunFor = "12h",
     [string] $Database = "finance_auto_trading_prod"
@@ -61,6 +61,14 @@ foreach ($line in Get-Content $envFile) {
     $name = $trimmed.Substring(0, $split).Trim()
     $value = $trimmed.Substring($split + 1).Trim()
     Set-Item -Path ("Env:" + $name) -Value $value
+}
+
+# The alias is resolved after .env is loaded, not as a parameter default:
+# defaults bind before this script runs, so a default reading the environment
+# would only ever see what was already exported. Passing -Account still wins.
+if (-not $Account) { $Account = $env:AUTOTRADER_ACCOUNT_ALIAS }
+if (-not $Account) {
+    throw "no account: pass -Account or set AUTOTRADER_ACCOUNT_ALIAS in .env"
 }
 
 # The production database, whatever .env happens to name, and the source tree
