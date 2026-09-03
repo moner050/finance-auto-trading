@@ -469,6 +469,7 @@ def replay(
     ceiling_atr: Decimal = STOP_DISTANCE_MAXIMUM_ATR,
     minutes: Sequence[CompletedOhlcvBar] = (),
     pivot_left: int = PivotConfig().left,
+    distances: list[dict[str, object]] | None = None,
 ) -> list[dict[str, object]]:
     trades: list[dict[str, object]] = []
     refused = 0
@@ -606,6 +607,29 @@ def replay(
                 opened, reference = found
                 series = minutes
             entry = series[opened].close
+            if distances is not None:
+                # Every setup that gets this far, whichever side of the band
+                # it lands on. What the band refuses is the question, so the
+                # refusals have to be in the record too.
+                raw = (
+                    entry - reference
+                    if setup.direction is Side.BUY
+                    else reference - entry
+                )
+                room = (
+                    setup.target_price - entry
+                    if setup.direction is Side.BUY
+                    else entry - setup.target_price
+                )
+                distances.append(
+                    {
+                        "stop_atr5m": float(raw / atr),
+                        "reward_atr5m": float(room / atr),
+                        "r_at_this_stop": float(room / raw) if raw > 0 else None,
+                        "side": setup.direction.value,
+                        "at": series[opened].timestamp.isoformat(),
+                    }
+                )
             stop = _stop_price(
                 entry, reference, setup.direction, atr, floor_atr, ceiling_atr
             )
@@ -719,6 +743,7 @@ async def main() -> None:
     )
     parser.add_argument("--execution-scale", choices=("5m", "1m"), default="5m")
     parser.add_argument("--pivot-left", type=int, default=PivotConfig().left)
+    parser.add_argument("--distances", default=None)
     arguments = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
@@ -743,6 +768,7 @@ async def main() -> None:
         + (f", min_legs {arguments.min_legs}" if arguments.gate == "h1" else ""),
         flush=True,
     )
+    distances: list[dict[str, object]] | None = [] if arguments.distances else None
     trades = replay(
         bars,
         gate=arguments.gate,
@@ -753,7 +779,13 @@ async def main() -> None:
         ceiling_atr=arguments.stop_max_atr,
         minutes=minutes,
         pivot_left=arguments.pivot_left,
+        distances=distances,
     )
+    if arguments.distances is not None and distances is not None:
+        (root / arguments.distances).write_text(
+            json.dumps(distances, indent=1), encoding="utf-8"
+        )
+        print(f"손절 거리 {len(distances)}건 기록", flush=True)
     (root / arguments.out).write_text(json.dumps(trades, indent=1), encoding="utf-8")
     report(trades)
 
