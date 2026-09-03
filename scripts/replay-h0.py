@@ -196,17 +196,27 @@ def exhaustion_legs(
 
 def _stop_price(
     entry: Decimal, invalidation: Decimal, side: Side, atr: Decimal
-) -> Decimal:
-    """The structural level, moved out to a distance the risk engine allows.
+) -> Decimal | None:
+    """The structural level, or None where production would refuse the setup.
 
-    `risk/v6.py` refuses a stop closer than 0.40 ATR and further than 1.50, and
-    those two constants are imported rather than repeated so this cannot drift
-    from what production would accept.
+    This used to move the distance into 0.40-1.50 ATR, which is not what
+    `risk/v6.py` does. Production places the stop at the structural
+    reference and never moves it: outside that band it appends
+    STOP_DISTANCE_BELOW_0_40_ATR5M or STOP_DISTANCE_ABOVE_1_50_ATR5M, and a
+    blocker is a refusal - `allowed = not canonical_blockers`.
+
+    Clamping traded what production declines, and it manufactured the result
+    the earlier runs reported. Pushing a too-tight stop out to the floor
+    leaves the 0.66 target where it was, so the reward falls below the risk;
+    half of H0's sample sat in that sub-1R bucket and carried all of the
+    loss. The constants are still imported rather than repeated, but now
+    they are read the way production reads them.
     """
     distance = entry - invalidation if side is Side.BUY else invalidation - entry
     floor = STOP_DISTANCE_MINIMUM_ATR * atr
     ceiling = STOP_DISTANCE_MAXIMUM_ATR * atr
-    distance = min(max(distance, floor), ceiling)
+    if not floor <= distance <= ceiling:
+        return None
     return entry - distance if side is Side.BUY else entry + distance
 
 
@@ -243,6 +253,7 @@ def replay(
     bars: tuple[CompletedOhlcvBar, ...], *, gate: str, min_legs: int
 ) -> list[dict[str, object]]:
     trades: list[dict[str, object]] = []
+    refused = 0
     points = evaluation_points(bars)
     print(f"{len(bars)} bars, {len(points)} evaluation points", flush=True)
     busy_until = -1
@@ -323,6 +334,9 @@ def replay(
             if atr is None or atr <= 0:
                 continue
             stop = _stop_price(entry, setup.invalidation_price, setup.direction, atr)
+            if stop is None:
+                refused += 1
+                continue
             target = setup.target_price
             risk = entry - stop if setup.direction is Side.BUY else stop - entry
             reward = target - entry if setup.direction is Side.BUY else entry - target
@@ -350,6 +364,7 @@ def replay(
             )
             busy_until = closed
             break
+    print(f"손절 거리로 거부된 셋업 {refused}", flush=True)
     return trades
 
 
