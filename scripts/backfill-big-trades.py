@@ -47,7 +47,7 @@ from autotrader.strategies.david_v6.order_flow import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-ARCHIVE = "https://data.binance.vision/data/futures/um/monthly/aggTrades"
+ARCHIVE = "https://data.binance.vision/data/futures/um"
 # `assembly.py:100`. The same window, or this measures a different question.
 WINDOW = timedelta(minutes=30)
 TICK_SIZE = Decimal("0.10")
@@ -58,9 +58,11 @@ def moment(milliseconds: int) -> datetime:
     return EPOCH + timedelta(milliseconds=milliseconds)
 
 
-def download(client: httpx.Client, symbol: str, month: str, target: Path) -> None:
-    url = f"{ARCHIVE}/{symbol}/{symbol}-aggTrades-{month}.zip"
+def fetch(client: httpx.Client, url: str, target: Path) -> bool:
+    """Save the archive, or report that the venue does not have it."""
     with client.stream("GET", url) as response:
+        if response.status_code == 404:
+            return False
         response.raise_for_status()
         size = int(response.headers.get("content-length", 0))
         written = 0
@@ -69,7 +71,38 @@ def download(client: httpx.Client, symbol: str, month: str, target: Path) -> Non
                 handle.write(chunk)
                 written += len(chunk)
         if size and written != size:
-            raise SystemExit(f"{month}: {written} of {size} bytes")
+            raise SystemExit(f"{target.name}: {written} of {size} bytes")
+    return True
+
+
+def archives(
+    client: httpx.Client, symbol: str, month: str, scratch: Path
+) -> list[Path]:
+    """The month as one file, or as its days when the month is not over.
+
+    The monthly archive appears after the month ends, so the current one is a
+    404 - which stopped the first run at the twenty-fifth month after it had
+    streamed the previous twenty-four.
+    """
+    monthly = scratch / f"{symbol}-aggTrades-{month}.zip"
+    if monthly.exists():
+        return [monthly]
+    if fetch(client, f"{ARCHIVE}/monthly/aggTrades/{symbol}/{monthly.name}", monthly):
+        return [monthly]
+    monthly.unlink(missing_ok=True)
+    print(f"  {month} 월별 아카이브 없음, 일별로 받는다", flush=True)
+    daily: list[Path] = []
+    day = datetime.strptime(month, "%Y-%m").replace(tzinfo=UTC)
+    while day.strftime("%Y-%m") == month:
+        target = scratch / f"{symbol}-aggTrades-{day:%Y-%m-%d}.zip"
+        if target.exists() or fetch(
+            client, f"{ARCHIVE}/daily/aggTrades/{symbol}/{target.name}", target
+        ):
+            daily.append(target)
+        else:
+            target.unlink(missing_ok=True)
+        day += timedelta(days=1)
+    return daily
 
 
 def rows(archive: Path):
@@ -124,6 +157,9 @@ def main() -> None:
     entries = json.loads((ROOT / arguments.entries).read_text(encoding="utf-8"))
     for entry in entries:
         entry["_at"] = datetime.fromisoformat(entry["at"])
+        # Compared against the raw millisecond column, so a row that is not
+        # kept costs one integer comparison rather than a datetime.
+        entry["_ms"] = int((entry["_at"] - EPOCH) / timedelta(milliseconds=1))
     entries.sort(key=lambda item: item["_at"])
     months = sorted({entry["at"][:7] for entry in entries})
     print(f"진입 {len(entries):,}건, 월 {len(months)}개: {months[0]} ~ {months[-1]}")
@@ -154,16 +190,39 @@ def main() -> None:
 
     with httpx.Client(timeout=httpx.Timeout(300.0, connect=30.0)) as client:
         for month in months:
-            archive = scratch / f"{arguments.symbol}-aggTrades-{month}.zip"
-            if not archive.exists():
-                print(f"{month} 내려받는 중...", flush=True)
-                download(client, arguments.symbol, month, archive)
-            size = archive.stat().st_size / 1_000_000
+            print(f"{month} 내려받는 중...", flush=True)
+            files = archives(client, arguments.symbol, month, scratch)
+            if not files:
+                print(f"  {month} 아카이브 없음, 건너뛴다", flush=True)
+                continue
+            size = sum(handle.stat().st_size for handle in files) / 1_000_000
             seen = 0
             kept = 0
-            for row in rows(archive):
+            for row in (item for handle in files for item in rows(handle)):
                 seen += 1
                 stamp = int(row[5])
+                # Judged before the window filter, not inside it. An entry
+                # sits at the very end of its window, so the first row past
+                # it is outside every span; checking only on kept rows left
+                # the verdict until the next span arrived, by which time the
+                # buffer held a different half hour and the window read
+                # empty. Seven of twelve came back NO_TRADES that way.
+                while pending and pending[0]["_ms"] <= stamp:
+                    entry = pending.popleft()
+                    results.append(
+                        {
+                            "at": entry["at"],
+                            "side": entry["side"],
+                            "r_result": entry["r_result"],
+                            "r_target": entry["r_target"],
+                            **answer(
+                                buffer,
+                                entry["_at"],
+                                Side(entry["side"]),
+                                Decimal(entry["entry"]),
+                            ),
+                        }
+                    )
                 while cursor < len(spans) and stamp > spans[cursor][1]:
                     cursor += 1
                 if cursor >= len(spans) or stamp < spans[cursor][0]:
@@ -181,30 +240,18 @@ def main() -> None:
                 )
                 while buffer and buffer[0].occurred_at < at - WINDOW:
                     buffer.popleft()
-                while pending and pending[0]["_at"] <= at:
-                    entry = pending.popleft()
-                    verdict = answer(
-                        buffer,
-                        entry["_at"],
-                        Side(entry["side"]),
-                        Decimal(entry["entry"]),
-                    )
-                    results.append(
-                        {
-                            "at": entry["at"],
-                            "side": entry["side"],
-                            "r_result": entry["r_result"],
-                            "r_target": entry["r_target"],
-                            **verdict,
-                        }
-                    )
             print(
                 f"  {month}  {size:.0f} MB  체결 {seen:,}  창 안 {kept:,}  "
                 f"판정 누계 {len(results):,}",
                 flush=True,
             )
+            # Written every month. The first run streamed twenty-four of
+            # them and lost all of it to a 404 on the twenty-fifth, because
+            # the only write was after the loop.
+            (ROOT / arguments.out).write_text(json.dumps(results), encoding="utf-8")
             if not arguments.keep:
-                archive.unlink()
+                for handle in files:
+                    handle.unlink()
 
     (ROOT / arguments.out).write_text(json.dumps(results), encoding="utf-8")
     print(f"\n{len(results):,}건 → {arguments.out}")
