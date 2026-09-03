@@ -2,6 +2,7 @@
 
     H0 = 정규 다이버전스 + 66% 목표
     H1 = H0 + 소진 확인(거래량 감소 연쇄)
+    H2 = H1 + 사전 존 겹침 요건
 
 `--gate h0` is the core alone: no exhaustion, no zones, no higher-timeframe
 veto, no order flow. The document puts it first and says why - "여기서 기대값이
@@ -11,6 +12,9 @@ veto, no order flow. The document puts it first and says why - "여기서 기대
 chain. The zone requirement is H2's, not H1's, so the chain is checked here
 without it - which is why this cannot simply call `evaluate_exhaustion`, whose
 sequence is zone-gated by construction.
+
+`--gate h2` puts the zone back and therefore does call `evaluate_exhaustion`,
+the production function, which is the whole difference between the two rungs.
 
 What this is not: a backtest of the system. It is one rung of §13.1's ladder,
 and the only question it answers is whether the core has expectancy above zero.
@@ -67,6 +71,7 @@ from autotrader.risk.v6 import (
 from autotrader.strategies.david_v6.direction import (
     aligned_macd_histogram,
 )
+from autotrader.strategies.david_v6.exhaustion import evaluate_exhaustion
 from autotrader.strategies.david_v6.hlit import build_hlit_setups
 from autotrader.strategies.david_v6.pivots import (
     Pivot,
@@ -75,9 +80,20 @@ from autotrader.strategies.david_v6.pivots import (
     confirmed_pivots,
     evaluate_divergence,
 )
+from autotrader.strategies.david_v6.zones import (
+    ZONE_HISTORY,
+    ZoneConfig,
+    build_hlit_zones,
+)
 
 KLINES = "https://fapi.binance.com/fapi/v1/klines"
 STEP = timedelta(minutes=5)
+# Zones want eleven days where the divergence wants six hundred bars, and
+# building them costs 76ms. Rebuilt once an hour rather than at every
+# evaluation point: they come from ten distinct dates and barely move inside
+# an hour. An approximation, and stated rather than hidden.
+ZONE_WINDOW = int(ZONE_HISTORY / timedelta(minutes=5))
+ZONE_REFRESH = 12
 # Enough for MACD to have warmed up and for the last two pivots of each kind to
 # be inside it. The rule reads `selected[-2:]`, so a longer window would give
 # the same answer more slowly.
@@ -230,6 +246,9 @@ def replay(
     points = evaluation_points(bars)
     print(f"{len(bars)} bars, {len(points)} evaluation points", flush=True)
     busy_until = -1
+    zone_bucket = -1
+    zone_facts = None
+    exhaustion = None
     seen: set[tuple[str, str]] = set()
     for done, cut in enumerate(points):
         if cut < WINDOW or cut <= busy_until:
@@ -251,8 +270,27 @@ def replay(
             continue
         facts = build_hlit_setups(aligned_bars, divergence)
         aligned_pivots = (
-            confirmed_pivots(aligned_bars, PivotConfig()) if gate == "h1" else ()
+            confirmed_pivots(aligned_bars, PivotConfig())
+            if gate in ("h1", "h2")
+            else ()
         )
+        if gate == "h2":
+            bucket = cut // ZONE_REFRESH
+            if bucket != zone_bucket:
+                zone_bucket = bucket
+                zone_facts = (
+                    build_hlit_zones(
+                        bars[cut - ZONE_WINDOW : cut + 1],
+                        ZoneConfig(source_timezone="UTC"),
+                    )
+                    if cut >= ZONE_WINDOW
+                    else None
+                )
+            if zone_facts is None or not zone_facts.zones:
+                continue
+            exhaustion = evaluate_exhaustion(
+                aligned_bars, zones=zone_facts, pivots=aligned_pivots
+            )
         for setup in (facts.bullish, facts.bearish):
             if setup is None:
                 continue
@@ -261,6 +299,14 @@ def replay(
                 < min_legs
             ):
                 continue
+            if gate == "h2":
+                sequence = (
+                    exhaustion.bullish
+                    if setup.direction is Side.BUY
+                    else exhaustion.bearish
+                )
+                if sequence is None or not sequence.confirmed:
+                    continue
             # One setup per divergence pair; the same pair persists for many
             # bars and would otherwise be opened again and again. Keyed by the
             # anchor bar's timestamp because the index is relative to a window
@@ -365,7 +411,7 @@ async def main() -> None:
     parser.add_argument("--days", type=int, default=730)
     parser.add_argument("--symbol", default="BTCUSDT")
     parser.add_argument("--out", default="build/h0-trades.json")
-    parser.add_argument("--gate", choices=("h0", "h1"), default="h0")
+    parser.add_argument("--gate", choices=("h0", "h1", "h2"), default="h0")
     parser.add_argument("--min-legs", type=int, default=3)
     arguments = parser.parse_args()
 
