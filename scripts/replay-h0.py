@@ -51,7 +51,7 @@ import argparse
 import asyncio
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from itertools import pairwise
@@ -443,6 +443,21 @@ def _retrace_entry(
     return None
 
 
+def _five_minute_index(moment: datetime, five_at: Mapping[datetime, int]) -> int:
+    """The five-minute bar holding `moment`, or -1 when there is none.
+
+    A position opened and closed on the minute series still has to tell the
+    five-minute loop when it is free again, and the two index spaces are not
+    interchangeable.
+    """
+    floored = moment - timedelta(
+        minutes=moment.minute % 5,
+        seconds=moment.second,
+        microseconds=moment.microsecond,
+    )
+    return five_at.get(floored, -1)
+
+
 def replay(
     bars: tuple[CompletedOhlcvBar, ...],
     *,
@@ -464,6 +479,12 @@ def replay(
     # the minute that follows its close. Its `timestamp` is the open time, so
     # the first minute we may act on opens one step later.
     minute_at = {bar.timestamp: index for index, bar in enumerate(minutes)}
+    # `busy_until` gates the five-minute loop, so a position closed on the
+    # minute series has to come back as a five-minute index. Comparing the two
+    # directly is how the one-minute runs looked like they had no setups:
+    # a minute index runs to a million against two hundred thousand, so the
+    # first trade blocked every evaluation point after it.
+    five_at = {bar.timestamp: index for index, bar in enumerate(bars)}
     executed = bool(minutes)
     horizon = HORIZON * 5 if executed else HORIZON
     zoned = gate == "h2" or entry_model == "retrace"
@@ -617,7 +638,7 @@ def replay(
                     "mae_r": float(worst / risk),
                 }
             )
-            busy_until = closed
+            busy_until = _five_minute_index(series[closed].timestamp, five_at)
             break
     print(f"손절 거리로 거부된 셋업 {refused}", flush=True)
     if executed:
