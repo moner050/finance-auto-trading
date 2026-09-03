@@ -72,7 +72,7 @@ from autotrader.strategies.david_v6.direction import (
     aligned_macd_histogram,
 )
 from autotrader.strategies.david_v6.exhaustion import evaluate_exhaustion
-from autotrader.strategies.david_v6.hlit import build_hlit_setups
+from autotrader.strategies.david_v6.hlit import HlitSetup, build_hlit_setups
 from autotrader.strategies.david_v6.pivots import (
     Pivot,
     PivotConfig,
@@ -82,6 +82,7 @@ from autotrader.strategies.david_v6.pivots import (
 )
 from autotrader.strategies.david_v6.zones import (
     ZONE_HISTORY,
+    HlitZone,
     ZoneConfig,
     build_hlit_zones,
 )
@@ -249,11 +250,86 @@ def resolve(
     return "scratch", min(opened + HORIZON, len(bars) - 1), best, worst
 
 
+def _pullback_level(
+    setup: HlitSetup, zones: Sequence[HlitZone], price: Decimal
+) -> Decimal | None:
+    """The nearest pre-marked zone between the current price and the anchor.
+
+    Section 10 builds these from clustered highs, lows, opens and closes with
+    at least three touches - the red rectangles that are "already drawn"
+    before the setup exists. A pullback entry needs one below the price for a
+    long, because that is the direction price has to come back from, and
+    above the invalidation, because below it the setup is finished.
+
+    The nearest one is taken. A further zone is a better price and a trade
+    that happens less often, and choosing between the two on the result is
+    the thing section 4 forbids.
+    """
+    if setup.direction is Side.BUY:
+        below = [
+            zone.upper_boundary
+            for zone in zones
+            if setup.invalidation_price < zone.upper_boundary < price
+        ]
+        return max(below) if below else None
+    above = [
+        zone.lower_boundary
+        for zone in zones
+        if price < zone.lower_boundary < setup.invalidation_price
+    ]
+    return min(above) if above else None
+
+
+def _retrace_entry(
+    bars: Sequence[CompletedOhlcvBar],
+    confirmed: int,
+    setup: HlitSetup,
+    level: Decimal,
+) -> int | None:
+    """The bar where price returns to `level`, or None if it never does.
+
+    Section 4.2 orders the entry: the five-minute divergence is step [1] and
+    the entry is step [6], after [2] - price approaching the zone marked
+    earlier. Every rung of the ladder entered at [1] instead, at the close of
+    the bar that confirmed the divergence, by which time the confirmation lag
+    has already spent part of the distance to the 66% target. That is what
+    left three quarters of setups offering under 1R.
+
+    Two ways to end without a trade, both structural rather than chosen:
+    price breaking the anchor finishes the setup, and price reaching the
+    target without us leaves nothing to enter for. `HORIZON` caps the wait at
+    the same length the resolver gives a position.
+
+    The fill is the touching bar's close, not the level. Section 4.1 is
+    explicit that he does not rest a limit order at the zone, and a close is
+    what every other decision here is taken on.
+    """
+    for index in range(confirmed + 1, min(confirmed + HORIZON, len(bars))):
+        bar = bars[index]
+        if setup.direction is Side.BUY:
+            if bar.low <= setup.invalidation_price or bar.high >= setup.target_price:
+                return None
+            if bar.low <= level:
+                return index
+        else:
+            if bar.high >= setup.invalidation_price or bar.low <= setup.target_price:
+                return None
+            if bar.high >= level:
+                return index
+    return None
+
+
 def replay(
-    bars: tuple[CompletedOhlcvBar, ...], *, gate: str, min_legs: int
+    bars: tuple[CompletedOhlcvBar, ...],
+    *,
+    gate: str,
+    min_legs: int,
+    entry_model: str,
 ) -> list[dict[str, object]]:
     trades: list[dict[str, object]] = []
     refused = 0
+    never_returned = 0
+    zoned = gate == "h2" or entry_model == "retrace"
     points = evaluation_points(bars)
     print(f"{len(bars)} bars, {len(points)} evaluation points", flush=True)
     busy_until = -1
@@ -285,7 +361,7 @@ def replay(
             if gate in ("h1", "h2")
             else ()
         )
-        if gate == "h2":
+        if zoned:
             bucket = cut // ZONE_REFRESH
             if bucket != zone_bucket:
                 zone_bucket = bucket
@@ -299,9 +375,10 @@ def replay(
                 )
             if zone_facts is None or not zone_facts.zones:
                 continue
-            exhaustion = evaluate_exhaustion(
-                aligned_bars, zones=zone_facts, pivots=aligned_pivots
-            )
+            if gate == "h2":
+                exhaustion = evaluate_exhaustion(
+                    aligned_bars, zones=zone_facts, pivots=aligned_pivots
+                )
         for setup in (facts.bullish, facts.bearish):
             if setup is None:
                 continue
@@ -329,7 +406,18 @@ def replay(
             if key in seen:
                 continue
             seen.add(key)
-            entry = bars[cut].close
+            opened = cut
+            if entry_model == "retrace":
+                assert zone_facts is not None
+                level = _pullback_level(setup, zone_facts.zones, bars[cut].close)
+                if level is None:
+                    continue
+                touched = _retrace_entry(bars, cut, setup, level)
+                if touched is None:
+                    never_returned += 1
+                    continue
+                opened = touched
+            entry = bars[opened].close
             atr = average_true_range(window)
             if atr is None or atr <= 0:
                 continue
@@ -343,11 +431,11 @@ def replay(
             if risk <= 0 or reward <= 0:
                 continue
             outcome, closed, best, worst = resolve(
-                bars, cut, setup.direction, entry, stop, target
+                bars, opened, setup.direction, entry, stop, target
             )
             trades.append(
                 {
-                    "opened_at": bars[cut].timestamp.isoformat(),
+                    "opened_at": bars[opened].timestamp.isoformat(),
                     "side": setup.direction.value,
                     "outcome": outcome,
                     "r_target": float(reward / risk),
@@ -357,7 +445,8 @@ def replay(
                         if setup.direction is Side.BUY
                         else float((entry - bars[closed].close) / risk),
                     ),
-                    "bars_held": closed - cut,
+                    "bars_held": closed - opened,
+                    "waited": opened - cut,
                     "mfe_r": float(best / risk),
                     "mae_r": float(worst / risk),
                 }
@@ -365,6 +454,8 @@ def replay(
             busy_until = closed
             break
     print(f"손절 거리로 거부된 셋업 {refused}", flush=True)
+    if entry_model == "retrace":
+        print(f"존으로 돌아오지 않은 셋업 {never_returned}", flush=True)
     return trades
 
 
@@ -428,6 +519,7 @@ async def main() -> None:
     parser.add_argument("--out", default="build/h0-trades.json")
     parser.add_argument("--gate", choices=("h0", "h1", "h2"), default="h0")
     parser.add_argument("--min-legs", type=int, default=3)
+    parser.add_argument("--entry", choices=("close", "retrace"), default="close")
     arguments = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
@@ -436,11 +528,16 @@ async def main() -> None:
     bars = await fetch(arguments.symbol, arguments.days, cache)
     print(f"{bars[0].timestamp} → {bars[-1].timestamp}", flush=True)
     print(
-        f"gate {arguments.gate}"
+        f"gate {arguments.gate}, entry {arguments.entry}"
         + (f", min_legs {arguments.min_legs}" if arguments.gate == "h1" else ""),
         flush=True,
     )
-    trades = replay(bars, gate=arguments.gate, min_legs=arguments.min_legs)
+    trades = replay(
+        bars,
+        gate=arguments.gate,
+        min_legs=arguments.min_legs,
+        entry_model=arguments.entry,
+    )
     (root / arguments.out).write_text(json.dumps(trades, indent=1), encoding="utf-8")
     report(trades)
 
