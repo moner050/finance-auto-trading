@@ -102,6 +102,12 @@ WINDOW = 600
 # A day. The strategy is intraday and flattens before the close; without a
 # session rule in H0, something has to bound the wait.
 HORIZON = 288
+# One hour of one-minute bars. §4.2 drops to the execution scale straight
+# after the five-minute signal and enters there; an entry an hour later is a
+# different trade, so the search gives up rather than taking it.
+ENTRY_WINDOW = 60
+# Enough one-minute bars for the pivots the chain is built from.
+EXECUTION_WINDOW = 240
 
 
 async def fetch(symbol: str, days: int, cache: Path) -> tuple[CompletedOhlcvBar, ...]:
@@ -239,10 +245,15 @@ def resolve(
     entry: Decimal,
     stop: Decimal,
     target: Decimal,
+    horizon: int = HORIZON,
 ) -> tuple[str, int, Decimal, Decimal]:
-    """Walk forward until the stop or the target is touched."""
+    """Walk forward until the stop or the target is touched.
+
+    The horizon is in bars of whatever series is passed, so a minute series
+    gets five times as many for the same day.
+    """
     best = worst = Decimal(0)
-    for index in range(opened + 1, min(opened + 1 + HORIZON, len(bars))):
+    for index in range(opened + 1, min(opened + 1 + horizon, len(bars))):
         bar = bars[index]
         if side is Side.BUY:
             best = max(best, bar.high - entry)
@@ -258,7 +269,7 @@ def resolve(
                 return "loss", index, best, worst
             if bar.low <= target:
                 return "win", index, best, worst
-    return "scratch", min(opened + HORIZON, len(bars) - 1), best, worst
+    return "scratch", min(opened + horizon, len(bars) - 1), best, worst
 
 
 def _nearest_zone_level(
@@ -330,6 +341,67 @@ def _anchor_zone_level(
     return max(min(holding), price)
 
 
+def _execution_entry(
+    minutes: Sequence[CompletedOhlcvBar],
+    start: int,
+    setup: HlitSetup,
+    min_legs: int,
+) -> tuple[int, Decimal] | None:
+    """The bar where the chain completes at the execution scale, and its stop.
+
+    Section 4.2 orders it: five-minute macro, then "1분 + 30초 분할 화면으로
+    하강", then the volume divergence read there, then entry. Section 9.1's
+    form C names what that buys - "5초 조기 진입(타이트 손절)". The entry is
+    precise, so the stop is close, so the 66% target is far in R terms.
+
+    Section 12.3 measured what the five-minute close costs instead: with
+    d = close - low, the median d is 0.86 ATR while the whole target distance
+    is 0.97 ATR. There is nothing left. On one-minute bars the same moment
+    has a close much nearer its own low.
+
+    The stop reference is section 20.1's, read literally: "롱: 최종 소진
+    다리의 저점" - the low of the final exhaustion leg, not the five-minute
+    anchor. It has to sit above the anchor for a long, because below it the
+    setup is already finished.
+
+    Returns the entry index and that stop reference, or None: the anchor
+    breaks, the target arrives without us, or the chain never completes
+    inside `ENTRY_WINDOW`.
+    """
+    long = setup.direction is Side.BUY
+    kind = PivotKind.LOW if long else PivotKind.HIGH
+    for index in range(start, min(start + ENTRY_WINDOW, len(minutes))):
+        bar = minutes[index]
+        if long:
+            if bar.low <= setup.invalidation_price:
+                return None
+            if bar.high >= setup.target_price:
+                return None
+        else:
+            if bar.high >= setup.invalidation_price:
+                return None
+            if bar.low <= setup.target_price:
+                return None
+        if index < EXECUTION_WINDOW:
+            continue
+        window = minutes[index - EXECUTION_WINDOW : index + 1]
+        pivots = confirmed_pivots(window, PivotConfig())
+        if exhaustion_legs(window, pivots, setup.direction) < min_legs:
+            continue
+        legs = [pivot for pivot in pivots if pivot.confirmed and pivot.kind is kind]
+        if not legs:
+            continue
+        reference = legs[-1].price
+        # The leg has to be inside the setup: a stop the wrong side of the
+        # anchor is not a tighter stop, it is a different trade.
+        if long and not setup.invalidation_price < reference < bar.close:
+            continue
+        if not long and not bar.close < reference < setup.invalidation_price:
+            continue
+        return index, reference
+    return None
+
+
 def _retrace_entry(
     bars: Sequence[CompletedOhlcvBar],
     confirmed: int,
@@ -378,11 +450,19 @@ def replay(
     zone_model: str,
     floor_atr: Decimal = STOP_DISTANCE_MINIMUM_ATR,
     ceiling_atr: Decimal = STOP_DISTANCE_MAXIMUM_ATR,
+    minutes: Sequence[CompletedOhlcvBar] = (),
 ) -> list[dict[str, object]]:
     trades: list[dict[str, object]] = []
     refused = 0
     never_returned = 0
     no_zone = 0
+    no_chain = 0
+    # The entry scale is a different series, so a five-minute bar has to name
+    # the minute that follows its close. Its `timestamp` is the open time, so
+    # the first minute we may act on opens one step later.
+    minute_at = {bar.timestamp: index for index, bar in enumerate(minutes)}
+    executed = bool(minutes)
+    horizon = HORIZON * 5 if executed else HORIZON
     zoned = gate == "h2" or entry_model == "retrace"
     points = evaluation_points(bars)
     print(f"{len(bars)} bars, {len(points)} evaluation points", flush=True)
@@ -461,6 +541,8 @@ def replay(
                 continue
             seen.add(key)
             opened = cut
+            reference = setup.invalidation_price
+            series: Sequence[CompletedOhlcvBar] = bars
             if entry_model == "retrace":
                 assert zone_facts is not None
                 choose = (
@@ -485,17 +567,22 @@ def replay(
                         never_returned += 1
                         continue
                     opened = touched
-            entry = bars[opened].close
             atr = average_true_range(window)
             if atr is None or atr <= 0:
                 continue
+            if executed:
+                start = minute_at.get(bars[cut].timestamp + STEP)
+                if start is None:
+                    continue
+                found = _execution_entry(minutes, start, setup, min_legs)
+                if found is None:
+                    no_chain += 1
+                    continue
+                opened, reference = found
+                series = minutes
+            entry = series[opened].close
             stop = _stop_price(
-                entry,
-                setup.invalidation_price,
-                setup.direction,
-                atr,
-                floor_atr,
-                ceiling_atr,
+                entry, reference, setup.direction, atr, floor_atr, ceiling_atr
             )
             if stop is None:
                 refused += 1
@@ -506,22 +593,22 @@ def replay(
             if risk <= 0 or reward <= 0:
                 continue
             outcome, closed, best, worst = resolve(
-                bars, opened, setup.direction, entry, stop, target
+                series, opened, setup.direction, entry, stop, target, horizon
             )
             trades.append(
                 {
-                    "opened_at": bars[opened].timestamp.isoformat(),
+                    "opened_at": series[opened].timestamp.isoformat(),
                     "side": setup.direction.value,
                     "outcome": outcome,
                     "r_target": float(reward / risk),
                     "r_result": {"win": float(reward / risk), "loss": -1.0}.get(
                         outcome,
-                        float((bars[closed].close - entry) / risk)
+                        float((series[closed].close - entry) / risk)
                         if setup.direction is Side.BUY
-                        else float((entry - bars[closed].close) / risk),
+                        else float((entry - series[closed].close) / risk),
                     ),
                     "bars_held": closed - opened,
-                    "waited": opened - cut,
+                    "waited": opened - cut if not executed else opened - start,
                     "mfe_r": float(best / risk),
                     "mae_r": float(worst / risk),
                 }
@@ -529,6 +616,8 @@ def replay(
             busy_until = closed
             break
     print(f"손절 거리로 거부된 셋업 {refused}", flush=True)
+    if executed:
+        print(f"실행 스케일에서 소진이 안 나온 셋업 {no_chain}", flush=True)
     if entry_model == "retrace":
         print(f"존으로 돌아오지 않은 셋업 {never_returned}", flush=True)
         print(f"해당 존이 없는 셋업 {no_zone}", flush=True)
@@ -603,17 +692,27 @@ async def main() -> None:
     parser.add_argument(
         "--stop-max-atr", type=Decimal, default=STOP_DISTANCE_MAXIMUM_ATR
     )
+    parser.add_argument("--execution-scale", choices=("5m", "1m"), default="5m")
     arguments = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
     cache = root / "build" / f"klines-{arguments.symbol}-{arguments.days}d.json"
     cache.parent.mkdir(parents=True, exist_ok=True)
     bars = await fetch(arguments.symbol, arguments.days, cache)
+    minutes: tuple[CompletedOhlcvBar, ...] = ()
+    if arguments.execution_scale == "1m":
+        minute_cache = (
+            root / "build" / f"klines-{arguments.symbol}-1m-{arguments.days}d.json"
+        )
+        if not minute_cache.exists():
+            raise SystemExit(f"no minute cache at {minute_cache}")
+        minutes = await fetch(arguments.symbol, arguments.days, minute_cache)
     print(f"{bars[0].timestamp} → {bars[-1].timestamp}", flush=True)
     print(
         f"gate {arguments.gate}, entry {arguments.entry}"
         + (f", zone {arguments.zone}" if arguments.entry == "retrace" else "")
         + f", stop {arguments.stop_min_atr}-{arguments.stop_max_atr} ATR"
+        + f", execution {arguments.execution_scale}"
         + (f", min_legs {arguments.min_legs}" if arguments.gate == "h1" else ""),
         flush=True,
     )
@@ -625,6 +724,7 @@ async def main() -> None:
         zone_model=arguments.zone,
         floor_atr=arguments.stop_min_atr,
         ceiling_atr=arguments.stop_max_atr,
+        minutes=minutes,
     )
     (root / arguments.out).write_text(json.dumps(trades, indent=1), encoding="utf-8")
     report(trades)
