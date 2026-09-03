@@ -1,10 +1,16 @@
-"""§13.1's H0: the HLIT core alone, scored in R.
+"""§13.1's ladder, one rung at a time, scored in R.
 
     H0 = 정규 다이버전스 + 66% 목표
+    H1 = H0 + 소진 확인(거래량 감소 연쇄)
 
-No exhaustion, no zones, no higher-timeframe veto, no order flow. The document
-puts this first and says why: "여기서 기대값이 안 나오면 나머지를 붙여도 안
-나온다".
+`--gate h0` is the core alone: no exhaustion, no zones, no higher-timeframe
+veto, no order flow. The document puts it first and says why - "여기서 기대값이
+안 나오면 나머지를 붙여도 안 나온다".
+
+`--gate h1` adds §13.1's exhaustion, which it names as the volume-decrease
+chain. The zone requirement is H2's, not H1's, so the chain is checked here
+without it - which is why this cannot simply call `evaluate_exhaustion`, whose
+sequence is zone-gated by construction.
 
 What this is not: a backtest of the system. It is one rung of §13.1's ladder,
 and the only question it answers is whether the core has expectancy above zero.
@@ -44,25 +50,28 @@ import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from itertools import pairwise
 from pathlib import Path
 
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from autotrader.domain.completed_ohlcv import CompletedOhlcvBar  # noqa: E402
-from autotrader.apps.trader.risk_context import average_true_range  # noqa: E402
-from autotrader.domain.enums import Side  # noqa: E402
-from autotrader.strategies.david_v6.direction import (  # noqa: E402
-    aligned_macd_histogram,
-)
-from autotrader.strategies.david_v6.hlit import build_hlit_setups  # noqa: E402
-from autotrader.risk.v6 import (  # noqa: E402
+from autotrader.apps.trader.risk_context import average_true_range
+from autotrader.domain.completed_ohlcv import CompletedOhlcvBar
+from autotrader.domain.enums import Side
+from autotrader.risk.v6 import (
     STOP_DISTANCE_MAXIMUM_ATR,
     STOP_DISTANCE_MINIMUM_ATR,
 )
-from autotrader.strategies.david_v6.pivots import (  # noqa: E402
+from autotrader.strategies.david_v6.direction import (
+    aligned_macd_histogram,
+)
+from autotrader.strategies.david_v6.hlit import build_hlit_setups
+from autotrader.strategies.david_v6.pivots import (
+    Pivot,
     PivotConfig,
+    PivotKind,
     confirmed_pivots,
     evaluate_divergence,
 )
@@ -101,7 +110,9 @@ async def fetch(symbol: str, days: int, cache: Path) -> tuple[CompletedOhlcvBar,
                 page = response.json()
                 if not page:
                     break
-                rows.extend([[row[0], row[1], row[2], row[3], row[4], row[5]] for row in page])
+                rows.extend(
+                    [[row[0], row[1], row[2], row[3], row[4], row[5]] for row in page]
+                )
                 cursor = page[-1][0] + 1
                 if len(rows) % 30000 < 1500:
                     print(f"  fetched {len(rows)}", flush=True)
@@ -128,9 +139,43 @@ def evaluation_points(bars: Sequence[CompletedOhlcvBar]) -> tuple[int, ...]:
     the same question a hundred times over.
     """
     return tuple(
-        sorted({pivot.confirmation_index for pivot in confirmed_pivots(bars, PivotConfig())})
+        sorted(
+            {
+                pivot.confirmation_index
+                for pivot in confirmed_pivots(bars, PivotConfig())
+            }
+        )
     )
 
+
+def exhaustion_legs(
+    bars: Sequence[CompletedOhlcvBar], pivots: Sequence[Pivot], side: Side
+) -> int:
+    """How many legs the current volume-decrease chain has.
+
+    Mirrors `exhaustion._sequence` with the zone test left out: §13.1 puts the
+    chain in H1 and the zone requirement in H2, so folding them together would
+    make H1 unmeasurable. Price extends the extreme and volume falls, and
+    either failure resets the chain - the document's "새 저점이 나오는데
+    거래량이 계단처럼 줄어드는" read literally.
+    """
+    kind = PivotKind.LOW if side is Side.BUY else PivotKind.HIGH
+    selected = sorted(
+        (pivot for pivot in pivots if pivot.confirmed and pivot.kind is kind),
+        key=lambda pivot: pivot.index,
+    )
+    if len(selected) < 2:
+        return 0
+    legs = 1
+    for previous, current in pairwise(selected):
+        extends = (
+            current.price < previous.price
+            if kind is PivotKind.LOW
+            else current.price > previous.price
+        )
+        quieter = bars[current.index].volume < bars[previous.index].volume
+        legs = legs + 1 if extends and quieter else 1
+    return legs
 
 
 def _stop_price(
@@ -178,7 +223,9 @@ def resolve(
     return "scratch", min(opened + HORIZON, len(bars) - 1), best, worst
 
 
-def replay(bars: tuple[CompletedOhlcvBar, ...]) -> list[dict[str, object]]:
+def replay(
+    bars: tuple[CompletedOhlcvBar, ...], *, gate: str, min_legs: int
+) -> list[dict[str, object]]:
     trades: list[dict[str, object]] = []
     points = evaluation_points(bars)
     print(f"{len(bars)} bars, {len(points)} evaluation points", flush=True)
@@ -203,8 +250,16 @@ def replay(bars: tuple[CompletedOhlcvBar, ...]) -> list[dict[str, object]]:
         if not divergence.regular:
             continue
         facts = build_hlit_setups(aligned_bars, divergence)
+        aligned_pivots = (
+            confirmed_pivots(aligned_bars, PivotConfig()) if gate == "h1" else ()
+        )
         for setup in (facts.bullish, facts.bearish):
             if setup is None:
+                continue
+            if gate == "h1" and (
+                exhaustion_legs(aligned_bars, aligned_pivots, setup.direction)
+                < min_legs
+            ):
                 continue
             # One setup per divergence pair; the same pair persists for many
             # bars and would otherwise be opened again and again. Keyed by the
@@ -237,9 +292,10 @@ def replay(bars: tuple[CompletedOhlcvBar, ...]) -> list[dict[str, object]]:
                     "outcome": outcome,
                     "r_target": float(reward / risk),
                     "r_result": {"win": float(reward / risk), "loss": -1.0}.get(
-                        outcome, float((bars[closed].close - entry) / risk)
+                        outcome,
+                        float((bars[closed].close - entry) / risk)
                         if setup.direction is Side.BUY
-                        else float((entry - bars[closed].close) / risk)
+                        else float((entry - bars[closed].close) / risk),
                     ),
                     "bars_held": closed - cut,
                     "mfe_r": float(best / risk),
@@ -262,28 +318,46 @@ def report(trades: list[dict[str, object]]) -> None:
     gains = sum(r for r in results if r > 0)
     pains = -sum(r for r in results if r < 0)
     decided = len(wins) + len(losses)
+    factor = gains / pains if pains else float("inf")
+    expectancy = sum(results) / len(results)
+
+    def average(rows: list[dict[str, object]], field: str) -> float:
+        return sum(float(row[field]) for row in rows) / len(rows) if rows else 0.0
+
     print("\n" + "=" * 58)
-    print(f"거래 {len(trades)}  승 {len(wins)}  패 {len(losses)}  무승부 {len(scratches)}")
+    print(
+        f"거래 {len(trades)}  승 {len(wins)}  패 {len(losses)}  무승부 {len(scratches)}"
+    )
     if decided:
-        print(f"Win rate excluding scratches   {len(wins)/decided*100:>8.1f}%")
-    print(f"Scratch rate                   {len(scratches)/len(trades)*100:>8.1f}%")
-    print(f"Loss rate                      {len(losses)/len(trades)*100:>8.1f}%")
-    if wins:
-        print(f"Average win                    {sum(float(t['r_result']) for t in wins)/len(wins):>8.2f} R")
-    if losses:
-        print(f"Average loss                   {sum(float(t['r_result']) for t in losses)/len(losses):>8.2f} R")
-    print(f"Profit factor                  {gains/pains if pains else float('inf'):>8.2f}")
-    print(f"Expectancy                     {sum(results)/len(results):>8.3f} R")
-    print(f"MFE / MAE (평균)               {sum(float(t['mfe_r']) for t in trades)/len(trades):>8.2f}"
-          f" / {sum(float(t['mae_r']) for t in trades)/len(trades):.2f} R")
-    print(f"평균 목표 거리                 {sum(float(t['r_target']) for t in trades)/len(trades):>8.2f} R")
+        share = len(wins) / decided * 100
+        print(f"Win rate excluding scratches   {share:>8.1f}%")
+    print(f"Scratch rate                   {len(scratches) / len(trades) * 100:>8.1f}%")
+    print(f"Loss rate                      {len(losses) / len(trades) * 100:>8.1f}%")
+    print(f"Average win                    {average(wins, 'r_result'):>8.2f} R")
+    print(f"Average loss                   {average(losses, 'r_result'):>8.2f} R")
+    print(f"Profit factor                  {factor:>8.2f}")
+    print(f"Expectancy                     {expectancy:>8.3f} R")
+    print(
+        f"MFE / MAE (평균)               {average(trades, 'mfe_r'):>8.2f}"
+        f" / {average(trades, 'mae_r'):.2f} R"
+    )
+    print(f"평균 목표 거리                 {average(trades, 'r_target'):>8.2f} R")
     print("=" * 58)
     print("\n§22.9 core_hlit 기준:")
-    expectancy = sum(results) / len(results)
-    factor = gains / pains if pains else float("inf")
-    print(f"  expectancy >= 0.15 R    {expectancy:>8.3f}  {'통과' if expectancy >= 0.15 else '미달'}")
-    print(f"  profit factor >= 1.15   {factor:>8.2f}  {'통과' if factor >= 1.15 else '미달'}")
-    print(f"  setups >= 50            {len(trades):>8}  {'통과' if len(trades) >= 50 else '미달'}")
+    passed = "통과"
+    failed = "미달"
+    print(
+        f"  expectancy >= 0.15 R    {expectancy:>8.3f}  "
+        f"{passed if expectancy >= 0.15 else failed}"
+    )
+    print(
+        f"  profit factor >= 1.15   {factor:>8.2f}  "
+        f"{passed if factor >= 1.15 else failed}"
+    )
+    print(
+        f"  setups >= 50            {len(trades):>8}  "
+        f"{passed if len(trades) >= 50 else failed}"
+    )
 
 
 async def main() -> None:
@@ -291,6 +365,8 @@ async def main() -> None:
     parser.add_argument("--days", type=int, default=730)
     parser.add_argument("--symbol", default="BTCUSDT")
     parser.add_argument("--out", default="build/h0-trades.json")
+    parser.add_argument("--gate", choices=("h0", "h1"), default="h0")
+    parser.add_argument("--min-legs", type=int, default=3)
     arguments = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
@@ -298,7 +374,12 @@ async def main() -> None:
     cache.parent.mkdir(parents=True, exist_ok=True)
     bars = await fetch(arguments.symbol, arguments.days, cache)
     print(f"{bars[0].timestamp} → {bars[-1].timestamp}", flush=True)
-    trades = replay(bars)
+    print(
+        f"gate {arguments.gate}"
+        + (f", min_legs {arguments.min_legs}" if arguments.gate == "h1" else ""),
+        flush=True,
+    )
+    trades = replay(bars, gate=arguments.gate, min_legs=arguments.min_legs)
     (root / arguments.out).write_text(json.dumps(trades, indent=1), encoding="utf-8")
     report(trades)
 
