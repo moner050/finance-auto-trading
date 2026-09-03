@@ -20,7 +20,24 @@ _TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 
 
 class BinancePublicRestError(RuntimeError):
-    """Raised when Binance did not answer with usable market data."""
+    """Raised when Binance did not answer with usable market data.
+
+    `status` carries the HTTP status when there was one, so a caller can tell
+    a venue that refused to answer from a request that was wrong. Without it
+    the only way to know was to parse the message, and the poller did not
+    try: a 429 ended a Shadow session that should have backed off.
+    """
+
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+# 429 is the rate limit and 418 is the ban that follows repeated 429s; 5xx is
+# the venue failing on its own side. All three mean no data arrived, which
+# says nothing about the data already stored - so they are retried. Every
+# other status is this code asking wrongly and is not retried.
+RETRYABLE_STATUSES = frozenset({418, 429, 500, 502, 503, 504})
 
 
 class BinancePublicRest:
@@ -127,7 +144,10 @@ class BinancePublicRest:
             raise BinancePublicRestError(f"{path} could not be reached") from error
         if response.status_code != 200:
             # The body can carry a rate-limit ban, so keep the status visible.
-            raise BinancePublicRestError(f"{path} answered {response.status_code}")
+            raise BinancePublicRestError(
+                f"{path} answered {response.status_code}",
+                status=response.status_code,
+            )
         return response.json()
 
     def _ensure_client(self) -> httpx.AsyncClient:

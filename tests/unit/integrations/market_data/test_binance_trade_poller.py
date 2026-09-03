@@ -14,6 +14,9 @@ from datetime import UTC, datetime
 
 import pytest
 
+from autotrader.integrations.market_data.binance_public_rest import (
+    BinancePublicRestError,
+)
 from autotrader.integrations.market_data.binance_trade_poller import (
     PAGE_LIMIT,
     POLL_INTERVAL_SECONDS,
@@ -355,3 +358,53 @@ async def test_the_symbol_fetched_is_the_one_the_reader_writes() -> None:
     assert poller.symbol == "ETHUSDT"
     assert rest.symbols == ["ETHUSDT"]
     assert store.seen == [2]
+
+
+class _Refused(_Rest):
+    """A venue that answers with a status instead of a page."""
+
+    def __init__(self, status: int, *pages: tuple[dict[str, object], ...]) -> None:
+        super().__init__(*pages)
+        self._status = status
+        self.refusals = 0
+
+    async def aggregate_trades(
+        self, *, symbol: str, from_id: int | None, limit: int
+    ) -> tuple[object, ...]:
+        if self.refusals == 0:
+            self.refusals += 1
+            raise BinancePublicRestError(
+                "/fapi/v1/aggTrades answered", status=self._status
+            )
+        return await super().aggregate_trades(
+            symbol=symbol, from_id=from_id, limit=limit
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_rate_limit_backs_off_rather_than_ending_the_session() -> None:
+    """429 is the venue asking to be called less often, not bad data.
+
+    It used to arrive as a `BinancePublicRestError`, which nothing here
+    caught, so it propagated to `run_together` and ended a live Shadow
+    session - over a request that simply needs repeating. A backfill on the
+    same IP was enough to trigger it.
+    """
+    stop = asyncio.Event()
+    store = _Store(checkpoint=1)
+    rest = _Refused(429, (_row(2),))
+
+    await _poller(store, rest, _Sleeps(stop, stop_after=2)).run(stop=stop)
+
+    assert rest.refusals == 1
+    assert store.seen == [2]
+
+
+@pytest.mark.asyncio
+async def test_a_status_waiting_cannot_fix_still_ends_the_run() -> None:
+    """400 means this code asked wrongly, and retrying asks wrongly again."""
+    stop = asyncio.Event()
+    rest = _Refused(400, (_row(2),))
+
+    with pytest.raises(BinancePublicRestError):
+        await _poller(_Store(checkpoint=1), rest, _Sleeps(stop)).run(stop=stop)

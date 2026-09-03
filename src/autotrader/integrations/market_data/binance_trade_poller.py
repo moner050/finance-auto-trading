@@ -45,6 +45,11 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from typing import Protocol, cast
 
+from autotrader.integrations.market_data.binance_public_rest import (
+    RETRYABLE_STATUSES,
+    BinancePublicRestError,
+)
+
 # A poll behind by this much is invisible to a five-minute bar, and each one
 # costs weight against a budget shared with everything else this system reads.
 POLL_INTERVAL_SECONDS = 2.0
@@ -132,10 +137,26 @@ class BinanceUsdmTradePoller:
         while not stop.is_set():
             try:
                 fetched = await self._poll()
-            except OSError, TimeoutError, ConnectionError:
+            except (
+                OSError,
+                TimeoutError,
+                ConnectionError,
+                BinancePublicRestError,
+            ) as error:
                 # Reaching the venue is allowed to fail. What it sends, once
                 # it arrives, is not - an out-of-sequence trade or a
                 # correction conflict propagates from `_poll`.
+                #
+                # A rate limit is the first kind and used not to be treated as
+                # such: 429 arrived as a BinancePublicRestError, which nothing
+                # here caught, and `run_together` ended the whole Shadow
+                # session over a venue asking to be called less often. A
+                # status this code cannot fix by waiting still propagates.
+                if (
+                    isinstance(error, BinancePublicRestError)
+                    and error.status not in RETRYABLE_STATUSES
+                ):
+                    raise
                 if stop.is_set():
                     return
                 self.failures += 1
