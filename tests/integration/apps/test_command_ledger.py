@@ -19,7 +19,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from autotrader.apps.backoffice.ledger import (
     FAILED,
     IN_PROGRESS,
-    SOLE_OPERATOR_EMAIL,
     SUCCEEDED,
     LedgerConflictError,
     LedgerEntry,
@@ -37,7 +36,7 @@ NOW = datetime(2026, 8, 27, tzinfo=UTC)
 def _entry(**changes: object) -> LedgerEntry:
     values: dict[str, object] = {
         "id": uuid7(),
-        "actor_email": SOLE_OPERATOR_EMAIL,
+        "actor_email": "operator@example.com",
         "source_ip": "127.0.0.1",
         "action": "HALT",
         "target_type": "GLOBAL",

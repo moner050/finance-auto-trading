@@ -65,7 +65,7 @@ Task 3는 독립 리뷰에서 평문 문자열이 객체 수명 동안 남는 �
 2. **Task 5 — provider dotenv 제거**: KIS/Toss/Binance의 provider caller를 DB
    resolver로 이동한다. 기존 `.env` provider secret 경로는 fail-closed로 남긴다.
 3. **Task 6 — Google OIDC·Redis session·CSRF·one-use approval**: 검증된
-   `lmhml0237@gmail.com`만 인증한다. 위험 작업에는 action-bound 2차 비밀번호
+   `BACKOFFICE_ALLOWED_EMAIL`만 인증한다. 위험 작업에는 action-bound 2차 비밀번호
    승인을 부여한다.
 4. **Task 7 — 인증된 대시보드**: FastAPI/Jinja/HTMX 읽기 전용 shell, redacted
    projection, health 화면을 구현한다.

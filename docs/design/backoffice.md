@@ -13,7 +13,7 @@ execution paths without bypassing readiness, lock order, promotion evidence,
 incident attribution, or atomic activation and halt contracts.
 
 The service is operated by one authorized Google identity:
-`lmhml0237@gmail.com`. It is not a general multi-user administration product.
+`BACKOFFICE_ALLOWED_EMAIL`. It is not a general multi-user administration product.
 
 ## 2. Success Criteria
 
@@ -174,7 +174,7 @@ callback validates:
 - signature, issuer, and audience;
 - issued-at and expiration time;
 - `email_verified` is exactly `true`; and
-- normalized email is exactly `lmhml0237@gmail.com`.
+- normalized email is exactly `BACKOFFICE_ALLOWED_EMAIL`.
 
 Any mismatch is rejected without revealing whether the email or another claim
 failed. OAuth state and nonce are one-use Redis values with short expirations.

@@ -52,7 +52,7 @@ def _drive(scenario: object) -> None:
 def _command(**changes: object) -> BackofficeCommandRow:
     values: dict[str, object] = {
         "id": new_uuid7(),
-        "actor_email": "lmhml0237@gmail.com",
+        "actor_email": "operator@example.com",
         "source_ip": "127.0.0.1",
         "action": "TEST",
         "target_type": "TEST",

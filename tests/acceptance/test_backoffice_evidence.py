@@ -31,7 +31,6 @@ from autotrader.apps.backoffice.auth import (
     new_session_id,
 )
 from autotrader.apps.backoffice.evidence_read_model import EvidenceReadModel
-from autotrader.apps.backoffice.ledger import SOLE_OPERATOR_EMAIL
 from autotrader.apps.backoffice.second_password import (
     APPROVAL_PREFIX,
     ATTEMPT_PREFIX,
@@ -51,7 +50,7 @@ from autotrader.persistence.mysql.models.reconciliation import (
 )
 from autotrader.security.secret_crypto import MasterKeyRing
 
-ALLOWED = SOLE_OPERATOR_EMAIL
+ALLOWED = "operator@example.com"
 CSRF = "a-form-token"
 BASE_URL = "https://backoffice.example.com"
 KEY = b64encode(b"k" * 32).decode()

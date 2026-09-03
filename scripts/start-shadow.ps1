@@ -27,7 +27,7 @@
 param(
     [string] $Repository = "C:\workspace\personal\finance-auto-trading-main",
     [string] $Python = "C:\workspace\personal\finance-auto-trading-task-2\.venv\Scripts\python.exe",
-    [string] $Account = "lmhml0237",
+    [string] $Account = $env:AUTOTRADER_ACCOUNT_ALIAS,
     [int]    $Leverage = 3,
     [string] $RunFor = "12h",
     [string] $Database = "finance_auto_trading_prod"

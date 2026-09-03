@@ -277,7 +277,7 @@ US 종목은 시드에 NYSE 거래소만 있으므로 NASDAQ 심볼은 등록이
 - 서버 `.env`에는 DB 접속정보와 32바이트 master key만 남는다.
 
 **4b. 인증**
-- Google OIDC로 `lmhml0237@gmail.com` 단일 검증 이메일만 허용.
+- Google OIDC로 `BACKOFFICE_ALLOWED_EMAIL` 단일 검증 이메일만 허용.
 - Redis 세션 + 모든 mutation에 CSRF.
 
 **4c. 읽기 전용 대시보드**
@@ -854,7 +854,7 @@ extreme_big_trade = event_notional >= rolling_quantile(0.999)
 
 ```
 mode          SHADOW
-account       lmhml0237 (LIVE)
+account       <alias> (LIVE)
 equity        352.78276087 USDT
 tick size     0.10
 orders        none; this loop has no execution port to submit to

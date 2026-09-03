@@ -34,11 +34,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from autotrader.persistence.mysql.models.backoffice import BackofficeCommandRow
 from autotrader.shared.time import require_utc
 
-# The table pins this in a CHECK constraint. It is not configuration: the
-# schema says this backoffice answers to exactly one person, and a second
-# email would be rejected by the database rather than quietly accepted.
-SOLE_OPERATOR_EMAIL = "lmhml0237@gmail.com"
-
 IN_PROGRESS = "IN_PROGRESS"
 SUCCEEDED = "SUCCEEDED"
 FAILED = "FAILED"
@@ -171,7 +166,6 @@ class MySqlCommandLedger:
 __all__ = (
     "FAILED",
     "IN_PROGRESS",
-    "SOLE_OPERATOR_EMAIL",
     "SUCCEEDED",
     "LedgerConflictError",
     "LedgerEntry",

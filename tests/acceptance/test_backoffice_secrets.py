@@ -29,7 +29,6 @@ from autotrader.apps.backoffice.auth import (
     VerifiedIdentity,
     new_session_id,
 )
-from autotrader.apps.backoffice.ledger import SOLE_OPERATOR_EMAIL
 from autotrader.apps.backoffice.provider_secrets import registerable_secrets
 from autotrader.apps.backoffice.second_password import (
     APPROVAL_PREFIX,
@@ -47,7 +46,7 @@ from autotrader.config.settings import Settings
 from autotrader.persistence.mysql.engine import create_engine
 from autotrader.security.secret_crypto import MasterKeyRing
 
-ALLOWED = SOLE_OPERATOR_EMAIL
+ALLOWED = "operator@example.com"
 CSRF = "a-form-token"
 BASE_URL = "https://backoffice.example.com"
 KEY = b64encode(b"k" * 32).decode()

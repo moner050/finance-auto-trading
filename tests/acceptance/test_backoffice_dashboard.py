@@ -40,7 +40,6 @@ from autotrader.apps.backoffice.auth import (
     VerifiedIdentity,
     new_session_id,
 )
-from autotrader.apps.backoffice.ledger import SOLE_OPERATOR_EMAIL
 from autotrader.apps.backoffice.second_password import (
     ApprovalClient,
     ApprovalStore,
@@ -58,7 +57,7 @@ from autotrader.persistence.mysql.models.operations import (
 
 # The command table pins the operator in a CHECK constraint, so a
 # command from anyone else is refused by the database itself.
-ALLOWED = SOLE_OPERATOR_EMAIL
+ALLOWED = "operator@example.com"
 CSRF = "a-form-token"
 
 

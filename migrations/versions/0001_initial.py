@@ -115,7 +115,7 @@ _CREATE: tuple[str, ...] = (
     started_at DATETIME(6) NOT NULL,
     completed_at DATETIME(6),
     PRIMARY KEY (id),
-    CONSTRAINT ck_backoffice_command_scope CHECK (actor_email = 'lmhml0237@gmail.com' AND CHAR_LENGTH(actor_email) > 0 AND actor_email = TRIM(actor_email) AND CHAR_LENGTH(source_ip) > 0 AND source_ip = TRIM(source_ip) AND CHAR_LENGTH(action) > 0 AND action = TRIM(action) AND CHAR_LENGTH(target_type) > 0 AND target_type = TRIM(target_type) AND CHAR_LENGTH(target_key) > 0 AND target_key = TRIM(target_key) AND CHAR_LENGTH(status) > 0 AND status = TRIM(status)),
+    CONSTRAINT ck_backoffice_command_scope CHECK (CHAR_LENGTH(actor_email) > 0 AND actor_email = TRIM(actor_email) AND CHAR_LENGTH(source_ip) > 0 AND source_ip = TRIM(source_ip) AND CHAR_LENGTH(action) > 0 AND action = TRIM(action) AND CHAR_LENGTH(target_type) > 0 AND target_type = TRIM(target_type) AND CHAR_LENGTH(target_key) > 0 AND target_key = TRIM(target_key) AND CHAR_LENGTH(status) > 0 AND status = TRIM(status)),
     CONSTRAINT ck_backoffice_command_digests CHECK (OCTET_LENGTH(payload_digest) = 32 AND (expected_digest IS NULL OR OCTET_LENGTH(expected_digest) = 32)),
     CONSTRAINT ck_backoffice_command_state CHECK ((status = 'IN_PROGRESS' AND result_code IS NULL AND result_digest IS NULL AND completed_at IS NULL) OR (status IN ('SUCCEEDED', 'FAILED') AND CHAR_LENGTH(result_code) > 0 AND result_code = TRIM(result_code) AND OCTET_LENGTH(result_digest) = 32 AND completed_at >= started_at))
 )""",

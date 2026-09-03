@@ -206,9 +206,14 @@ class BackofficeBootstrapAuthorityRow(CoreBase):
 class BackofficeCommandRow(CoreBase):
     __tablename__ = "backoffice_command"
     __table_args__ = (
+        # This used to pin one address here. Who the operator is now comes
+        # from BACKOFFICE_ALLOWED_EMAIL, which the identity gate already
+        # refuses to start without and checks every session against, so the
+        # literal was a second copy of a fact configuration owns. What the
+        # schema still guarantees is the shape: an address, an address that
+        # is trimmed, and every other column present.
         CheckConstraint(
-            "actor_email = 'lmhml0237@gmail.com' "
-            "AND CHAR_LENGTH(actor_email) > 0 AND actor_email = TRIM(actor_email) "
+            "CHAR_LENGTH(actor_email) > 0 AND actor_email = TRIM(actor_email) "
             "AND CHAR_LENGTH(source_ip) > 0 AND source_ip = TRIM(source_ip) "
             "AND CHAR_LENGTH(action) > 0 AND action = TRIM(action) "
             "AND CHAR_LENGTH(target_type) > 0 AND target_type = TRIM(target_type) "

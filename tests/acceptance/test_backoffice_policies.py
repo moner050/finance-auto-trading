@@ -31,7 +31,6 @@ from autotrader.apps.backoffice.auth import (
     VerifiedIdentity,
     new_session_id,
 )
-from autotrader.apps.backoffice.ledger import SOLE_OPERATOR_EMAIL
 from autotrader.apps.backoffice.policies_read_model import (
     PoliciesReadModel,
     as_percentage,
@@ -57,7 +56,7 @@ from autotrader.risk.v6 import MAX_LEVERAGE, SESSION_TRADE_UPPER_BOUND
 from autotrader.security.secret_crypto import MasterKeyRing
 from autotrader.strategies.david_v6.models import V6Market
 
-ALLOWED = SOLE_OPERATOR_EMAIL
+ALLOWED = "operator@example.com"
 CSRF = "a-form-token"
 BASE_URL = "https://backoffice.example.com"
 KEY = b64encode(b"k" * 32).decode()

@@ -20,6 +20,7 @@ session row records no actor, so there is no attribution to forge.
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from datetime import UTC, date, datetime
 
@@ -43,7 +44,8 @@ from autotrader.persistence.mysql.repositories.promotion import (
 from autotrader.persistence.mysql.seeds.core import BINANCE_USDM_EXCHANGE_CODE
 from autotrader.strategies.david_v6.models import V6Market
 
-ACCOUNT_ALIAS = "lmhml0237"
+# The alias belongs to whoever runs this, not to the repository.
+ACCOUNT_ALIAS = os.environ.get("AUTOTRADER_ACCOUNT_ALIAS", "")
 USAGE = "usage: python scripts/promote-shadow-session.py <YYYY-MM-DD>"
 
 
