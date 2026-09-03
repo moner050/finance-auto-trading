@@ -504,6 +504,32 @@ def _selected(facts: DivergenceFacts, mode: str) -> DivergenceFacts:
     )
 
 
+def _minutes(value: str) -> int:
+    hours, minutes = value.split(":")
+    return int(hours) * 60 + int(minutes)
+
+
+def _in_session(moment: datetime, window: tuple[int, int] | None) -> bool:
+    """Whether a bar falls inside the active window, in UTC.
+
+    §7.1 puts `active_productive_work_minutes: 60` beside the US open and
+    §13.2 makes the end a free parameter, `active_window_end: ["10:30",
+    "11:00", "11:30"]` - one, one and a half, or two hours from 09:30 New
+    York. §14.2 says the US open becomes "시장별 유동성 세션" in another
+    market, and BTC's was measured at 12:00-16:00 UTC.
+
+    A window that wraps midnight is allowed, because a liquidity session in
+    another market may.
+    """
+    if window is None:
+        return True
+    start, end = window
+    minute = moment.hour * 60 + moment.minute
+    if start <= end:
+        return start <= minute < end
+    return minute >= start or minute < end
+
+
 def replay(
     bars: tuple[CompletedOhlcvBar, ...],
     *,
@@ -517,6 +543,7 @@ def replay(
     pivot_left: int = PivotConfig().left,
     distances: list[dict[str, object]] | None = None,
     divergence_model: str = "regular",
+    session: tuple[int, int] | None = None,
 ) -> list[dict[str, object]]:
     trades: list[dict[str, object]] = []
     refused = 0
@@ -544,8 +571,12 @@ def replay(
     zone_facts = None
     exhaustion = None
     seen: set[tuple[str, str]] = set()
+    outside_session = 0
     for done, cut in enumerate(points):
         if cut < WINDOW or cut <= busy_until:
+            continue
+        if not _in_session(bars[cut].timestamp, session):
+            outside_session += 1
             continue
         if done % 2000 == 0:
             print(f"  {done}/{len(points)}  trades {len(trades)}", flush=True)
@@ -714,6 +745,8 @@ def replay(
             )
             busy_until = _five_minute_index(series[closed].timestamp, five_at)
             break
+    if session is not None:
+        print(f"세션 밖이라 건너뛴 평가 지점 {outside_session}", flush=True)
     print(f"손절 거리로 거부된 셋업 {refused}", flush=True)
     if executed:
         print(f"실행 스케일에서 소진이 안 나온 셋업 {no_chain}", flush=True)
@@ -797,6 +830,8 @@ async def main() -> None:
     parser.add_argument(
         "--divergence", choices=("regular", "hidden", "both"), default="regular"
     )
+    # "HH:MM-HH:MM" in UTC, or absent for no window.
+    parser.add_argument("--session", default=None)
     arguments = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
@@ -819,6 +854,7 @@ async def main() -> None:
         + f", execution {arguments.execution_scale}"
         + f", pivot left {arguments.pivot_left}"
         + f", divergence {arguments.divergence}"
+        + (f", session {arguments.session} UTC" if arguments.session else "")
         + (f", min_legs {arguments.min_legs}" if arguments.gate == "h1" else ""),
         flush=True,
     )
@@ -835,6 +871,11 @@ async def main() -> None:
         pivot_left=arguments.pivot_left,
         distances=distances,
         divergence_model=arguments.divergence,
+        session=(
+            tuple(_minutes(part) for part in arguments.session.split("-"))
+            if arguments.session
+            else None
+        ),
     )
     if arguments.distances is not None and distances is not None:
         (root / arguments.distances).write_text(
