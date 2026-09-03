@@ -530,6 +530,74 @@ def _in_session(moment: datetime, window: tuple[int, int] | None) -> bool:
     return minute >= start or minute < end
 
 
+_VETO_STEPS = {"1h": 12, "1d": 288}
+_SMA = (6, 70, 200)
+
+
+def _higher_frame(
+    bars: Sequence[CompletedOhlcvBar], step: int
+) -> tuple[tuple[datetime, Decimal], ...]:
+    """Close the five-minute series onto a coarser one, by whole buckets only.
+
+    A partial bucket at the end is dropped: the regime is read from
+    completed bars, the same rule the rest of this harness follows.
+    """
+    closes: list[tuple[datetime, Decimal]] = []
+    for start in range(0, len(bars) - step + 1, step):
+        closes.append((bars[start + step - 1].timestamp, bars[start + step - 1].close))
+    return tuple(closes)
+
+
+def _regimes(
+    closes: tuple[tuple[datetime, Decimal], ...],
+) -> tuple[tuple[datetime, int], ...]:
+    """The §2.2 regime at each higher-frame close: +1 up, -1 down, 0 neither.
+
+    "상승 추세 정의 (필수 전제)" is A0 and §13.2 fixes the periods at
+    6/70/200 as `fixed_by_evidence`. Slope is taken against the previous
+    bar, which the document does not specify - it says the 200 must rise and
+    the 70 must rise, not over what distance - so the shortest honest
+    reading is used and named here as a choice.
+
+    Every value comes from bars at or before its own timestamp.
+    """
+    values = [price for _, price in closes]
+    out: list[tuple[datetime, int]] = []
+    longest = max(_SMA)
+    for index in range(len(values)):
+        if index < longest:
+            out.append((closes[index][0], 0))
+            continue
+
+        def mean(period: int, at: int = index) -> Decimal:
+            window = values[at - period + 1 : at + 1]
+            return sum(window, Decimal(0)) / period
+
+        fast_mid = mean(_SMA[1])
+        slow = mean(_SMA[2])
+        mid_before = mean(_SMA[1], index - 1)
+        slow_before = mean(_SMA[2], index - 1)
+        if slow > slow_before and fast_mid > slow and fast_mid > mid_before:
+            out.append((closes[index][0], 1))
+        elif slow < slow_before and fast_mid < slow and fast_mid < mid_before:
+            out.append((closes[index][0], -1))
+        else:
+            out.append((closes[index][0], 0))
+    return tuple(out)
+
+
+def _regime_at(regimes: tuple[tuple[datetime, int], ...], moment: datetime) -> int:
+    """The most recent higher-frame regime that had closed by `moment`."""
+    low, high = 0, len(regimes)
+    while low < high:
+        middle = (low + high) // 2
+        if regimes[middle][0] <= moment:
+            low = middle + 1
+        else:
+            high = middle
+    return regimes[low - 1][1] if low else 0
+
+
 def replay(
     bars: tuple[CompletedOhlcvBar, ...],
     *,
@@ -544,6 +612,7 @@ def replay(
     distances: list[dict[str, object]] | None = None,
     divergence_model: str = "regular",
     session: tuple[int, int] | None = None,
+    veto: str = "none",
 ) -> list[dict[str, object]]:
     trades: list[dict[str, object]] = []
     refused = 0
@@ -572,6 +641,10 @@ def replay(
     exhaustion = None
     seen: set[tuple[str, str]] = set()
     outside_session = 0
+    vetoed = 0
+    regimes = (
+        _regimes(_higher_frame(bars, _VETO_STEPS[veto])) if veto in _VETO_STEPS else ()
+    )
     for done, cut in enumerate(points):
         if cut < WINDOW or cut <= busy_until:
             continue
@@ -646,6 +719,14 @@ def replay(
             )
             if key in seen:
                 continue
+            if regimes:
+                # §13.1's H3. A long needs the higher frame rising and a
+                # short needs it falling; "neither" refuses both, because a
+                # veto that abstains is not a veto.
+                wanted = 1 if setup.direction is Side.BUY else -1
+                if _regime_at(regimes, bars[cut].timestamp) != wanted:
+                    vetoed += 1
+                    continue
             seen.add(key)
             opened = cut
             reference = setup.invalidation_price
@@ -747,6 +828,8 @@ def replay(
             break
     if session is not None:
         print(f"세션 밖이라 건너뛴 평가 지점 {outside_session}", flush=True)
+    if regimes:
+        print(f"상위 프레임이 거부한 셋업 {vetoed}", flush=True)
     print(f"손절 거리로 거부된 셋업 {refused}", flush=True)
     if executed:
         print(f"실행 스케일에서 소진이 안 나온 셋업 {no_chain}", flush=True)
@@ -832,6 +915,7 @@ async def main() -> None:
     )
     # "HH:MM-HH:MM" in UTC, or absent for no window.
     parser.add_argument("--session", default=None)
+    parser.add_argument("--veto", choices=("none", "1h", "1d"), default="none")
     arguments = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
@@ -855,6 +939,7 @@ async def main() -> None:
         + f", pivot left {arguments.pivot_left}"
         + f", divergence {arguments.divergence}"
         + (f", session {arguments.session} UTC" if arguments.session else "")
+        + (f", veto {arguments.veto}" if arguments.veto != "none" else "")
         + (f", min_legs {arguments.min_legs}" if arguments.gate == "h1" else ""),
         flush=True,
     )
@@ -871,6 +956,7 @@ async def main() -> None:
         pivot_left=arguments.pivot_left,
         distances=distances,
         divergence_model=arguments.divergence,
+        veto=arguments.veto,
         session=(
             tuple(_minutes(part) for part in arguments.session.split("-"))
             if arguments.session
