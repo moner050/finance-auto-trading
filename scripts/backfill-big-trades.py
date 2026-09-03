@@ -143,6 +143,21 @@ def answer(
         "verdict": "BLOCKED" if blocked else "CLEAR",
         "events": len(window),
         "markers": len(facts.big_trades or ()),
+        # Every marker the cap kept, with what it was ranked on. `_big_trades`
+        # keeps the largest `MAXIMUM_BIG_TRADE_MARKERS` by notional, so the
+        # top N of these is exactly what a cap of N would have kept - which
+        # makes §22.5's grid a sweep over this record rather than another ten
+        # gigabytes. F12 is a question about that cap, and the first run threw
+        # away everything needed to answer it.
+        "clusters": [
+            {
+                "side": cluster.side.value,
+                "low": str(cluster.low_price),
+                "high": str(cluster.high_price),
+                "notional": str(cluster.summed_notional),
+            }
+            for cluster in (facts.big_trades or ())
+        ],
     }
 
 
