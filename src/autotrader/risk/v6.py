@@ -334,7 +334,16 @@ def evaluate_v6_risk(
     quantity = (raw_quantity / request.quantity_step).to_integral_value(
         rounding=ROUND_FLOOR
     ) * request.quantity_step
-    if quantity <= 0:
+    # A zero fraction always carries the blocker that caused it:
+    # `_risk_fraction` names its own refusals, and the policy model refuses
+    # to hold a normal fraction outside (0, 1], so there is no third way to
+    # reach zero unexplained.
+    if quantity <= 0 and risk_fraction > 0:
+        # Only when there was a budget to round. A rejected setup gets a zero
+        # fraction, so its quantity is zero for a reason already recorded, and
+        # appending this too puts a consequence beside its cause where a
+        # reader - or a screen listing reasons - cannot tell them apart. It
+        # was on every decision this account has ever refused.
         blockers.append("ROUNDED_QUANTITY_ZERO")
     canonical_blockers = tuple(sorted(set(blockers)))
     return V6RiskAuthority(

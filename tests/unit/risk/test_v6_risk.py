@@ -286,3 +286,28 @@ def test_an_unmet_objective_does_not_block() -> None:
     authority = _authority(_request(session_objective_reached=False))
 
     assert "SESSION_OBJECTIVE_REACHED" not in authority.blocker_codes
+
+
+def test_a_rejected_setup_reports_its_cause_and_not_the_consequence() -> None:
+    """A zero quantity says nothing SETUP_REJECTED did not already say.
+
+    The rejected grade takes the risk fraction to zero, which takes the
+    budget and the quantity to zero, and ROUNDED_QUANTITY_ZERO used to be
+    appended on top. Every decision this account had ever refused carried
+    both, so a screen listing reasons put a consequence at the top of the
+    list beside its own cause, and the two could not be told apart.
+    """
+    authority = _authority(_request(grade=SetupGrade.REJECT))
+
+    assert "SETUP_REJECTED" in authority.blocker_codes
+    assert "ROUNDED_QUANTITY_ZERO" not in authority.blocker_codes
+    assert not authority.allowed
+    assert authority.quantity == 0
+
+
+def test_a_budget_too_small_to_round_still_says_so() -> None:
+    """The consequence is still reported where it is the actual finding."""
+    authority = _authority(_request(quantity_step=Decimal("1000")))
+
+    assert "ROUNDED_QUANTITY_ZERO" in authority.blocker_codes
+    assert "SETUP_REJECTED" not in authority.blocker_codes
