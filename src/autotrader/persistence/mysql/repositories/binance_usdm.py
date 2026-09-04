@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import CursorResult, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from autotrader.persistence.mysql.models.binance_usdm import (
@@ -143,8 +144,13 @@ class BinanceUsdmNormalOrderRepository:
         A claim decided by a read followed by a write would have a window
         between them, and that window is a duplicate order.
         """
-        result = await self._session.execute(
-            insert(BinanceUsdmNormalOrderRow).values(**values).prefix_with("IGNORE")
+        # DML answers with a cursor result; `execute` is typed for the
+        # general case, which does not carry a row count.
+        result = cast(
+            CursorResult[Any],
+            await self._session.execute(
+                insert(BinanceUsdmNormalOrderRow).values(**values).prefix_with("IGNORE")
+            ),
         )
         return result.rowcount == 1
 
@@ -159,10 +165,13 @@ class BinanceUsdmNormalOrderRepository:
         return await self._session.scalar(statement)
 
     async def apply(self, client_order_id: str, values: dict[str, object]) -> int:
-        result = await self._session.execute(
-            update(BinanceUsdmNormalOrderRow)
-            .where(BinanceUsdmNormalOrderRow.client_order_id == client_order_id)
-            .values(**values)
+        result = cast(
+            CursorResult[Any],
+            await self._session.execute(
+                update(BinanceUsdmNormalOrderRow)
+                .where(BinanceUsdmNormalOrderRow.client_order_id == client_order_id)
+                .values(**values)
+            ),
         )
         return result.rowcount
 

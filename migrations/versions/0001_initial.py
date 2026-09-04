@@ -857,7 +857,6 @@ _CREATE: tuple[str, ...] = (
     binding_id BINARY(16) NOT NULL,
     account_id BINARY(16) NOT NULL,
     client_order_id VARCHAR(36) COLLATE ascii_bin NOT NULL,
-    command_kind VARCHAR(8) COLLATE ascii_bin NOT NULL,
     request_body VARBINARY(2048) NOT NULL,
     request_digest VARBINARY(32) NOT NULL,
     prepared_at DATETIME(6) NOT NULL,
@@ -868,7 +867,6 @@ _CREATE: tuple[str, ...] = (
     PRIMARY KEY (command_id),
     CONSTRAINT uq_binance_usdm_normal_order_client_id UNIQUE (client_order_id),
     CONSTRAINT ck_binance_usdm_normal_order_state CHECK (state IN ('PREPARED', 'NOT_SENT', 'AMBIGUOUS', 'ACKNOWLEDGED', 'REJECTED', 'UNKNOWN')),
-    CONSTRAINT ck_binance_usdm_normal_order_kind CHECK (command_kind IN ('SUBMIT', 'CANCEL', 'REPLACE')),
     CONSTRAINT ck_binance_usdm_normal_order_values CHECK (OCTET_LENGTH(request_digest) = 32 AND OCTET_LENGTH(request_body) > 0 AND CHAR_LENGTH(TRIM(client_order_id)) > 0 AND dispatch_count >= 1 AND prepared_at < not_after),
     CONSTRAINT ck_binance_usdm_normal_order_result CHECK ((state = 'ACKNOWLEDGED' AND result IS NOT NULL) OR (state <> 'ACKNOWLEDGED' AND result IS NULL)),
     CONSTRAINT fk_binance_usdm_normal_order_binding FOREIGN KEY(binding_id, account_id) REFERENCES exec_provider_account_binding (id, account_id) ON DELETE RESTRICT

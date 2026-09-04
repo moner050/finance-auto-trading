@@ -438,6 +438,11 @@ class BinanceUsdmNormalOrderRow(CoreBase):
     `request_body` is kept whole. The digest alone would say a request was
     sent without saying what it said, and a recovery that cannot reconstruct
     the request cannot tell the venue's answer apart from a different order.
+
+    Only submissions land here. Every order this strategy sends through the
+    normal-order path is a market order, which has no working state to cancel
+    or replace; the one thing that is cancelled is the protective stop, and
+    that is an algo order with its own record.
     """
 
     __tablename__ = "binance_usdm_normal_order"
@@ -449,10 +454,6 @@ class BinanceUsdmNormalOrderRow(CoreBase):
             "state IN ('PREPARED', 'NOT_SENT', 'AMBIGUOUS', "
             "'ACKNOWLEDGED', 'REJECTED', 'UNKNOWN')",
             name="ck_binance_usdm_normal_order_state",
-        ),
-        CheckConstraint(
-            "command_kind IN ('SUBMIT', 'CANCEL', 'REPLACE')",
-            name="ck_binance_usdm_normal_order_kind",
         ),
         CheckConstraint(
             "OCTET_LENGTH(request_digest) = 32 "
@@ -489,9 +490,6 @@ class BinanceUsdmNormalOrderRow(CoreBase):
     account_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
     client_order_id: Mapped[str] = mapped_column(
         String(36, collation="ascii_bin"), nullable=False
-    )
-    command_kind: Mapped[str] = mapped_column(
-        String(8, collation="ascii_bin"), nullable=False
     )
     request_body: Mapped[bytes] = mapped_column(VARBINARY(2048), nullable=False)
     request_digest: Mapped[bytes] = mapped_column(VARBINARY(32), nullable=False)
