@@ -426,11 +426,90 @@ class BinanceUsdmConfigurationFactRow(CoreBase):
     captured_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
 
 
+class BinanceUsdmNormalOrderRow(CoreBase):
+    """One durable record per order command sent to the venue.
+
+    The order service writes this before it sends and finishes it after, so a
+    process that dies mid-send leaves evidence that a request may be in
+    flight. Recovery reads it back by client order id, which is why that
+    column is unique rather than merely indexed: two rows claiming the same
+    id would make recovery ambiguous exactly when it must not be.
+
+    `request_body` is kept whole. The digest alone would say a request was
+    sent without saying what it said, and a recovery that cannot reconstruct
+    the request cannot tell the venue's answer apart from a different order.
+    """
+
+    __tablename__ = "binance_usdm_normal_order"
+    __table_args__ = (
+        UniqueConstraint(
+            "client_order_id", name="uq_binance_usdm_normal_order_client_id"
+        ),
+        CheckConstraint(
+            "state IN ('PREPARED', 'NOT_SENT', 'AMBIGUOUS', "
+            "'ACKNOWLEDGED', 'REJECTED', 'UNKNOWN')",
+            name="ck_binance_usdm_normal_order_state",
+        ),
+        CheckConstraint(
+            "command_kind IN ('SUBMIT', 'CANCEL', 'REPLACE')",
+            name="ck_binance_usdm_normal_order_kind",
+        ),
+        CheckConstraint(
+            "OCTET_LENGTH(request_digest) = 32 "
+            "AND OCTET_LENGTH(request_body) > 0 "
+            "AND CHAR_LENGTH(TRIM(client_order_id)) > 0 "
+            "AND dispatch_count >= 1 "
+            "AND prepared_at < not_after",
+            name="ck_binance_usdm_normal_order_values",
+        ),
+        # A result is the venue's answer, so it exists exactly when there is
+        # one. Any other pairing is a record that lost track of itself.
+        CheckConstraint(
+            "(state = 'ACKNOWLEDGED' AND result IS NOT NULL) OR "
+            "(state <> 'ACKNOWLEDGED' AND result IS NULL)",
+            name="ck_binance_usdm_normal_order_result",
+        ),
+        ForeignKeyConstraint(
+            ["binding_id", "account_id"],
+            list(_BINDING_FK_TARGET),
+            name="fk_binance_usdm_normal_order_binding",
+            ondelete="RESTRICT",
+        ),
+        # What recovery scans: the commands that may still be in flight.
+        Index(
+            "ix_binance_usdm_normal_order_unresolved",
+            "binding_id",
+            "state",
+            "not_after",
+        ),
+    )
+
+    command_id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True)
+    binding_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
+    account_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
+    client_order_id: Mapped[str] = mapped_column(
+        String(36, collation="ascii_bin"), nullable=False
+    )
+    command_kind: Mapped[str] = mapped_column(
+        String(8, collation="ascii_bin"), nullable=False
+    )
+    request_body: Mapped[bytes] = mapped_column(VARBINARY(2048), nullable=False)
+    request_digest: Mapped[bytes] = mapped_column(VARBINARY(32), nullable=False)
+    prepared_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    not_after: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    dispatch_count: Mapped[int] = mapped_column(BigInteger(), nullable=False)
+    state: Mapped[str] = mapped_column(
+        String(16, collation="ascii_bin"), nullable=False
+    )
+    result: Mapped[dict[str, object] | None] = mapped_column(JSON(), nullable=True)
+
+
 __all__ = (
     "BinanceUsdmAlgoOrderFactRow",
     "BinanceUsdmBalanceFactRow",
     "BinanceUsdmConfigurationFactRow",
     "BinanceUsdmIncomeFactRow",
+    "BinanceUsdmNormalOrderRow",
     "BinanceUsdmOrderFactRow",
     "BinanceUsdmPositionFactRow",
     "BinanceUsdmReconciliationRunRow",

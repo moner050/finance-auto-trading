@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from autotrader.persistence.mysql.models.binance_usdm import (
@@ -11,6 +11,7 @@ from autotrader.persistence.mysql.models.binance_usdm import (
     BinanceUsdmBalanceFactRow,
     BinanceUsdmConfigurationFactRow,
     BinanceUsdmIncomeFactRow,
+    BinanceUsdmNormalOrderRow,
     BinanceUsdmOrderFactRow,
     BinanceUsdmPositionFactRow,
     BinanceUsdmReconciliationRunRow,
@@ -126,3 +127,47 @@ def _validate_bundle(
 
 
 __all__ = ("BinanceUsdmReconciliationRepository",)
+
+
+class BinanceUsdmNormalOrderRepository:
+    """Row access for the durable order record the order service claims."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def insert_if_absent(self, values: dict[str, object]) -> bool:
+        """True when this caller wrote the row rather than finding it.
+
+        `INSERT IGNORE` makes the claim one statement, so two processes
+        preparing the same client order id cannot both believe they own it.
+        A claim decided by a read followed by a write would have a window
+        between them, and that window is a duplicate order.
+        """
+        result = await self._session.execute(
+            insert(BinanceUsdmNormalOrderRow).values(**values).prefix_with("IGNORE")
+        )
+        return result.rowcount == 1
+
+    async def load(
+        self, client_order_id: str, *, lock: bool = False
+    ) -> BinanceUsdmNormalOrderRow | None:
+        statement = select(BinanceUsdmNormalOrderRow).where(
+            BinanceUsdmNormalOrderRow.client_order_id == client_order_id
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return await self._session.scalar(statement)
+
+    async def apply(self, client_order_id: str, values: dict[str, object]) -> int:
+        result = await self._session.execute(
+            update(BinanceUsdmNormalOrderRow)
+            .where(BinanceUsdmNormalOrderRow.client_order_id == client_order_id)
+            .values(**values)
+        )
+        return result.rowcount
+
+
+__all__ = (
+    "BinanceUsdmNormalOrderRepository",
+    "BinanceUsdmReconciliationRepository",
+)

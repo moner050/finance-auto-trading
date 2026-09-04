@@ -151,7 +151,24 @@ EXECUTION_SCALES = {
 }
 
 
-async def fetch(symbol: str, days: int, cache: Path) -> tuple[CompletedOhlcvBar, ...]:
+# A 1500-bar page costs weight 10 against an IP budget of 2400 a minute.
+# Unthrottled, this loop took a live Shadow session down with a 429 - the
+# backfill and the loop share one address. A hundred pages a minute leaves
+# the loop most of the budget and still fetches a year of minutes in a few
+# minutes.
+_FETCH_INTERVAL = 0.6
+_FETCH_RETRIES = 6
+
+
+async def fetch(
+    symbol: str, days: int, cache: Path, interval: str = "5m"
+) -> tuple[CompletedOhlcvBar, ...]:
+    """Cached klines at `interval`, which the cache name has to agree with.
+
+    The interval used to be hardcoded to five minutes while the caller chose
+    the file, so asking for a one-minute cache would have filled it with
+    five-minute bars under a name that said otherwise.
+    """
     if cache.exists():
         rows = json.loads(cache.read_text(encoding="utf-8"))
         print(f"cache {cache.name}: {len(rows)} bars", flush=True)
@@ -159,27 +176,19 @@ async def fetch(symbol: str, days: int, cache: Path) -> tuple[CompletedOhlcvBar,
         end = datetime.now(UTC).replace(second=0, microsecond=0)
         start = end - timedelta(days=days)
         rows, cursor = [], int(start.timestamp() * 1000)
+        print(f"fetching {interval} {symbol} into {cache.name}", flush=True)
         async with httpx.AsyncClient(timeout=60) as client:
             while cursor < int(end.timestamp() * 1000):
-                response = await client.get(
-                    KLINES,
-                    params={
-                        "symbol": symbol,
-                        "interval": "5m",
-                        "startTime": cursor,
-                        "limit": 1500,
-                    },
-                )
-                response.raise_for_status()
-                page = response.json()
+                page = await _fetch_page(client, symbol, interval, cursor)
                 if not page:
                     break
                 rows.extend(
                     [[row[0], row[1], row[2], row[3], row[4], row[5]] for row in page]
                 )
                 cursor = page[-1][0] + 1
-                if len(rows) % 30000 < 1500:
+                if len(rows) % 60000 < 1500:
                     print(f"  fetched {len(rows)}", flush=True)
+                await asyncio.sleep(_FETCH_INTERVAL)
         cache.write_text(json.dumps(rows), encoding="utf-8")
         print(f"fetched {len(rows)} bars into {cache.name}", flush=True)
     return tuple(
@@ -193,6 +202,32 @@ async def fetch(symbol: str, days: int, cache: Path) -> tuple[CompletedOhlcvBar,
         )
         for row in rows
     )
+
+
+async def _fetch_page(
+    client: httpx.AsyncClient, symbol: str, interval: str, cursor: int
+) -> list[list[object]]:
+    """One page, backing off rather than giving the address up to a ban."""
+    for attempt in range(_FETCH_RETRIES):
+        response = await client.get(
+            KLINES,
+            params={
+                "symbol": symbol,
+                "interval": interval,
+                "startTime": cursor,
+                "limit": 1500,
+            },
+        )
+        if response.status_code in (418, 429) or response.status_code >= 500:
+            # 418 is the ban that follows ignored 429s, so it waits longest.
+            delay = float(response.headers.get("Retry-After") or 2 ** (attempt + 1))
+            print(f"  {response.status_code}, waiting {delay:.0f}s", flush=True)
+            await asyncio.sleep(delay)
+            continue
+        response.raise_for_status()
+        page: list[list[object]] = response.json()
+        return page
+    raise SystemExit(f"klines refused {_FETCH_RETRIES} times at {cursor}")
 
 
 def evaluation_points(
@@ -1135,7 +1170,9 @@ async def main() -> None:
         execution_cache = root / "build" / name
         if not execution_cache.exists():
             raise SystemExit(f"no execution cache at {execution_cache}")
-        execution_bars = await fetch(arguments.symbol, arguments.days, execution_cache)
+        execution_bars = await fetch(
+            arguments.symbol, arguments.days, execution_cache, arguments.execution_scale
+        )
     resolve_bars: tuple[CompletedOhlcvBar, ...] = ()
     resolve_scale = EXECUTION_SCALES.get(arguments.resolve_scale)
     if resolve_scale is not None:
@@ -1146,9 +1183,11 @@ async def main() -> None:
             raise SystemExit("--resolve-scale and --execution-scale are exclusive")
         name = resolve_scale.cache.format(symbol=arguments.symbol, days=arguments.days)
         resolve_cache = root / "build" / name
-        if not resolve_cache.exists():
+        if not resolve_cache.exists() and arguments.resolve_scale == "30s":
             raise SystemExit(f"no resolve cache at {resolve_cache}")
-        resolve_bars = await fetch(arguments.symbol, arguments.days, resolve_cache)
+        resolve_bars = await fetch(
+            arguments.symbol, arguments.days, resolve_cache, arguments.resolve_scale
+        )
     print(f"{bars[0].timestamp} → {bars[-1].timestamp}", flush=True)
     print(
         f"gate {arguments.gate}, entry {arguments.entry}"
