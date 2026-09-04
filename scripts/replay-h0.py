@@ -458,6 +458,32 @@ def resolve(
     return "scratch", last, best, worst, units, realised(bars[last].close)
 
 
+def _setup_level(setup: HlitSetup, name: str) -> Decimal | None:
+    """A retracement level off the setup itself, with no zone involved.
+
+    Section 12.4 named what the two zone readings both missed. The entry that
+    loses the money is the anchor bar's close, which sits a median 0.86 ATR
+    above the bar's low while the whole distance to the target is 0.97 ATR;
+    what is needed is a level that makes that gap small, and section 12.4
+    says where it is - "앵커 B 근처". `nearest` aimed just under the close and
+    `anchor` aimed at a zone's upper edge, usually above it. Neither could.
+
+    These are the retracement's own levels, so they exist for every setup
+    rather than only for the ones whose anchor happened to fall inside a
+    marked rectangle. For a bullish setup `anchor_b` is the low the
+    divergence was made at and `fib_25`/`fib_50` sit above it, so all three
+    ask price to come back down before entering - which is section 4.2's
+    step [2], and the close entry is not.
+    """
+    if name == "anchor_b":
+        return setup.anchor_b
+    if name == "fib25":
+        return setup.fib_25
+    if name == "fib50":
+        return setup.fib_50
+    return None
+
+
 def _nearest_zone_level(
     setup: HlitSetup, zones: Sequence[HlitZone], price: Decimal
 ) -> Decimal | None:
@@ -864,6 +890,7 @@ def replay(
     veto: str = "none",
     news: str = "none",
     invert: bool = False,
+    retrace_to: str = "zone",
 ) -> list[dict[str, object]]:
     trades: list[dict[str, object]] = []
     refused = 0
@@ -1023,12 +1050,15 @@ def replay(
             series: Sequence[CompletedOhlcvBar] = bars
             if entry_model == "retrace":
                 assert zone_facts is not None
-                choose = (
-                    _anchor_zone_level
-                    if zone_model == "anchor"
-                    else _nearest_zone_level
-                )
-                level = choose(setup, zone_facts.zones, bars[cut].close)
+                if retrace_to == "zone":
+                    choose = (
+                        _anchor_zone_level
+                        if zone_model == "anchor"
+                        else _nearest_zone_level
+                    )
+                    level = choose(setup, zone_facts.zones, bars[cut].close)
+                else:
+                    level = _setup_level(setup, retrace_to)
                 if level is None:
                     no_zone += 1
                     continue
@@ -1294,6 +1324,13 @@ async def main() -> None:
     # §34.4. Trade the other side of every setup, levels reflected about the
     # entry so the risk and the reward keep their distances.
     parser.add_argument("--invert", action="store_true")
+    # §12.5's second axis, which §12.4 marked "재구현 필요". Only read when
+    # `--entry retrace`; "zone" keeps the two readings section 11.4 ran.
+    parser.add_argument(
+        "--retrace-to",
+        choices=("zone", "fib50", "fib25", "anchor_b"),
+        default="zone",
+    )
     parser.add_argument("--execution-from", default=None)
     parser.add_argument("--execution-to", default=None)
     parser.add_argument("--pivot-left", type=int, default=PivotConfig().left)
@@ -1401,6 +1438,7 @@ async def main() -> None:
         veto=arguments.veto,
         news=arguments.news,
         invert=arguments.invert,
+        retrace_to=arguments.retrace_to,
         breakeven_at=arguments.breakeven_at,
         add_at=arguments.add_at,
         resolve_bars=resolve_bars,
