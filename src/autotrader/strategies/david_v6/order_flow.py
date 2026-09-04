@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -101,7 +102,24 @@ MINIMUM_BIG_TRADE_EVENTS = 200
 # Twenty is the top of the documented grid, and the top is the right end for
 # this rule: these markers only ever refuse an entry, so a larger cap refuses
 # more, and a smaller one would trade the safety away for tidiness.
-MAXIMUM_BIG_TRADE_MARKERS = 20
+#
+# The unit was wrong, though, and F12 found it: the grid counts events per
+# **liquidity session** and this counted them per evaluation window. The
+# session was measured at four hours - 12:00-16:00 UTC, where BTCUSDT's
+# hourly notional sits half again above its median - and the window is
+# thirty minutes, so twenty a session is two and a half a window, not twenty.
+# Applied per window it was eight times the top of a grid that is already
+# the top.
+#
+# So the constant is the document's number, in the document's unit, and the
+# cap is derived. Rounded up, on the same reasoning the paragraph above
+# gives: a larger cap refuses more, and refusing is what these markers do.
+BIG_TRADE_EVENTS_PER_LIQUIDITY_SESSION = 20
+LIQUIDITY_SESSION = timedelta(hours=4)
+BIG_TRADE_WINDOW = timedelta(minutes=30)
+MAXIMUM_BIG_TRADE_MARKERS = math.ceil(
+    BIG_TRADE_EVENTS_PER_LIQUIDITY_SESSION * (BIG_TRADE_WINDOW / LIQUIDITY_SESSION)
+)
 
 # What counts as an extreme delta, and why it is not a typed notional either.
 #
@@ -698,9 +716,12 @@ def blocking_big_trade_ahead(
 
 
 __all__ = (
+    "BIG_TRADE_EVENTS_PER_LIQUIDITY_SESSION",
     "BIG_TRADE_EXTREME_QUANTILE",
     "BIG_TRADE_NORMAL_QUANTILE",
+    "BIG_TRADE_WINDOW",
     "DELTA_QUANTILE",
+    "LIQUIDITY_SESSION",
     "MAXIMUM_BIG_TRADE_MARKERS",
     "MINIMUM_BIG_TRADE_EVENTS",
     "MINIMUM_DELTA_BARS",

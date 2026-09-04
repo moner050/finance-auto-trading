@@ -13,7 +13,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import cast
 from uuid import UUID
@@ -59,6 +59,7 @@ from autotrader.strategies.david_v6.models import (
     V6Market,
 )
 from autotrader.strategies.david_v6.order_flow import (
+    BIG_TRADE_WINDOW,
     OrderFlowFacts,
     OrderFlowThresholds,
     TradePrint,
@@ -97,7 +98,10 @@ from autotrader.strategies.david_v6.zones import (
 # contiguous five minute bars.
 HLIT_TIMEFRAME_KEY = "5m"
 _DAILY_TIMEFRAME_KEY = "1d"
-_ORDER_FLOW_WINDOW = timedelta(minutes=30)
+# Owned by `order_flow`, which derives the marker cap from its ratio to
+# the liquidity session. Two copies of it would let the cap drift from
+# the window it is a rate over.
+_ORDER_FLOW_WINDOW = BIG_TRADE_WINDOW
 _MARKET_SESSION_KINDS: Mapping[V6Market, SessionKind] = {
     V6Market.KRX_CASH: SessionKind.KRX_HLIT,
     V6Market.US_CASH: SessionKind.US_HLIT,
