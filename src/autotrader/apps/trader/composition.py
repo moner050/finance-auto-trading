@@ -559,7 +559,7 @@ class MySqlPaperExecution:
                 decision=_domain_decision(risk_decision, stored.id),
                 intent=intent,
                 submission=OrderSubmissionContext(
-                    broker_client_order_id=f"v6-{decision.id.hex}",
+                    broker_client_order_id=f"{ENTRY_PREFIX}{decision.id.hex}",
                     owner_runtime_instance_id=self._account.runtime_instance_id,
                     fencing_token=self._account.fencing_token,
                     not_after=now + _RESERVATION_WINDOW,
@@ -811,7 +811,11 @@ def _domain_decision(row: PersistedRiskDecision, intent_id: UUID) -> RiskDecisio
 
 
 __all__ = (
+    "ADD_PREFIX",
+    "ENTRY_PREFIX",
+    "EXIT_PREFIX",
     "LEG_ROLES",
+    "STOP_PREFIX",
     "BoundPolicy",
     "ExecutionAccount",
     "LeaseSettings",
@@ -862,6 +866,16 @@ class MySqlSchedulerLease:
             await session.commit()
         return lease is not None
 
+
+# Binance accepts a client order id of at most 36 characters, and a UUID's
+# hex is 32 of them, so a prefix has at most four. `stop-` and `exit-` were
+# five: every exit this loop placed would have been refused by the adapter
+# before it reached the venue, and nothing tied the two ends together to say
+# so. `test_client_order_id_prefixes` is that tie now.
+ENTRY_PREFIX = "v6-"
+STOP_PREFIX = "st-"
+ADD_PREFIX = "add-"
+EXIT_PREFIX = "ex-"
 
 LEG_ROLES = {
     IntentType.ENTRY: ChargeLegRole.ENTRY,
@@ -956,7 +970,7 @@ async def create_protective_order(
         decision=_domain_decision(risk_decision, stored.id),
         intent=intent,
         submission=OrderSubmissionContext(
-            broker_client_order_id=f"stop-{stored.id.hex}",
+            broker_client_order_id=f"{STOP_PREFIX}{stored.id.hex}",
             owner_runtime_instance_id=account.runtime_instance_id,
             fencing_token=account.fencing_token,
             not_after=now + _RESERVATION_WINDOW,
@@ -1332,7 +1346,7 @@ class MySqlPositionActions:
             decision=_domain_decision(risk_decision, stored.id),
             intent=intent,
             submission=OrderSubmissionContext(
-                broker_client_order_id=f"add-{stored.id.hex}",
+                broker_client_order_id=f"{ADD_PREFIX}{stored.id.hex}",
                 owner_runtime_instance_id=self._account.runtime_instance_id,
                 fencing_token=self._account.fencing_token,
                 not_after=now + _RESERVATION_WINDOW,
@@ -1407,7 +1421,7 @@ class MySqlPositionActions:
             decision=_domain_decision(risk_decision, stored.id),
             intent=intent,
             submission=OrderSubmissionContext(
-                broker_client_order_id=f"exit-{stored.id.hex}",
+                broker_client_order_id=f"{EXIT_PREFIX}{stored.id.hex}",
                 owner_runtime_instance_id=self._account.runtime_instance_id,
                 fencing_token=self._account.fencing_token,
                 not_after=now + _RESERVATION_WINDOW,
