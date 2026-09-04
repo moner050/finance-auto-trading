@@ -2,8 +2,8 @@
 
 Applying it needs a MySQL server, which these tests do not have. What they can
 prove without one is that the committed file still matches the ORM metadata,
-that it creates every table exactly once, and that it creates them in an order
-a foreign key can resolve.
+that it creates every table exactly once, that it creates them in an order a
+foreign key can resolve, and that whatever follows it forms one chain.
 """
 
 from __future__ import annotations
@@ -63,14 +63,43 @@ def test_it_is_the_base_revision() -> None:
     assert module.down_revision is None
 
 
-def test_it_is_the_only_revision() -> None:
+def test_the_revisions_form_one_chain_from_it() -> None:
+    """This used to require 0001 to be the only file.
+
+    It could, while nothing had been deployed: the consolidation existed to
+    end a chain whose drift went undetected, and regenerating one file is the
+    simplest way to keep the schema and the metadata together.
+
+    A database is now stamped at 0001, so regenerating it no longer reaches
+    that database at all - alembic considers the revision applied. Later
+    changes have to arrive as later revisions.
+
+    What the consolidation was protecting is untouched:
+    `test_the_migration_still_matches_the_orm_metadata` and the
+    `--check` gate both still hold 0001 to the metadata. What is admitted
+    here is only that deltas may follow it, in one line, with one head.
+    """
     versions = sorted(
-        path.name
+        path
         for path in (ROOT / "migrations" / "versions").glob("*.py")
         if path.name != "__init__.py"
     )
+    assert versions[0].name == "0001_initial.py"
 
-    assert versions == ["0001_initial.py"]
+    links: dict[str, str | None] = {}
+    for index, path in enumerate(versions):
+        module = _load(f"migration_{index}", path)
+        revision = cast("str", module.revision)
+        assert revision not in links, f"{revision} is declared twice"
+        links[revision] = cast("str | None", module.down_revision)
+
+    bases = [name for name, parent in links.items() if parent is None]
+    assert bases == ["0001_initial"]
+
+    parents = {parent for parent in links.values() if parent is not None}
+    assert parents <= set(links), "a revision names a parent that is not here"
+    heads = [name for name in links if name not in parents]
+    assert len(heads) == 1, f"the chain has forked: {sorted(heads)}"
 
 
 def test_creation_defers_foreign_keys_because_the_schema_has_cycles() -> None:
