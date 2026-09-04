@@ -54,8 +54,8 @@ def _command(*, command_type: CommandType = CommandType.SUBMIT) -> BrokerOrderCo
             else "KIS-KRX:20260824:12345:0000000042"
         ),
         replaces_command_id=None,
-        origin_type="DAVID_V6_DECISION",
-        authority_class="V6_PROVIDER_WRITE",
+        origin_type="STRATEGY",
+        authority_class="SUBMIT_NEW_EXPOSURE",
         owner_runtime_instance_id=new_uuid7(),
         fencing_token=7,
         not_after=NOW + timedelta(seconds=30),

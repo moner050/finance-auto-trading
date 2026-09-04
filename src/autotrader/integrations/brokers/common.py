@@ -269,3 +269,35 @@ def _decode_response_body(
         return decoded
     except (gzip.BadGzipFile, EOFError, OSError, zlib.error) as error:
         raise BrokerTransportError("broker HTTPS response body is invalid") from error
+
+
+# What a command must carry before any adapter will write it to a venue.
+#
+# Every adapter used to check `origin_type == "DAVID_V6_DECISION"` and
+# `authority_class == "V6_PROVIDER_WRITE"`. Nothing mints either string: the
+# loop emits `IntentOrigin` values and the two SUBMIT authorities below, so
+# those checks refused every order that reached them - in three adapters, none
+# of which had been wired to a venue, so none of them ever said so.
+#
+# The authority is deliberately not collapsed to one value. `OrderCommandFactory`
+# uses it to keep a closing order from borrowing the authority that opens
+# exposure, and a single constant for both would erase that distinction at the
+# only boundary that could still check it.
+PROVIDER_WRITE_ORIGINS = frozenset({"STRATEGY", "PROTECTION"})
+OPENING_AUTHORITY = "SUBMIT_NEW_EXPOSURE"
+CLOSING_AUTHORITY = "SUBMIT_STRICT_REDUCTION"
+PROVIDER_WRITE_AUTHORITIES = frozenset({OPENING_AUTHORITY, CLOSING_AUTHORITY})
+
+
+def writes_to_a_venue(origin_type: str, authority_class: str) -> bool:
+    """Whether this command is one the loop authorised a venue write for.
+
+    An operator or reconciliation origin is refused here rather than
+    accepted quietly: those exist, but nothing in this strategy's loop sends
+    them to a venue, and an adapter that took them would execute something no
+    strategy decision produced.
+    """
+    return (
+        origin_type in PROVIDER_WRITE_ORIGINS
+        and authority_class in PROVIDER_WRITE_AUTHORITIES
+    )

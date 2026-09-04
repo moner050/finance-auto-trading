@@ -19,6 +19,7 @@ from autotrader.integrations.brokers.common import (
     BrokerResponse,
     BrokerSubmissionRejected,
     BrokerWriteDisabled,
+    writes_to_a_venue,
 )
 
 _SYMBOL = "BTCUSDT"
@@ -648,8 +649,7 @@ def _validate_write_authority(
             command.command_type is not CommandType.SUBMIT
             or command.target_broker_order_id is not None
             or command.replaces_command_id is not None
-            or command.origin_type != "DAVID_V6_DECISION"
-            or command.authority_class != "V6_PROVIDER_WRITE"
+            or not writes_to_a_venue(command.origin_type, command.authority_class)
             or authority.command_id != command.id
             or authority.account_id != command.account_id
             or authority.instrument_id != command.instrument_id
@@ -752,8 +752,7 @@ def _validate_recovery_command(command: BrokerOrderCommand) -> None:
         command.command_type is not CommandType.SUBMIT
         or command.target_broker_order_id is not None
         or command.replaces_command_id is not None
-        or command.origin_type != "DAVID_V6_DECISION"
-        or command.authority_class != "V6_PROVIDER_WRITE"
+        or not writes_to_a_venue(command.origin_type, command.authority_class)
         or type(command.canonical_payload_hash) is not bytes
         or len(command.canonical_payload_hash) != 32
         or attempted_at >= not_after

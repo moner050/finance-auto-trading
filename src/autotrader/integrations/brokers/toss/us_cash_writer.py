@@ -15,6 +15,7 @@ from autotrader.integrations.brokers.common import (
     BrokerResponse,
     BrokerSubmissionRejected,
     BrokerWriteDisabled,
+    writes_to_a_venue,
 )
 from autotrader.integrations.brokers.toss.stock_order_contracts import (
     TossStockOrderPreview,
@@ -337,8 +338,7 @@ class TossUsCashWriter:
             or context.instrument_id != command.instrument_id
             or context.account_id != command.account_id
             or context.binding_generation != command.fencing_token
-            or command.origin_type != "DAVID_V6_DECISION"
-            or command.authority_class != "V6_PROVIDER_WRITE"
+            or not writes_to_a_venue(command.origin_type, command.authority_class)
             or command.owner_runtime_instance_id is None
             or command.owner_runtime_instance_id.version != 7
             or command.target_broker_order_id is not None

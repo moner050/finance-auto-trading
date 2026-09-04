@@ -20,6 +20,8 @@ from autotrader.integrations.brokers.binance_usdm.orders import (
     binance_normal_client_order_id,
 )
 from autotrader.integrations.brokers.common import (
+    CLOSING_AUTHORITY,
+    PROVIDER_WRITE_ORIGINS,
     BrokerRequest,
     BrokerResponse,
     BrokerWriteDisabled,
@@ -920,8 +922,9 @@ def _validate_emergency_command(
         or command.time_in_force != "NONE"
         or command.target_broker_order_id is not None
         or command.replaces_command_id is not None
-        or command.origin_type != "DAVID_V6_DECISION"
-        or command.authority_class != "V6_PROVIDER_WRITE"
+        or command.origin_type not in PROVIDER_WRITE_ORIGINS
+        # A full close may not borrow the authority that opens exposure.
+        or command.authority_class != CLOSING_AUTHORITY
         or command.broker_client_order_id != binance_normal_client_order_id(command.id)
         or _decimal(command.quantity, "emergency quantity") <= 0
     ):

@@ -10,6 +10,7 @@ from autotrader.execution.orders.models import BrokerOrderCommand, CommandType
 from autotrader.integrations.brokers.common import (
     BrokerSubmissionRejected,
     BrokerWriteDisabled,
+    writes_to_a_venue,
 )
 from autotrader.integrations.brokers.kis.cash_order_contracts import (
     KisCashAccount,
@@ -239,8 +240,7 @@ class KisCashWriter:
             or intent.account_id != command.account_id
             or intent.binding_generation != context.binding_generation
             or command.fencing_token != context.binding_generation
-            or command.origin_type != "DAVID_V6_DECISION"
-            or command.authority_class != "V6_PROVIDER_WRITE"
+            or not writes_to_a_venue(command.origin_type, command.authority_class)
             or command.side is not intent.side
             or command.order_style is not intent.order_style
             or command.quantity != intent.quantity

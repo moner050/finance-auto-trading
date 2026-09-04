@@ -94,30 +94,41 @@ def test_the_command_carries_the_id_the_venue_can_reconstruct(
         _client_order_id(command.broker_client_order_id)
 
 
-def test_only_the_vocabulary_still_separates_the_two_halves() -> None:
-    """The id now matches. Two fields still cannot.
+def test_the_adapter_accepts_a_command_this_loop_builds() -> None:
+    """The check that used to refuse every order, run against one.
 
-    `origin_type` and `authority_class` were chosen independently on each
-    side and no value satisfies both. The loop's `authority_class` is not a
-    name it can simply change: `OrderCommandFactory` uses it to keep a
-    closing order from borrowing the authority that opens exposure, and the
-    adapter wants one constant for both.
-
-    Settling that is a decision about which vocabulary is right, so this
-    records the gap rather than closing it. When it closes, this test fails
-    and says so.
+    Three things had to agree before this could pass, and none of them did:
+    the client order id had to name the command, and `origin_type` and
+    `authority_class` had to be values something actually mints. The adapters
+    were checking for two strings - "DAVID_V6_DECISION" and
+    "V6_PROVIDER_WRITE" - that nothing in this system produces.
     """
+    for authority in (NEW_EXPOSURE, STRICT_REDUCTION):
+        command_id = uuid7()
+        submission = _submission(command_id, authority=authority)
+        command = OrderCommandFactory().create(
+            order=_order(submission.broker_client_order_id),
+            command_type=CommandType.SUBMIT,
+            submission=submission,
+            origin=IntentOrigin.STRATEGY,
+        )
+        _validate_recovery_command(replace(command, dispatch_attempted_at=NOW))
+
+
+def test_an_origin_the_loop_never_sends_to_a_venue_is_refused() -> None:
+    """Operator and reconciliation origins exist, and nothing in this loop
+    dispatches them. An adapter that took one would execute something no
+    strategy decision produced."""
     command_id = uuid7()
     submission = _submission(command_id)
     command = OrderCommandFactory().create(
         order=_order(submission.broker_client_order_id),
         command_type=CommandType.SUBMIT,
         submission=submission,
-        origin=IntentOrigin.STRATEGY,
+        origin=IntentOrigin.OPERATOR,
     )
-    assert command.broker_client_order_id == binance_normal_client_order_id(command.id)
-    assert command.origin_type != "DAVID_V6_DECISION"
-    assert command.authority_class != "V6_PROVIDER_WRITE"
+    with pytest.raises(BrokerWriteDisabled):
+        _validate_recovery_command(replace(command, dispatch_attempted_at=NOW))
 
 
 def test_an_id_naming_anything_else_is_refused() -> None:
