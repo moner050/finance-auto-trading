@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from autotrader.persistence.mysql.models.binance_usdm import (
     BinanceUsdmAlgoOrderFactRow,
+    BinanceUsdmAlgoOrderRow,
     BinanceUsdmBalanceFactRow,
     BinanceUsdmConfigurationFactRow,
     BinanceUsdmIncomeFactRow,
@@ -176,7 +177,45 @@ class BinanceUsdmNormalOrderRepository:
         return result.rowcount
 
 
+class BinanceUsdmAlgoOrderRepository:
+    """Row access for the protective stop's durable record."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def insert_if_absent(self, values: dict[str, object]) -> bool:
+        result = cast(
+            CursorResult[Any],
+            await self._session.execute(
+                insert(BinanceUsdmAlgoOrderRow).values(**values).prefix_with("IGNORE")
+            ),
+        )
+        return result.rowcount == 1
+
+    async def load(
+        self, client_algo_id: str, *, lock: bool = False
+    ) -> BinanceUsdmAlgoOrderRow | None:
+        statement = select(BinanceUsdmAlgoOrderRow).where(
+            BinanceUsdmAlgoOrderRow.client_algo_id == client_algo_id
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return await self._session.scalar(statement)
+
+    async def apply(self, client_algo_id: str, values: dict[str, object]) -> int:
+        result = cast(
+            CursorResult[Any],
+            await self._session.execute(
+                update(BinanceUsdmAlgoOrderRow)
+                .where(BinanceUsdmAlgoOrderRow.client_algo_id == client_algo_id)
+                .values(**values)
+            ),
+        )
+        return result.rowcount
+
+
 __all__ = (
+    "BinanceUsdmAlgoOrderRepository",
     "BinanceUsdmNormalOrderRepository",
     "BinanceUsdmReconciliationRepository",
 )

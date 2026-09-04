@@ -19,7 +19,6 @@ and the answer to those is recovery, never a second send.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -141,9 +140,10 @@ class MySqlBinanceUsdmNormalOrderStore:
         if state is BinanceUsdmNormalOrderState.ACKNOWLEDGED:
             if type(result) is not BrokerWriteResult:
                 raise ValueError("an acknowledged Binance USD-M order needs a result")
-            encoded: str | None = json.dumps(
-                _encode(result), sort_keys=True, separators=(",", ":")
-            )
+            # The column is JSON, so it serialises this itself. Handing it a
+            # string would store JSON inside a JSON string and read back as
+            # text that no decoder here accepts.
+            encoded: dict[str, object] | None = encode_write_result(result)
         elif result is not None:
             raise ValueError("only an acknowledged Binance USD-M order has a result")
         else:
@@ -197,7 +197,7 @@ def _record(row: BinanceUsdmNormalOrderRow) -> BinanceUsdmNormalOrderRecord:
         not_after=_utc(row.not_after),
         dispatch_count=row.dispatch_count,
         state=BinanceUsdmNormalOrderState(row.state),
-        result=None if result is None else _decode(result),
+        result=None if result is None else decode_write_result(result),
     )
     record.validate()
     return record
@@ -208,7 +208,7 @@ def _utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
-def _encode(result: BrokerWriteResult) -> dict[str, object]:
+def encode_write_result(result: BrokerWriteResult) -> dict[str, object]:
     """Decimals as text, so what comes back is what went in.
 
     A float would round the venue's own numbers, and these are the numbers a
@@ -240,7 +240,7 @@ def _encode(result: BrokerWriteResult) -> dict[str, object]:
     }
 
 
-def _decode(payload: object) -> BrokerWriteResult:
+def decode_write_result(payload: object) -> BrokerWriteResult:
     if type(payload) is not dict:
         raise ValueError("Binance USD-M persisted order result is invalid")
     body = cast(dict[str, object], payload)
@@ -308,4 +308,9 @@ def _boolean(value: object) -> bool:
     return value
 
 
-__all__ = ("BinanceUsdmOrderRecordMissing", "MySqlBinanceUsdmNormalOrderStore")
+__all__ = (
+    "BinanceUsdmOrderRecordMissing",
+    "MySqlBinanceUsdmNormalOrderStore",
+    "decode_write_result",
+    "encode_write_result",
+)

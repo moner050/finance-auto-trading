@@ -502,8 +502,106 @@ class BinanceUsdmNormalOrderRow(CoreBase):
     result: Mapped[dict[str, object] | None] = mapped_column(JSON(), nullable=True)
 
 
+class BinanceUsdmAlgoOrderRow(CoreBase):
+    """The protective stop's durable record, written before it is placed.
+
+    A position without a working stop is the one state this system may never
+    sit in silently, so the row exists before the request leaves and carries
+    `protection_deadline` - the instant by which a stop must be confirmed or
+    the position closed instead.
+
+    `EntryFill` is spread into columns rather than kept as a blob. Every one
+    of its fields is something a constraint can hold, and a JSON blob would
+    move those checks from the database into whatever happens to read it.
+    """
+
+    __tablename__ = "binance_usdm_algo_order"
+    __table_args__ = (
+        UniqueConstraint("client_algo_id", name="uq_binance_usdm_algo_order_client_id"),
+        CheckConstraint(
+            "state IN ('PREPARED', 'AMBIGUOUS', 'ACTIVE', "
+            "'REJECTED', 'EMERGENCY_CLOSED', 'UNKNOWN')",
+            name="ck_binance_usdm_algo_order_state",
+        ),
+        CheckConstraint(
+            "side IN ('BUY', 'SELL') AND symbol = 'BTCUSDT'",
+            name="ck_binance_usdm_algo_order_scope",
+        ),
+        CheckConstraint(
+            "OCTET_LENGTH(request_digest) = 32 "
+            "AND OCTET_LENGTH(request_body) > 0 "
+            "AND CHAR_LENGTH(TRIM(client_algo_id)) > 0 "
+            "AND first_fill_quantity > 0 "
+            "AND cumulative_quantity_before >= 0 "
+            "AND average_fill_price > 0 "
+            "AND tick_size > 0 "
+            "AND trigger_price > 0",
+            name="ck_binance_usdm_algo_order_values",
+        ),
+        # The deadline is what makes an unprotected position finite, and a
+        # preparation that predates its own fill is a clock that moved.
+        CheckConstraint(
+            "filled_at < protection_deadline AND prepared_at >= filled_at",
+            name="ck_binance_usdm_algo_order_window",
+        ),
+        CheckConstraint(
+            "(state IN ('ACTIVE', 'EMERGENCY_CLOSED') AND result IS NOT NULL) OR "
+            "(state NOT IN ('ACTIVE', 'EMERGENCY_CLOSED') AND result IS NULL)",
+            name="ck_binance_usdm_algo_order_result",
+        ),
+        ForeignKeyConstraint(
+            ["binding_id", "account_id"],
+            list(_BINDING_FK_TARGET),
+            name="fk_binance_usdm_algo_order_binding",
+            ondelete="RESTRICT",
+        ),
+        # What a recovery pass asks for: protection that is not yet safe, in
+        # the order its deadlines fall due.
+        Index(
+            "ix_binance_usdm_algo_order_unsafe",
+            "binding_id",
+            "state",
+            "protection_deadline",
+        ),
+    )
+
+    entry_command_id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True)
+    client_algo_id: Mapped[str] = mapped_column(
+        String(36, collation="ascii_bin"), nullable=False
+    )
+    binding_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
+    account_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
+    instrument_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
+    emergency_close_command_id: Mapped[UUID] = mapped_column(
+        UuidBinary(), nullable=False
+    )
+    side: Mapped[str] = mapped_column(String(4, collation="ascii_bin"), nullable=False)
+    symbol: Mapped[str] = mapped_column(
+        String(16, collation="ascii_bin"), nullable=False
+    )
+    first_fill_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(38, 18), nullable=False
+    )
+    cumulative_quantity_before: Mapped[Decimal] = mapped_column(
+        Numeric(38, 18), nullable=False
+    )
+    average_fill_price: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    tick_size: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    trigger_price: Mapped[Decimal] = mapped_column(Numeric(38, 18), nullable=False)
+    filled_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    protection_deadline: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    prepared_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    request_body: Mapped[bytes] = mapped_column(VARBINARY(2048), nullable=False)
+    request_digest: Mapped[bytes] = mapped_column(VARBINARY(32), nullable=False)
+    state: Mapped[str] = mapped_column(
+        String(20, collation="ascii_bin"), nullable=False
+    )
+    result: Mapped[dict[str, object] | None] = mapped_column(JSON(), nullable=True)
+
+
 __all__ = (
     "BinanceUsdmAlgoOrderFactRow",
+    "BinanceUsdmAlgoOrderRow",
     "BinanceUsdmBalanceFactRow",
     "BinanceUsdmConfigurationFactRow",
     "BinanceUsdmIncomeFactRow",
