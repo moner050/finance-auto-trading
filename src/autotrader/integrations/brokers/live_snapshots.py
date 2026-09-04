@@ -8,9 +8,11 @@ chances to get the same rule slightly different.
 Two rules carry most of the weight.
 
 A flat instrument is absent, not zero. `HeldPosition` refuses a zero quantity
-so that "holds nothing" and "was not asked" stay different answers, and
-Binance reports a row for every symbol it has ever margined, most of them at
-zero. Those are dropped here.
+so that "holds nothing" and "was not asked" stay different answers. Binance's
+v3 position endpoint already returns only symbols with a position or an open
+order, so the drop below is usually a no-op - it was written against v2, which
+reported a row for every symbol the account had ever margined, and it stays
+because a broker that answers the older way must not become a flat account.
 
 An unrecognised symbol is a refusal, not an omission. Skipping it would report
 an account flat in an instrument the broker says it holds, and the comparison

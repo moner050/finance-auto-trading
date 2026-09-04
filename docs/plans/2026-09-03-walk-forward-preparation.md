@@ -3891,7 +3891,7 @@ URL을 믿었고, 그 URL이 가리키는 곳이 비어 있다는 사실 자체�
 | S5 시장가 TIF | 완료 |
 | S6 보호 의도 멱등 키 | 완료 |
 | S7 게이트 둘이 안 돌던 것 | 완료 |
-| **S8 엔드포인트 미검증 (§31.8)** | **미해결** |
+| S8 엔드포인트 미검증 (§31.8) | **해결** — §31.17 |
 
 ## 31.16 `--live`가 실제로 하는 말
 
@@ -3932,3 +3932,71 @@ LIVE cannot start:
 
 지금 위험은 아니다 — 게이트 셋이 다 거부한다. **무장 전에 반드시 확인해야 할
 마지막 항목이고, 그것은 문서 대조로 되는 일이지 주문을 보내 볼 일이 아니다.**
+
+## 31.17 엔드포인트 대조 — 맞았고, 내 기억은 틀렸다
+
+§31.8이 남긴 마지막 항목을 Binance 공식 문서에 대고 확인했다. **주문은 하나도
+보내지 않았다** — 문서 대조로 되는 일이다.
+
+### 결과: 열일곱 경로 전부 실재한다
+
+| 경로 | 확인 |
+|---|---|
+| `POST /fapi/v1/order` | 확인 — `type`에 `MARKET` |
+| `GET /fapi/v1/order` `openOrders` `allOrders` | 확인 |
+| `POST /fapi/v1/algoOrder` | **확인** |
+| `GET /fapi/v1/algoOrder` | **확인** — `algoId` 또는 `clientAlgoId` |
+| `DELETE /fapi/v1/algoOrder` | **확인** — `algoId` 또는 `clientAlgoId` |
+| `GET /fapi/v1/openAlgoOrders` `allAlgoOrders` | **확인** |
+| `GET /fapi/v1/accountConfig` | 확인 |
+| `GET /fapi/v1/symbolConfig` | 확인 |
+| `GET /fapi/v1/positionSide/dual` | 확인 |
+| `GET /fapi/v3/balance` | 확인 — Futures Account Balance V3 |
+| `GET /fapi/v3/positionRisk` | 확인 — Position Information V3 |
+| `GET /fapi/v1/userTrades` `income` | 확인 |
+
+### 내 예상이 뒤집혔다
+
+**§31.8을 쓸 때 나는 `/fapi/v1/algoOrder`가 존재하지 않는다고 적었다.** 조건부
+주문은 `POST /fapi/v1/order`에 `type=STOP_MARKET`으로 거는 것이고 별도 Algo
+API는 `/sapi/v1/algo/...` 아래 VP/TWAP뿐이라고 기억했다.
+
+**틀렸다.** Binance는 USD-M 조건부 주문을 `/fapi/v1/order`에서
+`/fapi/v1/algoOrder`로 **강제 이관했고, 그것이 현재 필수 경로다.** 옛 경로로
+스톱을 걸면 `-4120`으로 거부된다.
+
+즉 **이 저장소의 경로가 맞고, 내가 "고쳤다면" 망가뜨렸을 것이다.** §31.8에서
+"기존 규약을 따르고 무장 전에 확인한다"고 정한 것이 정확히 옳은 판단이었다 —
+그때 기억으로 고쳤다면 첫 보호 손절이 `-4120`으로 실패했을 것이고, 그것은
+비상 청산으로 이어진다.
+
+### 파라미터와 응답 필드도 맞다
+
+`POST /fapi/v1/algoOrder`가 받는 것: `algoType` `symbol` `side` `type`
+`positionSide` `triggerPrice` `workingType` `closePosition` `priceProtect`
+`clientAlgoId` `newOrderRespType` — **이 저장소가 보내는 전부가 존재한다.**
+
+`GET /fapi/v1/algoOrder`가 돌려주는 것: `algoId` `clientAlgoId` `algoType`
+`orderType` `symbol` `side` `positionSide` `algoStatus` `triggerPrice`
+`workingType` `closePosition` `priceProtect` `reduceOnly` — **파서가 읽는
+전부가 존재한다.**
+
+### 덤으로 확인된 것 — 포지션 파서를 되돌린 이유
+
+§31.13에서 `_position`이 레버리지와 마진 타입을 버린다고 적고 고치려 했다가
+되돌렸다. 문서가 이유를 말한다: **v3 `positionRisk`는 v2와 달리 설정 필드를
+제거했고, 그것들은 `symbolConfig`에서 조회한다.**
+
+**파서가 버리는 게 아니라 v3가 주지 않는다.** 넣었다면 실물에서 파싱이 실패했을
+것이다. 되돌린 것이 맞았고, 이제 왜 맞았는지도 안다.
+
+### 남은 불확실성 하나
+
+`algoStatus`의 값 집합. 이 저장소는 `{NEW, CANCELED, TRIGGERED, FINISHED}`를
+쓴다. "Query All Algo Orders" 설명은 *"active, CANCELED, TRIGGERED, or
+FINISHED"* 라고 적어 **일치**하는데, 다른 페이지 요약에서는 `EXPIRED`가 나왔다.
+
+문서 두 곳이 어긋나므로 **문서로는 여기까지다.** 이것은 첫 실거래에서 실제
+응답을 보고 확인할 항목이고, 틀려도 결과는 알려진 상태에 대한 오판이 아니라
+`BinanceUsdmProtectionUnknown`이다 — 모르는 상태를 모른다고 말하는 쪽으로
+실패한다.
