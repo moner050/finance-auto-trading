@@ -19,6 +19,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from autotrader.apps.trader.quotes import QuoteSource
 from autotrader.domain.enums import IntentType, OrderStyle, Side
 from autotrader.execution.controls.models import KillSwitchLevel
 from autotrader.execution.dispatch.service import BrokerSubmitter, DispatchService
@@ -497,10 +498,12 @@ class MySqlPaperExecution:
         sessions: async_sessionmaker[AsyncSession],
         account: ExecutionAccount,
         broker: BrokerSubmitter,
+        quotes: QuoteSource,
     ) -> None:
         self._sessions = sessions
         self._account = account
         self._broker = broker
+        self._quotes = quotes
 
     async def submit(
         self,
@@ -529,10 +532,13 @@ class MySqlPaperExecution:
         now: datetime,
     ) -> UUID | None:
         async with self._sessions() as session:
+            # A market order with no trigger has to know the price it
+            # will get, and this is where that price comes from. §31.11.
             intent = OrderIntentFactory().from_strategy_decision(
                 decision=strategy_decision,
                 account=self._account.account,
                 sizing=SizingApproved(quantity=decision.calculated_quantity),
+                quote=await self._quotes.quote(),
             )
             # persist_decision already wrote the signal for a tradeable
             # decision, and it carries the decision's own id.
@@ -1017,11 +1023,13 @@ class MySqlPositionActions:
         account: ExecutionAccount,
         instrument_id: UUID,
         broker: BrokerSubmitter,
+        quotes: QuoteSource,
     ) -> None:
         self._sessions = sessions
         self._account = account
         self._instrument_id = instrument_id
         self._broker = broker
+        self._quotes = quotes
 
     async def apply(
         self,
@@ -1393,6 +1401,9 @@ class MySqlPositionActions:
                     limit_price=None,
                     trigger_price=None,
                 ),
+                # Closing at the market, so the same rule as the entry: the
+                # price it will get has to be known now.
+                quote=await self._quotes.quote(),
             ),
         )
         row = _persisted_intent(intent, position_id, now)

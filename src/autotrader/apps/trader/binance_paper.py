@@ -40,6 +40,7 @@ from autotrader.apps.trader.market_data import (
     BinanceExecutionBars,
     BinanceLoopInputs,
 )
+from autotrader.apps.trader.quotes import BinanceBookQuotes
 from autotrader.apps.trader.risk_context import AccountBudget, BinanceRiskContexts
 from autotrader.integrations.brokers.internal_paper import (
     PaperOrderCommand,
@@ -92,6 +93,7 @@ async def build_ports(
     *,
     sessions: async_sessionmaker[AsyncSession],
     market_data: BinanceUsdmMarketData,
+    rest: BinancePublicRest,
     inputs: BinanceLoopInputs,
     budget: AccountBudget,
     account: ExecutionAccount,
@@ -145,7 +147,12 @@ async def build_ports(
         control=MySqlTradingControl(sessions),
         recorder=MySqlDecisionRecorder(sessions),
         execution=MySqlPaperExecution(
-            sessions=sessions, account=account, broker=submitter
+            sessions=sessions,
+            account=account,
+            broker=submitter,
+            # The entry is a market order, so its intent needs the price it
+            # will get. §31.11.
+            quotes=BinanceBookQuotes(rest=rest, symbol=market_data.symbol),
         ),
     )
 

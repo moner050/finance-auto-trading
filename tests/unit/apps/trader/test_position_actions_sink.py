@@ -115,6 +115,7 @@ def _sink() -> MySqlPositionActions:
         account=None,  # type: ignore[arg-type]
         instrument_id=INSTRUMENT,
         broker=None,  # type: ignore[arg-type]
+        quotes=None,  # type: ignore[arg-type]
     )
 
 
