@@ -578,7 +578,7 @@ class MySqlPaperExecution:
                     owner_runtime_instance_id=self._account.runtime_instance_id,
                     fencing_token=self._account.fencing_token,
                     not_after=now + _RESERVATION_WINDOW,
-                    time_in_force="DAY",
+                    time_in_force=MARKET_TIME_IN_FORCE,
                     authority_class="SUBMIT_NEW_EXPOSURE",
                     created_at=now,
                 ),
@@ -593,6 +593,12 @@ class MySqlPaperExecution:
                 )
             )
 
+
+# A market order executes or it does not, so it carries no time in force,
+# and the adapter refuses one that claims otherwise. Every order this loop
+# sends is a market order - the entry, the add, the exits and the stop,
+# which rests on a trigger rather than in the book.
+MARKET_TIME_IN_FORCE = "NONE"
 
 STRUCTURAL_STOP = "STRUCTURAL_STOP"
 REPLACE_NON_INCREASING = "REPLACE_NON_INCREASING"
@@ -928,7 +934,7 @@ async def create_protective_order(
     intent_type: IntentType = IntentType.PROTECTIVE,
     trigger_price: Decimal | None = None,
     quote: MarketQuote | None = None,
-    time_in_force: str = "GTC",
+    time_in_force: str = MARKET_TIME_IN_FORCE,
 ) -> UUID | None:
     """Place an order that only ever closes, behind a position.
 
@@ -1241,7 +1247,7 @@ class MySqlPositionActions:
                 owner_runtime_instance_id=self._account.runtime_instance_id,
                 fencing_token=self._account.fencing_token,
                 not_after=now + _RESERVATION_WINDOW,
-                time_in_force="GTC",
+                time_in_force=MARKET_TIME_IN_FORCE,
                 # Only ever tightens: a replace may not increase exposure.
                 authority_class=REPLACE_NON_INCREASING,
                 created_at=now,
@@ -1381,7 +1387,7 @@ class MySqlPositionActions:
                 owner_runtime_instance_id=self._account.runtime_instance_id,
                 fencing_token=self._account.fencing_token,
                 not_after=now + _RESERVATION_WINDOW,
-                time_in_force="GTC",
+                time_in_force=MARKET_TIME_IN_FORCE,
                 authority_class=NEW_EXPOSURE,
                 created_at=now,
             ),
@@ -1464,7 +1470,7 @@ class MySqlPositionActions:
                 owner_runtime_instance_id=self._account.runtime_instance_id,
                 fencing_token=self._account.fencing_token,
                 not_after=now + _RESERVATION_WINDOW,
-                time_in_force="GTC",
+                time_in_force=MARKET_TIME_IN_FORCE,
                 # Closing only, the same authority the stop carries, because
                 # this is the same kind of act.
                 authority_class=STRICT_REDUCTION,

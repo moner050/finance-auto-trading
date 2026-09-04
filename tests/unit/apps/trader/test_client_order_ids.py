@@ -21,6 +21,7 @@ from uuid import UUID, uuid7
 
 import pytest
 
+from autotrader.apps.trader.composition import MARKET_TIME_IN_FORCE
 from autotrader.domain.enums import OrderStyle, Side
 from autotrader.execution.intents.models import IntentOrigin
 from autotrader.execution.orders.models import CommandType, Order, OrderStatus
@@ -179,3 +180,21 @@ def test_without_a_chosen_id_the_factory_still_picks_one() -> None:
         origin=IntentOrigin.STRATEGY,
     )
     assert first.id != second.id
+
+
+def test_a_market_order_carries_no_time_in_force() -> None:
+    """It executes or it does not, so there is nothing for a duration to mean,
+    and the adapter refuses a market order that claims one. Every order this
+    loop sends is a market order - the entry, the add, the exits, and the stop,
+    which rests on a trigger rather than in the book."""
+    command_id = uuid7()
+    submission = _submission(command_id)
+    assert submission.time_in_force == MARKET_TIME_IN_FORCE == "NONE"
+
+    command = OrderCommandFactory().create(
+        order=_order(submission.broker_client_order_id),
+        command_type=CommandType.SUBMIT,
+        submission=submission,
+        origin=IntentOrigin.STRATEGY,
+    )
+    _validate_recovery_command(replace(command, dispatch_attempted_at=NOW))
