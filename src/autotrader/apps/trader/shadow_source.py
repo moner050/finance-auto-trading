@@ -15,10 +15,13 @@ from datetime import datetime, timedelta
 
 from autotrader.apps.trader.market_data import (
     DAILY_TIMEFRAME,
+    EXECUTION_HISTORY,
+    EXECUTION_TIMEFRAME,
     HLIT_TIMEFRAME,
     AssemblyInputs,
     AssemblySource,
     CompletedBars,
+    strategy_bars,
 )
 from autotrader.apps.trader.risk_context import BinanceRiskContexts
 from autotrader.apps.trader.shadow_inputs import LiveBinanceInputs
@@ -85,6 +88,9 @@ class ShadowContextSource:
         if risk_context is None:
             return None
         daily = await self._market_data.completed_bars(DAILY_TIMEFRAME, moment)
+        execution = await self._market_data.completed_bars(
+            EXECUTION_TIMEFRAME, moment, history=EXECUTION_HISTORY
+        )
         window_start = moment - self._trade_window
         trades = await self._market_data.trade_prints(window_start, moment)
         built = await self._inputs.build(
@@ -111,7 +117,7 @@ class ShadowContextSource:
                     timezone="UTC",
                     captured_at=moment,
                 ),
-                bars={"5m": bars, "1d": daily},
+                bars=strategy_bars(bars, daily, execution),
                 calendar=built.calendar,
                 events=built.events,
                 benchmark_returns=built.benchmark_returns,

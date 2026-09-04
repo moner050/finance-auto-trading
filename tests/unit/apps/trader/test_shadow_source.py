@@ -89,9 +89,19 @@ def _bars(count: int, *, end: datetime = NOW) -> tuple[CompletedOhlcvBar, ...]:
 
 
 class _Market:
-    def __init__(self, bars: tuple[CompletedOhlcvBar, ...]) -> None:
+    def __init__(
+        self,
+        bars: tuple[CompletedOhlcvBar, ...],
+        execution: tuple[CompletedOhlcvBar, ...] | None = None,
+    ) -> None:
         self.bars = bars
+        # Answering every timeframe with the same series hid the thirty-second
+        # request entirely: the source could ask for it or not and the test
+        # read the same. Thirty seconds gets its own answer, and `None` is a
+        # venue that has no tape to build it from.
+        self.execution = execution
         self.asked_history: list[timedelta | None] = []
+        self.asked: list[timedelta] = []
 
     async def completed_bars(
         self,
@@ -100,8 +110,11 @@ class _Market:
         *,
         history: timedelta | None = None,
     ) -> tuple[CompletedOhlcvBar, ...]:
-        del timeframe, now
+        del now
         self.asked_history.append(history)
+        self.asked.append(timeframe)
+        if timeframe == timedelta(seconds=30):
+            return () if self.execution is None else self.execution
         return self.bars
 
     async def trade_prints(
@@ -154,10 +167,11 @@ def _source(
     bars: tuple[CompletedOhlcvBar, ...],
     built: object | None,
     sizeable: bool = True,
+    execution: tuple[CompletedOhlcvBar, ...] | None = None,
 ) -> tuple[ShadowContextSource, _Inputs]:
     inputs = _Inputs(built)
     source = ShadowContextSource(
-        market_data=_Market(bars),  # type: ignore[arg-type]
+        market_data=_Market(bars, execution=execution),  # type: ignore[arg-type]
         inputs=inputs,  # type: ignore[arg-type]
         risk=_risk_contexts() if sizeable else _NoRisk(),  # type: ignore[arg-type]
     )
@@ -224,3 +238,56 @@ async def test_no_risk_context_stops_before_the_inputs_are_built() -> None:
 
     assert await source.context_for(NOW) is None
     assert inputs.calls == 0
+
+
+def _execution_bars(
+    count: int, *, end: datetime = NOW
+) -> tuple[CompletedOhlcvBar, ...]:
+    """Thirty-second bars ending where the five-minute series ends."""
+    return tuple(
+        CompletedOhlcvBar(
+            timestamp=end - timedelta(seconds=30 * (count - index)),
+            open=Decimal("100"),
+            high=Decimal("101"),
+            low=Decimal("99"),
+            close=Decimal("100"),
+            volume=Decimal("1"),
+        )
+        for index in range(count)
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_pass_asks_for_thirty_second_bars_and_carries_them() -> None:
+    """Section 4.2 confirms exhaustion there, so the pass has to fetch it.
+
+    The depth is asserted because it is what the call costs: two hours is
+    84,531 prints and 7 seconds of MySQL, against a day's 1.8 million and
+    145 seconds. The plan's section 33.13 measured both.
+    """
+    execution = _execution_bars(240)
+    source, _ = _source(bars=_bars(20), built=_built(), execution=execution)
+
+    context = await source.context_for(NOW)
+
+    assert context is not None
+    market = source._market_data  # type: ignore[attr-defined]
+    assert timedelta(seconds=30) in market.asked
+    index = market.asked.index(timedelta(seconds=30))
+    assert market.asked_history[index] == timedelta(hours=2)
+    assert context.inputs.bars["30s"] == execution
+
+
+@pytest.mark.asyncio
+async def test_a_pass_with_no_tape_still_assembles() -> None:
+    """An empty tape is ordinary - a restart, a lease handover.
+
+    The key is carried anyway, so the bundle records BARS_30S_UNAVAILABLE
+    rather than staying silent about a series it went looking for.
+    """
+    source, _ = _source(bars=_bars(20), built=_built())
+
+    context = await source.context_for(NOW)
+
+    assert context is not None
+    assert context.inputs.bars["30s"] == ()

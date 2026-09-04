@@ -665,3 +665,78 @@ def test_a_window_that_could_not_measure_is_not_a_match() -> None:
 
         assert facts.secado is not True
         assert facts.reversal_mig is not True
+
+
+def _thirty_second_bars(
+    end: datetime, count: int = 240
+) -> tuple[CompletedOhlcvBar, ...]:
+    """A thirty-second series ending at `end`, on rising volume.
+
+    Rising rather than falling, so it cannot confirm an exhaustion sequence.
+    That is what makes it readable in the result: the five-minute series in
+    `_setup_inputs` does confirm one, so which series was read decides the
+    answer rather than merely decorating it.
+    """
+    step = timedelta(seconds=30)
+    return tuple(
+        CompletedOhlcvBar(
+            timestamp=end - step * (count - index),
+            open=Decimal(120),
+            high=Decimal(121),
+            low=Decimal(119),
+            close=Decimal(120),
+            volume=Decimal(index + 1),
+        )
+        for index in range(count)
+    )
+
+
+def test_exhaustion_is_confirmed_on_the_thirty_second_series_when_it_is_there() -> None:
+    """Section 4.2 (A0) drops to thirty seconds to read the volume divergence.
+
+    Everything before it stays on five minutes - divergence, anchor, zones -
+    which is section 14.1's causal order. Only the confirmation moves.
+
+    `observed_at` is the assertion because it is what a reader of the stored
+    bundle has: the provenance timestamp is the last bar of whichever series
+    was read, so it says which scale confirmed the sequence without anyone
+    having to infer it.
+    """
+    hlit_bars = _decelerating_decline_bars()
+    execution = _thirty_second_bars(hlit_bars[-1].timestamp)
+    inputs = _inputs(
+        V6Market.BINANCE_USDM,
+        bars={"5m": hlit_bars, "1d": _daily_bars(), "30s": execution},
+    )
+
+    bundle = assemble_v6_evidence(inputs).bundle
+
+    assert bundle.exhaustion.state is EvidenceState.AVAILABLE
+    provenance = bundle.exhaustion.provenance
+    assert provenance is not None
+    assert provenance.observed_at == execution[-1].timestamp
+    assert provenance.observed_at != hlit_bars[-1].timestamp
+    exhaustion = bundle.exhaustion.value
+    assert exhaustion is not None
+    # The thirty-second series is on rising volume, so no sequence stands.
+    assert exhaustion.bullish is None  # type: ignore[attr-defined]
+
+
+def test_exhaustion_falls_back_to_five_minutes_with_no_thirty_second_series() -> None:
+    """A cash bundle cannot carry the series at all, and on Binance the tape
+    is empty after a restart. Losing the exhaustion reading entirely over
+    either would be worse than reading it where it has always been read.
+    """
+    hlit_bars = _decelerating_decline_bars()
+    inputs = _inputs(
+        V6Market.BINANCE_USDM,
+        bars={"5m": hlit_bars, "1d": _daily_bars(), "30s": ()},
+    )
+
+    bundle = assemble_v6_evidence(inputs).bundle
+
+    exhaustion = bundle.exhaustion.value
+    assert exhaustion is not None
+    sequence = exhaustion.bullish  # type: ignore[attr-defined]
+    assert sequence is not None
+    assert sequence.confirmed is True

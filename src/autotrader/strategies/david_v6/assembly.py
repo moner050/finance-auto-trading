@@ -98,6 +98,8 @@ from autotrader.strategies.david_v6.zones import (
 # contiguous five minute bars.
 HLIT_TIMEFRAME_KEY = "5m"
 _DAILY_TIMEFRAME_KEY = "1d"
+# Section 4.2 confirms exhaustion here, not on the five-minute macro read.
+_EXECUTION_TIMEFRAME_KEY = "30s"
 # Owned by `order_flow`, which derives the marker cap from its ratio to
 # the liquidity session. Two copies of it would let the cap drift from
 # the window it is a rate over.
@@ -191,6 +193,9 @@ def assemble_v6_evidence(inputs: AssemblyInputs) -> AssemblyResult:
 
     zones = _zones(inputs, hlit_bars)
     divergence, pivots, macd_bars = _divergence(inputs, hlit_bars)
+    execution_bars, execution_pivots, execution_key = _execution_scale(
+        inputs, macd_bars, pivots
+    )
     hlit = (
         build_hlit_setups(macd_bars, cast(DivergenceFacts, divergence.value))
         if divergence.state is EvidenceState.AVAILABLE
@@ -214,7 +219,9 @@ def assemble_v6_evidence(inputs: AssemblyInputs) -> AssemblyResult:
             ),
             zones=zones,
             divergence=divergence,
-            exhaustion=_exhaustion(inputs, macd_bars, zones, pivots),
+            exhaustion=_exhaustion(
+                inputs, execution_bars, zones, execution_pivots, execution_key
+            ),
             order_flow=_order_flow(inputs),
             profile=_profile(inputs),
             calendar=_calendar(inputs),
@@ -495,11 +502,44 @@ def _divergence(
     return item, pivots, aligned_bars
 
 
+def _execution_scale(
+    inputs: AssemblyInputs,
+    hlit_bars: tuple[CompletedOhlcvBar, ...],
+    hlit_pivots: tuple[Pivot, ...],
+) -> tuple[tuple[CompletedOhlcvBar, ...], tuple[Pivot, ...], str]:
+    """The series exhaustion is read on, and which one it turned out to be.
+
+    Section 4.2 (A0) walks down rather than staying put: five minutes for the
+    macro read, then "1분 + 30초 분할 화면으로 하강", and the volume divergence
+    is confirmed at thirty seconds because there are twice as many candles to
+    see it in. Everything before this line stays on five minutes - the
+    divergence, the anchor, the zones - because that is where section 14.1
+    puts them in the causal order.
+
+    The five-minute series is the fallback rather than the choice. Cash
+    bundles cannot carry thirty-second evidence at all (`evidence.py` refuses
+    it), and on Binance the tape can be thin after a restart, so a bundle
+    without the series still assembles instead of losing its exhaustion
+    reading entirely.
+
+    Which one was used is returned rather than inferred, because a filter
+    that silently changes what it reads is one the recorded evidence cannot
+    be read back against. The plan's section 33 measured a 132-to-1
+    difference between the scales; a bundle has to say which side of that it
+    is on.
+    """
+    bars = _completed_bars(inputs, _EXECUTION_TIMEFRAME_KEY)
+    if bars is None:
+        return hlit_bars, hlit_pivots, HLIT_TIMEFRAME_KEY
+    return bars, confirmed_pivots(bars, PivotConfig()), _EXECUTION_TIMEFRAME_KEY
+
+
 def _exhaustion(
     inputs: AssemblyInputs,
     bars: tuple[CompletedOhlcvBar, ...],
     zones: EvidenceItem[object],
     pivots: tuple[Pivot, ...],
+    timeframe: str,
 ) -> EvidenceItem[object]:
     if not bars or zones.state is not EvidenceState.AVAILABLE:
         return _unavailable("EXHAUSTION_INPUTS_UNAVAILABLE")
@@ -519,6 +559,7 @@ def _exhaustion(
         payload={
             "bullish": facts.bullish is not None,
             "bearish": facts.bearish is not None,
+            "timeframe": timeframe,
         },
     )
 

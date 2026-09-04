@@ -36,6 +36,32 @@ from autotrader.strategies.david_v6.sessions import ExchangeCalendar
 
 HLIT_TIMEFRAME = timedelta(minutes=5)
 DAILY_TIMEFRAME = timedelta(days=1)
+# Section 4.2 confirms exhaustion at thirty seconds. The venue has no such
+# kline - /fapi/v1/klines answers -1120 for anything under a minute - so these
+# are aggregated from the trade tape, and the depth decides what that costs.
+EXECUTION_TIMEFRAME = timedelta(seconds=30)
+# Two hours is 240 bars, which is what the chain search reads behind any one
+# of them. The plan's section 33.13 measured both ends: 84,531 prints and 7
+# seconds here, against 1.8 million and 145 seconds for a day.
+EXECUTION_HISTORY = timedelta(hours=2)
+
+
+def strategy_bars(
+    hlit: tuple[CompletedOhlcvBar, ...],
+    daily: tuple[CompletedOhlcvBar, ...],
+    execution: tuple[CompletedOhlcvBar, ...],
+) -> dict[str, tuple[CompletedOhlcvBar, ...]]:
+    """The series every pass hands the strategy.
+
+    Shared by the two sources because they had already drifted once: the same
+    dictionary was written out twice, and a key added to one of them would
+    have reached the shadow and not the live loop, or the reverse.
+
+    The thirty-second series is included even when it is empty, so the bundle
+    records BARS_30S_UNAVAILABLE rather than saying nothing. Assembly falls
+    back to five minutes for that pass and says which scale it used.
+    """
+    return {"5m": hlit, "1d": daily, "30s": execution}
 
 
 class CompletedBars(Protocol):
@@ -132,12 +158,15 @@ class BinanceContextSource:
         if risk_context is None:
             return None
         daily = await self._market_data.completed_bars(DAILY_TIMEFRAME, moment)
+        execution = await self._market_data.completed_bars(
+            EXECUTION_TIMEFRAME, moment, history=EXECUTION_HISTORY
+        )
         trades = await self._market_data.trade_prints(
             moment - self._inputs.trade_window, moment
         )
         self._watermark = latest
         return TickContext(
-            inputs=self._assembly_inputs(bars, daily, trades, moment),
+            inputs=self._assembly_inputs(bars, daily, execution, trades, moment),
             manifest=self._inputs.manifest,
             risk_context=risk_context,
             now=moment,
@@ -147,6 +176,7 @@ class BinanceContextSource:
         self,
         bars: tuple[CompletedOhlcvBar, ...],
         daily: tuple[CompletedOhlcvBar, ...],
+        execution: tuple[CompletedOhlcvBar, ...],
         trades: tuple[TradePrint, ...],
         now: datetime,
     ) -> AssemblyInputs:
@@ -160,7 +190,7 @@ class BinanceContextSource:
                 timezone="UTC",
                 captured_at=now,
             ),
-            bars={"5m": bars, "1d": daily},
+            bars=strategy_bars(bars, daily, execution),
             calendar=held.calendar,
             events=held.events,
             benchmark_returns=held.benchmark_returns,
