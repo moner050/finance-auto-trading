@@ -289,30 +289,88 @@ def resolve(
     stop: Decimal,
     target: Decimal,
     horizon: int = HORIZON,
-) -> tuple[str, int, Decimal, Decimal]:
+    breakeven_at: Decimal | None = None,
+    add_at: Decimal | None = None,
+    atr: Decimal | None = None,
+) -> tuple[str, int, Decimal, Decimal, Decimal]:
     """Walk forward until the stop or the target is touched.
 
     The horizon is in bars of whatever series is passed, so a minute series
     gets five times as many for the same day.
+
+    `breakeven_at` is §13.1's S1: once the trade is that many R in front,
+    the stop moves to the entry. §20.2 puts it at "진입가보다 1.5포인트
+    유리한 곳" to cover the round trip, and this harness models no fees, so
+    the stop goes to the entry exactly. That makes the result an upper bound
+    on what S1 is worth - a real stop sits past the entry and is touched
+    more often than one placed on it.
+
+    `add_at` is S1's neighbour P1: §22.7's add trigger, a multiple of ATR,
+    after which a second unit is held and the stop moves to the weighted
+    entry. Both units are the same size, so the weighted entry is the
+    midpoint, and the result is scored against the risk the first unit
+    started with - which is what the R in every other row here means.
+
+    The returned fifth value is the multiplier on the reward: one unit
+    unless the add filled, two after it did.
     """
     best = worst = Decimal(0)
+    units = Decimal(1)
+    added = False
+    moved = False
+    risk = entry - stop if side is Side.BUY else stop - entry
     for index in range(opened + 1, min(opened + 1 + horizon, len(bars))):
         bar = bars[index]
         if side is Side.BUY:
             best = max(best, bar.high - entry)
             worst = min(worst, bar.low - entry)
             if bar.low <= stop:
-                return "loss", index, best, worst
+                return "loss", index, best, worst, units
             if bar.high >= target:
-                return "win", index, best, worst
+                return "win", index, best, worst, units
+            if not added and add_at is not None and atr is not None:
+                trigger = entry + add_at * atr
+                if bar.high >= trigger:
+                    # Same size, so the weighted entry is the midpoint, and
+                    # §22.7 puts the stop there. Total risk falls, which is
+                    # what its last line requires of an add.
+                    weighted = (entry + trigger) / 2
+                    stop = max(stop, weighted)
+                    units = Decimal(2)
+                    added = True
+                    moved = True
+            if (
+                not moved
+                and breakeven_at is not None
+                and risk > 0
+                and bar.high - entry >= breakeven_at * risk
+            ):
+                stop = max(stop, entry)
+                moved = True
         else:
             best = max(best, entry - bar.low)
             worst = min(worst, entry - bar.high)
             if bar.high >= stop:
-                return "loss", index, best, worst
+                return "loss", index, best, worst, units
             if bar.low <= target:
-                return "win", index, best, worst
-    return "scratch", min(opened + horizon, len(bars) - 1), best, worst
+                return "win", index, best, worst, units
+            if not added and add_at is not None and atr is not None:
+                trigger = entry - add_at * atr
+                if bar.low <= trigger:
+                    weighted = (entry + trigger) / 2
+                    stop = min(stop, weighted)
+                    units = Decimal(2)
+                    added = True
+                    moved = True
+            if (
+                not moved
+                and breakeven_at is not None
+                and risk > 0
+                and entry - bar.low >= breakeven_at * risk
+            ):
+                stop = min(stop, entry)
+                moved = True
+    return "scratch", min(opened + horizon, len(bars) - 1), best, worst, units
 
 
 def _nearest_zone_level(
@@ -680,6 +738,8 @@ def replay(
     pivot_left: int = PivotConfig().left,
     distances: list[dict[str, object]] | None = None,
     divergence_model: str = "regular",
+    breakeven_at: Decimal | None = None,
+    add_at: Decimal | None = None,
     session: tuple[int, int] | None = None,
     veto: str = "none",
     news: str = "none",
@@ -879,8 +939,17 @@ def replay(
             reward = target - entry if setup.direction is Side.BUY else entry - target
             if risk <= 0 or reward <= 0:
                 continue
-            outcome, closed, best, worst = resolve(
-                series, opened, setup.direction, entry, stop, target, horizon
+            outcome, closed, best, worst, units = resolve(
+                series,
+                opened,
+                setup.direction,
+                entry,
+                stop,
+                target,
+                horizon,
+                breakeven_at,
+                add_at,
+                atr,
             )
             trades.append(
                 {
@@ -888,12 +957,20 @@ def replay(
                     "side": setup.direction.value,
                     "outcome": outcome,
                     "r_target": float(reward / risk),
-                    "r_result": {"win": float(reward / risk), "loss": -1.0}.get(
+                    # A filled add doubles what the same move is worth. The
+                    # loss stays -1R: §22.7 moves the stop to the weighted
+                    # entry as the add fills, so the second unit cannot make
+                    # the position lose more than the first one risked.
+                    "r_result": {
+                        "win": float(reward * units / risk),
+                        "loss": -1.0,
+                    }.get(
                         outcome,
-                        float((series[closed].close - entry) / risk)
+                        float((series[closed].close - entry) * units / risk)
                         if setup.direction is Side.BUY
-                        else float((entry - series[closed].close) / risk),
+                        else float((entry - series[closed].close) * units / risk),
                     ),
+                    "units": int(units),
                     "bars_held": closed - opened,
                     "waited": opened - cut if not executed else opened - start,
                     "mfe_r": float(best / risk),
@@ -995,6 +1072,10 @@ async def main() -> None:
     )
     # "HH:MM-HH:MM" in UTC, or absent for no window.
     parser.add_argument("--session", default=None)
+    # §13.1's S1 and P1. Absent means neither rule is applied, which is what
+    # every run before these existed did.
+    parser.add_argument("--breakeven-at", type=Decimal, default=None)
+    parser.add_argument("--add-at", type=Decimal, default=None)
     parser.add_argument("--veto", choices=("none", "1h", "1d"), default="none")
     parser.add_argument("--news", choices=("none", "day", "after"), default="none")
     arguments = parser.parse_args()
@@ -1022,6 +1103,8 @@ async def main() -> None:
         + (f", session {arguments.session} UTC" if arguments.session else "")
         + (f", veto {arguments.veto}" if arguments.veto != "none" else "")
         + (f", news {arguments.news}" if arguments.news != "none" else "")
+        + (f", BE {arguments.breakeven_at}R" if arguments.breakeven_at else "")
+        + (f", add {arguments.add_at} ATR" if arguments.add_at else "")
         + (f", min_legs {arguments.min_legs}" if arguments.gate == "h1" else ""),
         flush=True,
     )
@@ -1041,6 +1124,8 @@ async def main() -> None:
         divergence_model=arguments.divergence,
         veto=arguments.veto,
         news=arguments.news,
+        breakeven_at=arguments.breakeven_at,
+        add_at=arguments.add_at,
         session=(
             tuple(_minutes(part) for part in arguments.session.split("-"))
             if arguments.session
