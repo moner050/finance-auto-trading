@@ -3786,12 +3786,14 @@ if order_style is OrderStyle.MARKET and terms.trigger_price is None:
           ├─ 심볼 필터 ............ 있음 (read_instrument)
           ├─ 명목 기준가 .......... 있음 (BinanceBookQuotes)
           ├─ 바인딩·계정·정책 ..... 조회 가능
-          └─ 계정 설정 사실 ....... 없음
-              ├─ 레버리지 ......... 포지션 파서가 버린다
-              ├─ 마진 타입 ........ 같음
-              ├─ 포지션 모드 ...... 읽는 곳이 없다
-              └─ can_trade ........ 같음
+          └─ 계정 설정 사실 ....... 있음 (verify_binance_usdm_configuration)
 ```
+
+**마지막 줄은 처음에 "없음"이라고 적었다가 고쳤다.**
+`verify_binance_usdm_configuration`이 `accountConfig`·`positionSide/dual`·
+`symbolConfig`를 읽어 포지션 모드·마진 타입·레버리지·`can_trade`를 다 낸다.
+포지션 파서가 레버리지를 버리는 것은 맞지만 **필요가 없다** — 그 값은
+`symbolConfig`에서 온다. 파서를 고치려다 실패한 테스트가 알려줬고 되돌렸다.
 
 **`_AUTHORITY_MAX_AGE`가 30초다.** 그래서 저장된 대조 사실로는 못 채운다.
 주문 직전에 거래소를 다시 읽어야 하고, 그것이 옳다 — 5분 전 레버리지 믿음으로
