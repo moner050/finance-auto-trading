@@ -24,6 +24,9 @@ from autotrader.execution.reconciliation.models import BrokerSnapshot
 from autotrader.integrations.brokers.binance_usdm.account import (
     BinanceUsdmAccountSnapshot,
 )
+from autotrader.integrations.brokers.binance_usdm.algo_orders import (
+    binance_provider_algo_id,
+)
 from autotrader.integrations.brokers.binance_usdm.orders import (
     binance_provider_order_id,
 )
@@ -59,6 +62,9 @@ SNAPSHOT_WINDOW = timedelta(seconds=30)
 _TOSS_WORKING = frozenset({"PLACED", "PARTIALLY_FILLED", "PENDING", "ACCEPTED"})
 # Binance says so directly.
 _BINANCE_WORKING = frozenset({"NEW", "PARTIALLY_FILLED"})
+# An algo order is either resting or it is not; there is no partial fill
+# of a trigger.
+_BINANCE_ALGO_WORKING = frozenset({"NEW"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +146,12 @@ def binance_reported(snapshot: BinanceUsdmAccountSnapshot) -> ReportedAccount:
 
     It also lists every symbol it has ever margined, most at zero. Those are
     not positions and are dropped when the snapshot is assembled.
+
+    **The algo orders are here too.** The protective stop is an algo order and
+    nothing else, so reporting only the normal ones would show every protected
+    position as holding an order the venue does not have - drift on every
+    position that is behaving correctly, which teaches an operator to ignore
+    the thing reconciliation exists to say.
     """
     return ReportedAccount(
         complete=True,
@@ -163,6 +175,23 @@ def binance_reported(snapshot: BinanceUsdmAccountSnapshot) -> ReportedAccount:
             )
             for order in snapshot.normal_orders
             if order.status in _BINANCE_WORKING
+        )
+        + tuple(
+            ReportedOrder(
+                broker_order_id=binance_provider_algo_id(order.algo_id),
+                broker_client_order_id=order.client_algo_id,
+                terms={
+                    "symbol": order.symbol,
+                    "side": order.side,
+                    "type": order.order_type,
+                    "status": order.status,
+                    "quantity": _amount(order.quantity),
+                    "trigger_price": _amount(order.trigger_price),
+                    "close_position": str(order.close_position),
+                },
+            )
+            for order in snapshot.algo_orders
+            if order.status in _BINANCE_ALGO_WORKING
         ),
     )
 

@@ -799,6 +799,13 @@ class BinanceUsdmProtectionService:
         )
 
 
+def binance_provider_algo_id(algo_id: int) -> str:
+    """The one place this string is built, so the reader matches the writer."""
+    if type(algo_id) is not int or algo_id <= 0:
+        raise ValueError("Binance provider algo id is invalid")
+    return f"BINANCE-USDM-ALGO:{algo_id}"
+
+
 def binance_protection_client_algo_id(entry_command_id: UUID) -> str:
     _uuid7(entry_command_id, "entry_command_id")
     return f"v6s-{entry_command_id.hex}"
@@ -984,7 +991,7 @@ def _decode_active_protection(
     ):
         raise ValueError("Binance USD-M active protection response is invalid")
     return ProtectionResult(
-        provider_algo_id=f"BINANCE-USDM-ALGO:{algo_id}",
+        provider_algo_id=binance_provider_algo_id(algo_id),
         client_algo_id=client_algo_id,
         state=BinanceUsdmAlgoOrderState.ACTIVE,
         trigger_price=trigger_price,

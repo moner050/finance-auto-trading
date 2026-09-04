@@ -19,8 +19,12 @@ from autotrader.domain.enums import OrderStyle, Side
 from autotrader.integrations.brokers.binance_usdm.account import (
     BinanceUsdmAccountSnapshot,
     BinanceUsdmBalance,
+    BinanceUsdmOpenAlgoOrder,
     BinanceUsdmOpenOrder,
     BinanceUsdmPosition,
+)
+from autotrader.integrations.brokers.binance_usdm.algo_orders import (
+    binance_provider_algo_id,
 )
 from autotrader.integrations.brokers.binance_usdm.orders import (
     binance_provider_order_id,
@@ -292,6 +296,44 @@ def test_binance_carries_our_client_order_id_back() -> None:
     reported = binance_reported(_binance_snapshot())
 
     assert reported.open_orders[0].broker_client_order_id == "ours-1"
+
+
+def _binance_algo_order(**changes: object) -> BinanceUsdmOpenAlgoOrder:
+    values: dict[str, object] = {
+        "algo_id": 7777,
+        "client_algo_id": "v6s-01a06a0000007000800000000000dead",
+        "symbol": "BTCUSDT",
+        "status": "NEW",
+        "side": "SELL",
+        "order_type": "STOP_MARKET",
+        "quantity": Decimal("0.002"),
+        "trigger_price": Decimal("59000"),
+        "close_position": True,
+    }
+    values.update(changes)
+    return BinanceUsdmOpenAlgoOrder(**values)  # type: ignore[arg-type]
+
+
+def test_the_protective_stop_is_reported_as_a_working_order() -> None:
+    """It is an algo order and nothing else, so leaving it out would show every
+    protected position as holding an order the venue does not have - drift on
+    every position that is behaving correctly."""
+    reported = binance_reported(_binance_snapshot(algo_orders=(_binance_algo_order(),)))
+
+    assert len(reported.open_orders) == 2
+    stop = reported.open_orders[1]
+    assert stop.broker_order_id == binance_provider_algo_id(7777)
+    assert stop.broker_client_order_id == "v6s-01a06a0000007000800000000000dead"
+    assert stop.terms["trigger_price"] == "59000"
+    assert stop.terms["close_position"] == "True"
+
+
+def test_a_triggered_stop_is_no_longer_working() -> None:
+    for status in ("TRIGGERED", "CANCELED", "FINISHED"):
+        reported = binance_reported(
+            _binance_snapshot(algo_orders=(_binance_algo_order(status=status),))
+        )
+        assert len(reported.open_orders) == 1, status
 
 
 def test_a_filled_binance_order_is_not_working() -> None:
