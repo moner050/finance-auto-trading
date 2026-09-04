@@ -30,7 +30,7 @@ from autotrader.integrations.brokers.common import (
     BrokerResponse,
     BrokerWriteDisabled,
 )
-from autotrader.risk.v6 import V6RiskAuthority
+from autotrader.risk.v6 import ProtectionAuthority, V6RiskAuthority
 from autotrader.shared.ids import new_uuid7
 
 NOW = datetime(2026, 8, 24, 12, 0, 0, tzinfo=UTC)
@@ -219,22 +219,26 @@ def risk_authority(
     side: Side = Side.BUY,
     stop_price: Decimal | None = None,
     allowed: bool = True,
-) -> V6RiskAuthority:
+) -> ProtectionAuthority:
+    # Through `of`, so these tests keep exercising the path a real caller
+    # takes when it does have the risk engine's own answer.
     stop = (
         stop_price
         if stop_price is not None
         else (Decimal("59000.09") if side is Side.BUY else Decimal("61000.01"))
     )
-    return V6RiskAuthority(
-        allowed=allowed,
-        blocker_codes=() if allowed else ("BLOCKED",),
-        risk_base=Decimal("10000"),
-        risk_fraction=Decimal("0.005"),
-        risk_budget=Decimal("50"),
-        structural_reference=stop,
-        stop_price=stop,
-        quantity=Decimal("0.002") if allowed else Decimal(),
-        stop_distance_atr5m=Decimal("1"),
+    return ProtectionAuthority.of(
+        V6RiskAuthority(
+            allowed=allowed,
+            blocker_codes=() if allowed else ("BLOCKED",),
+            risk_base=Decimal("10000"),
+            risk_fraction=Decimal("0.005"),
+            risk_budget=Decimal("50"),
+            structural_reference=stop,
+            stop_price=stop,
+            quantity=Decimal("0.002") if allowed else Decimal(),
+            stop_distance_atr5m=Decimal("1"),
+        )
     )
 
 

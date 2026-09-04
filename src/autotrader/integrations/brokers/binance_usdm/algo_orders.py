@@ -24,7 +24,7 @@ from autotrader.integrations.brokers.common import (
     BrokerResponse,
     BrokerWriteDisabled,
 )
-from autotrader.risk.v6 import V6RiskAuthority
+from autotrader.risk.v6 import ProtectionAuthority
 
 _SYMBOL = "BTCUSDT"
 _ACTIVE_ALGO_STATUS = "NEW"
@@ -313,7 +313,7 @@ class BinanceUsdmProtectionService:
     async def protect_first_fill(
         self,
         fill: EntryFill,
-        authority: V6RiskAuthority,
+        authority: ProtectionAuthority,
     ) -> ProtectionResult:
         if type(fill) is not EntryFill:
             raise TypeError("exact Binance USD-M EntryFill is required")
@@ -376,7 +376,7 @@ class BinanceUsdmProtectionService:
     async def move_stop(
         self,
         fill: EntryFill,
-        authority: V6RiskAuthority,
+        authority: ProtectionAuthority,
         *,
         placement_command_id: UUID,
         superseded_client_algo_id: str,
@@ -873,10 +873,10 @@ def _validate_initial_fill(fill: EntryFill) -> None:
 
 def _validate_risk_authority(
     fill: EntryFill,
-    authority: V6RiskAuthority,
+    authority: ProtectionAuthority,
 ) -> Decimal:
-    if type(authority) is not V6RiskAuthority:
-        raise BrokerWriteDisabled("exact Binance USD-M v6 risk authority is absent")
+    if type(authority) is not ProtectionAuthority:
+        raise BrokerWriteDisabled("exact Binance USD-M protection authority is absent")
     try:
         stop = _decimal(authority.stop_price, "authority stop price")
         quantity = _decimal(authority.quantity, "authority quantity")

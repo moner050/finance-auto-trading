@@ -395,6 +395,58 @@ def _allowed(fraction: Decimal, policy: V6RiskPolicySnapshot) -> Decimal:
     return fraction
 
 
+@dataclass(frozen=True, slots=True)
+class ProtectionAuthority:
+    """What placing a protective stop is allowed to depend on.
+
+    The algo path used to take a whole `V6RiskAuthority` and read four of its
+    nine fields. The other five - the risk base, the budget, the fraction, the
+    structural reference, the stop distance in ATR - are how a size was
+    arrived at, and nothing about placing a stop consults them.
+
+    That mattered once a caller had to *supply* one. A stop is placed after a
+    fill, in a later pass than the decision that sized the entry, and those
+    five are not recorded anywhere that pass can read. Demanding them would
+    have meant inventing five numbers to satisfy a signature, which is a worse
+    thing to have in a system than a narrower type.
+
+    Every check the algo path made, it still makes. What changed is only that
+    it now asks for what it checks.
+    """
+
+    allowed: bool
+    blocker_codes: tuple[str, ...]
+    stop_price: Decimal
+    quantity: Decimal
+
+    @classmethod
+    def of(cls, authority: V6RiskAuthority) -> ProtectionAuthority:
+        """The risk engine's own answer, narrowed."""
+        if type(authority) is not V6RiskAuthority:
+            raise TypeError("exact v6 risk authority is required")
+        return cls(
+            allowed=authority.allowed,
+            blocker_codes=authority.blocker_codes,
+            stop_price=authority.stop_price,
+            quantity=authority.quantity,
+        )
+
+    @classmethod
+    def approved(cls, *, stop_price: Decimal, quantity: Decimal) -> ProtectionAuthority:
+        """An order that already passed a risk approval, restated.
+
+        The loop reserves risk for a protective order before it is dispatched,
+        so by the time one reaches the venue the approval is a fact rather
+        than a claim. This says that fact in the shape the algo path reads.
+        """
+        return cls(
+            allowed=True,
+            blocker_codes=(),
+            stop_price=require_decimal(stop_price),
+            quantity=require_decimal(quantity),
+        )
+
+
 __all__ = (
     "APPROVED_CAPITAL",
     "DECIDES_SIZE",
@@ -406,6 +458,7 @@ __all__ = (
     "STOP_DISTANCE_MINIMUM_ATR",
     "TRADE_RISK_CEILING",
     "ApprovedCapital",
+    "ProtectionAuthority",
     "V6RiskAuthority",
     "V6RiskContext",
     "V6RiskRequest",

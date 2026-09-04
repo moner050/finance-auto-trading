@@ -13,7 +13,7 @@ The routing is one question: **does the command carry a trigger price?**
   close. `OrderStyle` cannot tell them apart - the protective order is built
   as `MARKET` too - so the trigger price is the discriminator.
 
-The protective path needs an `EntryFill` and a `V6RiskAuthority`, and a
+The protective path needs an `EntryFill` and a `ProtectionAuthority`, and a
 `BrokerOrderCommand` carries neither: no tick size, no fill price, no
 protection deadline. `ProtectionContext` is that gap, named rather than
 papered over, so the thing that reads fills can be built where fills live.
@@ -34,7 +34,7 @@ from autotrader.integrations.brokers.binance_usdm.algo_orders import (
     binance_protection_client_algo_id,
 )
 from autotrader.integrations.brokers.binance_usdm.orders import BrokerWriteResult
-from autotrader.risk.v6 import V6RiskAuthority
+from autotrader.risk.v6 import ProtectionAuthority
 
 
 class LiveSubmissionUnsupported(RuntimeError):
@@ -60,7 +60,7 @@ class ProtectionPlacement:
     """What the algo path needs and the command does not carry."""
 
     fill: EntryFill
-    authority: V6RiskAuthority
+    authority: ProtectionAuthority
     # Absent means this is the first stop behind the fill. Present names the
     # stop it replaces, which only a move has.
     superseded_client_algo_id: str | None = None
@@ -80,13 +80,13 @@ class NormalOrders(Protocol):
 
 class Protection(Protocol):
     async def protect_first_fill(
-        self, fill: EntryFill, authority: V6RiskAuthority
+        self, fill: EntryFill, authority: ProtectionAuthority
     ) -> ProtectionResult: ...
 
     async def move_stop(
         self,
         fill: EntryFill,
-        authority: V6RiskAuthority,
+        authority: ProtectionAuthority,
         *,
         placement_command_id: object,
         superseded_client_algo_id: str,
