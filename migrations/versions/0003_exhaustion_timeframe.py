@@ -27,7 +27,12 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0003_decision_exhaustion_timeframe"
+# Kept under 32 characters because that is what `alembic_version.version_num`
+# holds. The first spelling of this was 34, so the DDL applied - MySQL
+# commits it - and then the stamp failed, leaving the schema ahead of the
+# revision it claimed. `test_a_revision_id_fits_the_version_table` is there
+# so the next one fails in the suite instead of against the database.
+revision: str = "0003_exhaustion_timeframe"
 down_revision: str | Sequence[str] | None = "0002_binance_usdm_order_records"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

@@ -165,3 +165,20 @@ def test_the_tables_the_loop_and_backoffice_need_are_present(table: str) -> None
 )
 def test_retired_tables_are_not_carried_into_the_new_schema(retired: str) -> None:
     assert retired not in metadata.tables
+
+
+def test_a_revision_id_fits_the_version_table() -> None:
+    """Alembic stores the revision in a VARCHAR(32).
+
+    A longer one does not fail early: MySQL commits the DDL, and only the
+    stamp that follows it is refused. The schema is then ahead of the revision
+    the database claims to be at, which is the one state the whole revision
+    chain exists to make impossible. It happened once, to 0003.
+    """
+    for path in (ROOT / "migrations" / "versions").glob("*.py"):
+        if path.name == "__init__.py":
+            continue
+        module = _load(f"revision_{path.stem}", path)
+        revision = module.revision
+        assert isinstance(revision, str)
+        assert len(revision) <= 32, f"{path.name}: {revision} is {len(revision)}"
