@@ -863,6 +863,7 @@ def replay(
     session: tuple[int, int] | None = None,
     veto: str = "none",
     news: str = "none",
+    invert: bool = False,
 ) -> list[dict[str, object]]:
     trades: list[dict[str, object]] = []
     refused = 0
@@ -1094,6 +1095,27 @@ def replay(
             reward = target - entry if setup.direction is Side.BUY else entry - target
             if risk <= 0 or reward <= 0:
                 continue
+            # §34.4. Take the other side of the same signal.
+            #
+            # Reflected about the entry rather than swapped: the stop keeps
+            # its distance and the target keeps its distance, so `risk` and
+            # `reward` are unchanged and an R here means what an R means in
+            # the baseline. Swapping the two levels instead would trade a
+            # different size on a different ratio and answer a second
+            # question at the same time.
+            #
+            # Negating the recorded R would not have done this at all. A win
+            # averages +0.53R against a 0.73R target and a loss is the full
+            # -1R, so the outcomes are not each other's mirror; only walking
+            # the reflected levels bar by bar says what the other side did.
+            direction = setup.direction
+            if invert:
+                if direction is Side.BUY:
+                    direction = Side.SELL
+                    stop, target = entry + risk, entry - reward
+                else:
+                    direction = Side.BUY
+                    stop, target = entry - risk, entry + reward
             # §30.9's X1. `--execution-scale` moves the whole entry search
             # to the fine series, and its exhaustion chain almost never forms
             # there, so it answers a different question than the one asked.
@@ -1112,7 +1134,7 @@ def replay(
             outcome, closed, best, worst, units, gained = resolve(
                 resolution,
                 at,
-                setup.direction,
+                direction,
                 entry,
                 stop,
                 target,
@@ -1124,7 +1146,7 @@ def replay(
             trades.append(
                 {
                     "opened_at": series[opened].timestamp.isoformat(),
-                    "side": setup.direction.value,
+                    "side": direction.value,
                     "outcome": outcome,
                     "r_target": float(reward / risk),
                     # Whatever the position actually made, over the risk
@@ -1269,6 +1291,9 @@ async def main() -> None:
     # so comparing it against a two-year 1m run would be comparing the scales
     # and the sample at once. These clip the execution series to one span, so
     # every scale is asked about the same setups.
+    # §34.4. Trade the other side of every setup, levels reflected about the
+    # entry so the risk and the reward keep their distances.
+    parser.add_argument("--invert", action="store_true")
     parser.add_argument("--execution-from", default=None)
     parser.add_argument("--execution-to", default=None)
     parser.add_argument("--pivot-left", type=int, default=PivotConfig().left)
@@ -1375,6 +1400,7 @@ async def main() -> None:
         divergence_model=arguments.divergence,
         veto=arguments.veto,
         news=arguments.news,
+        invert=arguments.invert,
         breakeven_at=arguments.breakeven_at,
         add_at=arguments.add_at,
         resolve_bars=resolve_bars,
