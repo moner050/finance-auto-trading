@@ -70,7 +70,10 @@ from autotrader.operations.david_v6_position import (
     V6PositionAction,
     V6PositionActionKind,
 )
-from autotrader.persistence.mysql.dispatch_store import MySqlDispatchStore
+from autotrader.persistence.mysql.dispatch_store import (
+    MySqlDispatchStore,
+    RuntimeFacts,
+)
 from autotrader.persistence.mysql.models.accounts import Account
 from autotrader.persistence.mysql.models.david_v6 import DavidV6DecisionRow
 from autotrader.persistence.mysql.models.intents import (
@@ -480,6 +483,11 @@ class ExecutionAccount:
     currency: str
     runtime_instance_id: UUID
     fencing_token: int
+    # What the submission gate needs and no table holds: the runtime mode,
+    # whether a live write is permitted at all, and the environment the
+    # account is registered in. Carried here because every path that
+    # dispatches already carries the account. §31.12.
+    facts: RuntimeFacts
 
     def __post_init__(self) -> None:
         if type(cast(object, self.account)) is not AccountCandidate:
@@ -488,6 +496,8 @@ class ExecutionAccount:
             raise ValueError("currency must be a three letter code")
         if type(self.fencing_token) is not int or self.fencing_token <= 0:
             raise ValueError("fencing_token must be a positive integer")
+        if type(cast(object, self.facts)) is not RuntimeFacts:
+            raise TypeError("facts must be exact RuntimeFacts")
 
 
 class MySqlPaperExecution:
@@ -521,7 +531,8 @@ class MySqlPaperExecution:
             return None
         async with self._sessions() as session:
             await DispatchService(
-                store=MySqlDispatchStore(session), broker=self._broker
+                store=MySqlDispatchStore(session, self._account.facts),
+                broker=self._broker,
             ).dispatch(command_id=command_id, now=moment)
             await session.commit()
         return command_id
@@ -1128,7 +1139,8 @@ class MySqlPositionActions:
             return
         async with self._sessions() as session:
             await DispatchService(
-                store=MySqlDispatchStore(session), broker=self._broker
+                store=MySqlDispatchStore(session, self._account.facts),
+                broker=self._broker,
             ).dispatch(command_id=command_id, now=now)
             await session.commit()
 
@@ -1178,7 +1190,8 @@ class MySqlPositionActions:
             return
         async with self._sessions() as session:
             await DispatchService(
-                store=MySqlDispatchStore(session), broker=self._broker
+                store=MySqlDispatchStore(session, self._account.facts),
+                broker=self._broker,
             ).dispatch(command_id=command_id, now=now)
             await session.commit()
 
@@ -1305,7 +1318,8 @@ class MySqlPositionActions:
             return
         async with self._sessions() as session:
             await DispatchService(
-                store=MySqlDispatchStore(session), broker=self._broker
+                store=MySqlDispatchStore(session, self._account.facts),
+                broker=self._broker,
             ).dispatch(command_id=command_id, now=now)
             await session.commit()
 
@@ -1549,7 +1563,8 @@ class MySqlFillSettlement:
             return
         async with self._sessions() as session:
             await DispatchService(
-                store=MySqlDispatchStore(session), broker=self._broker
+                store=MySqlDispatchStore(session, self._account.facts),
+                broker=self._broker,
             ).dispatch(command_id=command_id, now=now)
             await session.commit()
 

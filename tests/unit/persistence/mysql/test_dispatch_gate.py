@@ -19,8 +19,12 @@ from uuid import UUID, uuid7
 
 import pytest
 
+from autotrader.config.settings import RuntimeMode
 from autotrader.execution.orders.models import CommandType
-from autotrader.persistence.mysql.dispatch_store import MySqlDispatchStore
+from autotrader.persistence.mysql.dispatch_store import (
+    MySqlDispatchStore,
+    RuntimeFacts,
+)
 
 NOW = datetime(2026, 9, 4, 12, 0, tzinfo=UTC)
 OWNER = uuid7()
@@ -51,9 +55,11 @@ class _Lease:
 class _Control:
     owner_runtime_instance_id: UUID | None = OWNER
     fencing_token: int = 7
+    acquired_at: datetime | None = NOW - timedelta(minutes=1)
     expires_at: datetime | None = NOW + timedelta(minutes=5)
     armed: bool = True
     kill_switch_level: str = "NONE"
+    row_version: int = 1
 
 
 @dataclass
@@ -62,12 +68,18 @@ class _Session:
     leases: list[_Lease]
     controls: list[_Control]
     counts: list[int] = field(default_factory=lambda: [0, 0])
+    controls_only: bool = False
 
     async def get(self, _model: object, _identity: object) -> _Command | None:
         return self.command
 
     async def scalars(self, _statement: object) -> _Session:
-        self._pending = self.leases if self._wants_leases else self.controls
+        # `_may_dispatch` asks for the leases then the controls;
+        # `_may_submit` asks only for the controls.
+        if self.controls_only or not self._wants_leases:
+            self._pending = list(self.controls)
+        else:
+            self._pending = list(self.leases)
         self._wants_leases = not self._wants_leases
         return self
 
@@ -189,3 +201,120 @@ async def test_a_closing_order_still_needs_its_lease() -> None:
         await _allowed(authority_class="SUBMIT_STRICT_REDUCTION", fencing_token=6)
         is False
     )
+
+
+# --- the runtime half: what `allow_live` decides -------------------------
+
+
+def _facts(**changes: object) -> RuntimeFacts:
+    values: dict[str, object] = {
+        "runtime_mode": RuntimeMode.PAPER,
+        "allow_live": False,
+        "account_environment": RuntimeMode.PAPER,
+        "local_runtime_instance_id": OWNER,
+        "market_data_fresh": lambda: True,
+    }
+    values.update(changes)
+    return RuntimeFacts(**values)  # pyright: ignore[reportArgumentType]
+
+
+async def _submittable(facts: RuntimeFacts, **changes: object) -> bool:
+    session = _Session(
+        command=_Command(
+            **{k: v for k, v in changes.items() if k in _COMMAND_FIELDS}  # pyright: ignore[reportArgumentType]
+        ),
+        leases=[_Lease()],
+        controls=[
+            _Control(**{k: v for k, v in changes.items() if k in _CONTROL_FIELDS})  # pyright: ignore[reportArgumentType]
+        ],
+        counts=[0, 0, 0],
+        controls_only=True,
+    )
+    store = MySqlDispatchStore(session, facts)  # pyright: ignore[reportArgumentType]
+    return await store._may_submit(COMMAND, NOW)  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.asyncio
+async def test_a_paper_submission_is_allowed() -> None:
+    assert await _submittable(_facts()) is True
+
+
+@pytest.mark.asyncio
+async def test_live_without_permission_is_refused() -> None:
+    """The switch between a LIVE build existing and LIVE being able to trade.
+    Nothing that ran was looking at it. §31.12."""
+    assert (
+        await _submittable(
+            _facts(
+                runtime_mode=RuntimeMode.LIVE,
+                account_environment=RuntimeMode.LIVE,
+                allow_live=False,
+            )
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_with_permission_and_a_matching_account_is_allowed() -> None:
+    assert (
+        await _submittable(
+            _facts(
+                runtime_mode=RuntimeMode.LIVE,
+                account_environment=RuntimeMode.LIVE,
+                allow_live=True,
+            )
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_live_run_against_a_paper_account_is_refused() -> None:
+    """And a paper run against a live account, which is the direction that
+    would put real money behind a rehearsal."""
+    assert (
+        await _submittable(
+            _facts(
+                runtime_mode=RuntimeMode.LIVE,
+                account_environment=RuntimeMode.PAPER,
+                allow_live=True,
+            )
+        )
+        is False
+    )
+    assert (
+        await _submittable(
+            _facts(
+                runtime_mode=RuntimeMode.PAPER,
+                account_environment=RuntimeMode.LIVE,
+            )
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_shadow_never_submits() -> None:
+    """It has no execution port at all, and if one ever reached here the mode
+    alone refuses it."""
+    assert await _submittable(_facts(runtime_mode=RuntimeMode.SHADOW)) is False
+
+
+@pytest.mark.asyncio
+async def test_stale_market_data_refuses_a_market_order() -> None:
+    assert await _submittable(_facts(market_data_fresh=lambda: False)) is False
+
+
+@pytest.mark.asyncio
+async def test_a_store_built_without_facts_authorises_nothing() -> None:
+    """Reading and recovery need no runtime facts; sending does. A store that
+    was not told refuses rather than assuming."""
+    session = _Session(
+        command=_Command(),
+        leases=[_Lease()],
+        controls=[_Control()],
+        controls_only=True,
+    )
+    store = MySqlDispatchStore(session)  # pyright: ignore[reportArgumentType]
+    assert await store._may_submit(COMMAND, NOW) is False  # pyright: ignore[reportPrivateUsage]

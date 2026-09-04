@@ -9,6 +9,8 @@ command was created.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
@@ -16,7 +18,15 @@ from uuid import UUID
 from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from autotrader.config.settings import RuntimeMode
 from autotrader.domain.enums import OrderStyle, Side
+from autotrader.execution.controls.gates import SubmissionGate
+from autotrader.execution.controls.models import (
+    ArmLease,
+    ExposureEffect,
+    GateAction,
+    SubmissionContext,
+)
 from autotrader.execution.dispatch.authorization import (
     DispatchAuthorizationState,
     decide_dispatch,
@@ -33,6 +43,9 @@ from autotrader.persistence.mysql.models.orders import (
     PersistedBrokerOrderLink,
     PersistedOrderCommand,
 )
+from autotrader.persistence.mysql.models.reconciliation import (
+    PersistedReconciliationDiff,
+)
 from autotrader.shared.ids import new_uuid7
 from autotrader.shared.time import require_utc
 
@@ -40,13 +53,64 @@ ACCEPTED = "ACCEPTED"
 REJECTED = "REJECTED"
 UNKNOWN = "UNKNOWN"
 NO_KILL_SWITCH = "NONE"
+_ACTIONS = {
+    CommandType.SUBMIT: GateAction.SUBMIT,
+    CommandType.CANCEL: GateAction.CANCEL,
+    CommandType.REPLACE: GateAction.REPLACE,
+}
+
+
+def _arm_lease(control: OpsTradingControl) -> ArmLease | None:
+    """The arming, as the gate reads it, or nothing when it is not held."""
+    if (
+        control.owner_runtime_instance_id is None
+        or control.acquired_at is None
+        or control.expires_at is None
+    ):
+        return None
+    return ArmLease(
+        owner_runtime_instance_id=control.owner_runtime_instance_id,
+        acquired_at=require_utc(control.acquired_at),
+        expires_at=require_utc(control.expires_at),
+        fencing_token=control.fencing_token,
+        row_version=control.row_version,
+    )
+
+
 # Once a broker has accepted, nothing may overwrite that fact.
 _TERMINAL = (ACCEPTED,)
 
 
+@dataclass(frozen=True, slots=True)
+class RuntimeFacts:
+    """What the gates need and no table holds.
+
+    Required rather than defaulted, all of them. A permissive default here
+    is a live write nobody asked for, and the two facts that decide it -
+    `allow_live` and the runtime mode - are the ones a caller is most likely
+    to leave off.
+
+    `market_data_fresh` is a fact about the moment, not the process, so it is
+    a callable. A store that could only say "yes, when I was built" would be
+    answering about a different moment than the one it is asked in.
+    """
+
+    runtime_mode: RuntimeMode
+    allow_live: bool
+    account_environment: RuntimeMode
+    local_runtime_instance_id: UUID
+    market_data_fresh: Callable[[], bool]
+
+
 class MySqlDispatchStore:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self, session: AsyncSession, facts: RuntimeFacts | None = None
+    ) -> None:
         self._session = session
+        # Absent means no venue write can be authorised through this store.
+        # Reading and recovery need no runtime facts; sending does, and a
+        # store built without them refuses rather than assuming any.
+        self._facts = facts
 
     async def authorize_and_record_attempt(
         self, *, command_id: UUID, now: datetime
@@ -65,6 +129,8 @@ class MySqlDispatchStore:
         """
         moment = require_utc(now)
         if not await self._may_dispatch(command_id, moment):
+            return None
+        if not await self._may_submit(command_id, moment):
             return None
         claimed = cast(
             "CursorResult[Any]",
@@ -137,6 +203,68 @@ class MySqlDispatchStore:
             if not decision.allowed:
                 return False
         return True
+
+    async def _may_submit(self, command_id: UUID, now: datetime) -> bool:
+        """The runtime half: the mode, the venue permission, the environment.
+
+        `SubmissionGate` was used only by its own tests, so `allow_live` - the
+        switch between a LIVE build existing and LIVE being able to trade -
+        was checked by nothing that ran. §31.12.
+        """
+        facts = self._facts
+        if facts is None:
+            return False
+        row = await self._row(command_id)
+        if row is None:
+            return False
+        controls = (await self._session.scalars(select(OpsTradingControl))).all()
+        if not controls:
+            return False
+        blocking = await self._blocking_incidents()
+        unknown = await self._unresolved_unknowns()
+        reconciling = await self._blocking_reconciliations()
+        fresh = facts.market_data_fresh()
+        for control in controls:
+            decision = SubmissionGate().evaluate(
+                SubmissionContext(
+                    now=now,
+                    action=_ACTIONS[CommandType(row.command_type)],
+                    runtime_mode=facts.runtime_mode,
+                    allow_live=facts.allow_live,
+                    account_environment=facts.account_environment.value,
+                    local_runtime_instance_id=facts.local_runtime_instance_id,
+                    locally_armed=control.armed,
+                    arm_lease=_arm_lease(control),
+                    # The write about to happen is in this session, so the
+                    # database is writable by the only test that matters.
+                    database_writable=True,
+                    market_data_fresh=fresh,
+                    active_kill_switch=control.kill_switch_level != NO_KILL_SWITCH,
+                    blocking_incident_count=blocking,
+                    unresolved_unknown_count=unknown,
+                    blocking_reconciliation_count=reconciling,
+                    exposure_effect=(
+                        ExposureEffect.REDUCE
+                        if row.authority_class == CLOSING_AUTHORITY
+                        else ExposureEffect.INCREASE
+                    ),
+                )
+            )
+            if not decision.allowed:
+                return False
+        return True
+
+    async def _blocking_reconciliations(self) -> int:
+        return (
+            await self._session.scalar(
+                select(func.count())
+                .select_from(PersistedReconciliationDiff)
+                .where(
+                    PersistedReconciliationDiff.severity == "BLOCKING",
+                    PersistedReconciliationDiff.status == "OPEN",
+                )
+            )
+        ) or 0
 
     async def _blocking_incidents(self) -> int:
         return (

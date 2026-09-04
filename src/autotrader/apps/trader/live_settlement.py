@@ -182,7 +182,8 @@ class MySqlLiveFillSettlement:
             return
         async with self._sessions() as session:
             await DispatchService(
-                store=MySqlDispatchStore(session), broker=self._broker
+                store=MySqlDispatchStore(session, self._account.facts),
+                broker=self._broker,
             ).dispatch(command_id=command_id, now=now)
             await session.commit()
 

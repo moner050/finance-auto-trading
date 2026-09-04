@@ -32,10 +32,10 @@ from autotrader.apps.trader.composition import (
     MySqlTradingControl,
 )
 from autotrader.apps.trader.tick import DISARMED, SUBMITTED, TickContext, run_tick
-from autotrader.config.settings import Settings
+from autotrader.config.settings import RuntimeMode, Settings
 from autotrader.execution.intents.models import AccountCandidate
 from autotrader.integrations.brokers.fake.adapter import FakeBroker, FakeBrokerScenario
-from autotrader.persistence.mysql.dispatch_store import ACCEPTED
+from autotrader.persistence.mysql.dispatch_store import ACCEPTED, RuntimeFacts
 from autotrader.persistence.mysql.engine import create_engine
 from autotrader.persistence.mysql.models.intents import PersistedOrderIntent
 from autotrader.persistence.mysql.models.operations import OpsTradingControl
@@ -187,6 +187,13 @@ def _account(ids: object) -> ExecutionAccount:
         policy_version_id=ids.policy_version_id,  # type: ignore[attr-defined]
         risk_snapshot_id=ids.risk_snapshot_id,  # type: ignore[attr-defined]
         currency="USD",
+        facts=RuntimeFacts(
+            runtime_mode=RuntimeMode.PAPER,
+            allow_live=False,
+            account_environment=RuntimeMode.PAPER,
+            local_runtime_instance_id=ids.runtime_instance_id,  # type: ignore[attr-defined]
+            market_data_fresh=lambda: True,
+        ),
         runtime_instance_id=uuid7(),
         fencing_token=1,
     )
