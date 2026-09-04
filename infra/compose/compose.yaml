@@ -75,6 +75,43 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # The loop. Nothing else evaluates a bar or records a decision, and it is
+  # also what collects the aggregate-trade tape - the thirty-second series is
+  # aggregated from that tape and no venue endpoint sells it, so a day this is
+  # down is a day those bars cannot be rebuilt. The compose file had every
+  # other layer and no service that ran this one.
+  #
+  # No `--for`. On the test machine the loop is given a duration because
+  # nothing would restart it; here `restart: unless-stopped` is that, and a
+  # duration would only add an outage when it elapsed.
+  #
+  # `--shadow`, and there is no variant of this service that says `--live`.
+  # Three separate gates refuse a live dispatch, and the way to defeat all
+  # three should not be to edit one line of YAML.
+  #
+  # The venue credentials are not here. They live encrypted in the database
+  # and are decrypted with the master key, so this container holds the key and
+  # never the secret.
+  trader:
+    <<: *app
+    command:
+      - "python"
+      - "-m"
+      - "autotrader.apps.trader"
+      - "--account"
+      - "${TRADER_ACCOUNT_ALIAS:?set TRADER_ACCOUNT_ALIAS in .env}"
+      - "--run"
+      - "--shadow"
+      - "--leverage"
+      - "${TRADER_LEVERAGE:-3}"
+    environment:
+      <<: *app-env
+      BACKOFFICE_MASTER_KEY: ${BACKOFFICE_MASTER_KEY:?set BACKOFFICE_MASTER_KEY in .env}
+      BACKOFFICE_MASTER_KEY_VERSION: ${BACKOFFICE_MASTER_KEY_VERSION:-1}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   # Not a worker. The loop has inputs with no producer, so this reports what
   # is missing and exits. It is here so the report is one command on the
   # deployment rather than a thing to remember how to run.

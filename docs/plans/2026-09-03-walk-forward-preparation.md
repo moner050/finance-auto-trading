@@ -5387,3 +5387,58 @@ systemd 유닛이든 무엇이든 — Windows 예약 작업은 버려질 작업�
 
 **여기서의 취약점은 그대로 안고 간다**: 프로세스가 죽거나 재부팅되면 되살아나지
 않는다. 테스트 기계이므로 그것으로 충분하다.
+
+## 33.24 배포에 루프가 없었다 — `trader` 서비스 추가 (2026-09-04)
+
+배포 대상이 **Ubuntu Docker**라는 것을 듣고 `infra/compose/compose.yaml`을 열었다.
+
+### 없던 것
+
+| 서비스 | 하는 일 |
+|---|---|
+| `migrate` | `alembic upgrade head`, 1회 |
+| `backoffice` | 웹 UI |
+| `capture` | **일 1회 Deribit 풋콜 비율**뿐 |
+| `trader-check` | `--check` 보고 후 종료, `profiles: [check]` |
+| `caddy`·`mysql`·`redis` | 인프라 |
+
+**`--run`도 `--shadow`도 compose 전체에 없었다.** 지금 상태로 올리면 봉을 평가하지
+않고, 결정이 기록되지 않고, **그 루프가 테이프 수집기이므로 aggTrades 테이프도
+쌓이지 않는다.**
+
+§33.23에서 "수집을 30일로 늘렸다"고 적은 것이 **Ubuntu에서는 성립하지 않는**
+상태였다. `capture`는 이름과 달리 테이프와 무관하다.
+
+**같은 과의 아홉 번째다** — 이미지도 마이그레이션도 백오피스도 게이트도 다 있고,
+**실물을 흘리는 서비스만 없었다.**
+
+### 넣은 것
+
+```yaml
+  trader:
+    <<: *app
+    command: [..., "--account", "${TRADER_ACCOUNT_ALIAS:?...}",
+              "--run", "--shadow", "--leverage", "${TRADER_LEVERAGE:-3}"]
+    environment:
+      <<: *app-env
+      BACKOFFICE_MASTER_KEY: ${BACKOFFICE_MASTER_KEY:?...}
+      BACKOFFICE_MASTER_KEY_VERSION: ${BACKOFFICE_MASTER_KEY_VERSION:-1}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+```
+
+| 결정 | 이유 |
+|---|---|
+| **`--for` 없음** | 테스트 기계는 되살릴 것이 없어 수명을 준다. 여기서는 `restart: unless-stopped`가 그 역할이고, 수명은 만료될 때 장애만 만든다 |
+| **프로파일 없음** | `trader-check`는 보고서라 프로파일 뒤에 있다. 이것은 **작업자**다 |
+| **`--live` 변형 없음** | 게이트 셋이 거부하는데, 그 셋을 한꺼번에 무력화하는 길이 YAML 한 줄이어서는 안 된다 |
+| **거래소 자격증명 없음** | DB에 암호화돼 있고 마스터 키로 푼다. 컨테이너는 **키를 들고 비밀은 안 든다** |
+
+`.env.example`에 `TRADER_LEVERAGE=3`을 넣고, `TRADER_ACCOUNT_ALIAS` 설명이
+"보고서 전용"이던 것을 고쳤다.
+
+### 검증의 한계
+
+**이 기계에 Docker가 없어 `docker compose config`를 못 돌렸다.** YAML 파서로
+병합과 서비스 목록·command·restart·환경 키만 확인했다. **보간과 `depends_on`
+해석은 실제 배포에서 처음 검증된다.**
