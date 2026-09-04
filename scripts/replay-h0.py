@@ -923,6 +923,7 @@ def replay(
     news: str = "none",
     invert: bool = False,
     retrace_to: str = "zone",
+    fee_rate: Decimal = Decimal("0.0005"),
     target_model: str = "fib66",
 ) -> list[dict[str, object]]:
     trades: list[dict[str, object]] = []
@@ -1173,6 +1174,18 @@ def replay(
             reward = target - entry if setup.direction is Side.BUY else entry - target
             if risk <= 0 or reward <= 0:
                 continue
+            # §35.8. What a round trip costs, in the price units `gained` is
+            # in. Both legs at the same rate because `binance_commission.py`
+            # says so: the exit is a stop and a stop is never anything but a
+            # taker, and an entry that rests may earn the maker rate but a
+            # limit that crosses pays taker, so the cheaper rate is reported
+            # and not used.
+            #
+            # Charged on the entry notional for both legs. The exit notional
+            # differs by the move, which is at most a couple of tenths of a
+            # percent here, and pretending to that precision would dress up an
+            # estimate whose rate is itself an assumption.
+            cost = entry * fee_rate * 2
             # §34.4. Take the other side of the same signal.
             #
             # Reflected about the entry rather than swapped: the stop keeps
@@ -1231,7 +1244,12 @@ def replay(
                     # the first unit started with. A stop-out is -1R only
                     # while the stop has not moved, which is the whole
                     # question S1 and P1 ask.
-                    "r_result": float(gained / risk),
+                    # Net of the round trip. §35.8 measured why this line
+                    # decides everything: 1R is about 0.077% of price at this
+                    # stop band, so a 0.10% round trip is over a full R.
+                    "r_result": float((gained - cost) / risk),
+                    "r_gross": float(gained / risk),
+                    "fee_r": float(cost / risk),
                     "units": int(units),
                     "bars_held": closed - at,
                     "waited": opened - cut if not executed else opened - start,
@@ -1372,6 +1390,12 @@ async def main() -> None:
     # §34.4. Trade the other side of every setup, levels reflected about the
     # entry so the risk and the reward keep their distances.
     parser.add_argument("--invert", action="store_true")
+    # §35.8. One leg's rate; both legs are charged it. The default is the
+    # standard USD-M taker rate, which is an assumption, not this account's:
+    # the real number comes from /fapi/v1/commissionRate and depends on VIP
+    # tier, referral and whether fees are paid in BNB. `--fee-rate 0` restores
+    # the gross numbers every run before §35.8 reported.
+    parser.add_argument("--fee-rate", type=Decimal, default=Decimal("0.0005"))
     # §12.5's second axis, which §12.4 marked "재구현 필요". Only read when
     # `--entry retrace`; "zone" keeps the two readings section 11.4 ran.
     # §35.3's axis. 66% is §21.5's (A0) target and stays the default.
@@ -1493,6 +1517,7 @@ async def main() -> None:
         news=arguments.news,
         invert=arguments.invert,
         retrace_to=arguments.retrace_to,
+        fee_rate=arguments.fee_rate,
         target_model=arguments.target,
         breakeven_at=arguments.breakeven_at,
         add_at=arguments.add_at,
