@@ -141,6 +141,19 @@ class BinanceUsdmAlgoOrderRecord:
     prepared_at: datetime
     state: BinanceUsdmAlgoOrderState
     result: ProtectionResult | None
+    # One entry can be protected by a succession of stops, because §22.7
+    # moves the stop while the position is open. Absent means the first one,
+    # whose id is the entry's - which is what every record written before
+    # moves existed says, and what keeps their identity unchanged.
+    placement_command_id: UUID | None = None
+
+    @property
+    def placement_id(self) -> UUID:
+        return self.placement_command_id or self.entry_fill.entry_command_id
+
+    @property
+    def supersedes_nothing(self) -> bool:
+        return self.placement_command_id is None
 
     @classmethod
     def prepared(
@@ -150,6 +163,7 @@ class BinanceUsdmAlgoOrderRecord:
         trigger_price: Decimal,
         request: BrokerRequest,
         prepared_at: datetime,
+        placement_command_id: UUID | None = None,
     ) -> BinanceUsdmAlgoOrderRecord:
         if request.method != "POST" or request.path != "/fapi/v1/algoOrder":
             raise ValueError("Binance USD-M canonical algo request is invalid")
@@ -158,7 +172,10 @@ class BinanceUsdmAlgoOrderRecord:
             raise ValueError("Binance USD-M canonical algo body is invalid")
         result = cls(
             entry_fill=fill,
-            client_algo_id=binance_protection_client_algo_id(fill.entry_command_id),
+            client_algo_id=binance_protection_client_algo_id(
+                placement_command_id or fill.entry_command_id
+            ),
+            placement_command_id=placement_command_id,
             trigger_price=trigger_price,
             request_body=body,
             request_digest=sha256(body).digest(),
@@ -173,9 +190,9 @@ class BinanceUsdmAlgoOrderRecord:
         if type(self.entry_fill) is not EntryFill:
             raise TypeError("Binance USD-M entry fill must be exact")
         self.entry_fill.__post_init__()
-        if self.client_algo_id != binance_protection_client_algo_id(
-            self.entry_fill.entry_command_id
-        ):
+        if self.placement_command_id is not None:
+            _uuid7(self.placement_command_id, "placement_command_id")
+        if self.client_algo_id != binance_protection_client_algo_id(self.placement_id):
             raise ValueError("Binance USD-M persisted client algo ID is invalid")
         if _decimal(self.trigger_price, "trigger price") <= 0:
             raise ValueError("Binance USD-M persisted trigger price is invalid")
@@ -618,6 +635,7 @@ def binance_protection_client_algo_id(entry_command_id: UUID) -> str:
 def build_binance_usdm_protection_request(
     fill: EntryFill,
     trigger_price: Decimal,
+    placement_command_id: UUID | None = None,
 ) -> BrokerRequest:
     if type(fill) is not EntryFill:
         raise TypeError("exact Binance USD-M EntryFill is required")
@@ -636,7 +654,12 @@ def build_binance_usdm_protection_request(
         ("workingType", "MARK_PRICE"),
         ("closePosition", "true"),
         ("priceProtect", "false"),
-        ("clientAlgoId", binance_protection_client_algo_id(fill.entry_command_id)),
+        (
+            "clientAlgoId",
+            binance_protection_client_algo_id(
+                placement_command_id or fill.entry_command_id
+            ),
+        ),
         ("newOrderRespType", "RESULT"),
     )
     return BrokerRequest(

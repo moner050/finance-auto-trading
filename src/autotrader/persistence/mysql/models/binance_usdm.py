@@ -513,6 +513,10 @@ class BinanceUsdmAlgoOrderRow(CoreBase):
     `EntryFill` is spread into columns rather than kept as a blob. Every one
     of its fields is something a constraint can hold, and a JSON blob would
     move those checks from the database into whatever happens to read it.
+
+    One row per *placement*, not per entry. §22.7 moves the stop while the
+    position is open, so one entry is protected by a succession of stops and
+    the first one's placement id is the entry's own.
     """
 
     __tablename__ = "binance_usdm_algo_order"
@@ -563,9 +567,17 @@ class BinanceUsdmAlgoOrderRow(CoreBase):
             "state",
             "protection_deadline",
         ),
+        # Every stop that has protected one entry, which is what a move has
+        # to read to know which one it supersedes.
+        Index(
+            "ix_binance_usdm_algo_order_entry",
+            "entry_command_id",
+            "prepared_at",
+        ),
     )
 
-    entry_command_id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True)
+    placement_command_id: Mapped[UUID] = mapped_column(UuidBinary(), primary_key=True)
+    entry_command_id: Mapped[UUID] = mapped_column(UuidBinary(), nullable=False)
     client_algo_id: Mapped[str] = mapped_column(
         String(36, collation="ascii_bin"), nullable=False
     )

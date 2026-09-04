@@ -854,6 +854,7 @@ _CREATE: tuple[str, ...] = (
     CONSTRAINT fk_strategy_setup_version FOREIGN KEY(strategy_version_id) REFERENCES strategy_version (id)
 )""",
     """CREATE TABLE binance_usdm_algo_order (
+    placement_command_id BINARY(16) NOT NULL,
     entry_command_id BINARY(16) NOT NULL,
     client_algo_id VARCHAR(36) COLLATE ascii_bin NOT NULL,
     binding_id BINARY(16) NOT NULL,
@@ -874,7 +875,7 @@ _CREATE: tuple[str, ...] = (
     request_digest VARBINARY(32) NOT NULL,
     state VARCHAR(20) COLLATE ascii_bin NOT NULL,
     result JSON,
-    PRIMARY KEY (entry_command_id),
+    PRIMARY KEY (placement_command_id),
     CONSTRAINT uq_binance_usdm_algo_order_client_id UNIQUE (client_algo_id),
     CONSTRAINT ck_binance_usdm_algo_order_state CHECK (state IN ('PREPARED', 'AMBIGUOUS', 'ACTIVE', 'REJECTED', 'EMERGENCY_CLOSED', 'UNKNOWN')),
     CONSTRAINT ck_binance_usdm_algo_order_scope CHECK (side IN ('BUY', 'SELL') AND symbol = 'BTCUSDT'),
@@ -1543,6 +1544,7 @@ _CREATE: tuple[str, ...] = (
     """CREATE INDEX ix_core_exchange_market_id ON core_exchange (market_id)""",
     """CREATE INDEX ix_universe_snapshot_member_symbol ON universe_snapshot_member (symbol)""",
     """CREATE INDEX ix_core_instrument_exchange_id ON core_instrument (exchange_id)""",
+    """CREATE INDEX ix_binance_usdm_algo_order_entry ON binance_usdm_algo_order (entry_command_id, prepared_at)""",
     """CREATE INDEX ix_binance_usdm_algo_order_unsafe ON binance_usdm_algo_order (binding_id, state, protection_deadline)""",
     """CREATE INDEX ix_binance_usdm_normal_order_unresolved ON binance_usdm_normal_order (binding_id, state, not_after)""",
     """CREATE INDEX ix_binance_usdm_reconciliation_readiness ON binance_usdm_reconciliation_run (binding_id, result, completed_at)""",

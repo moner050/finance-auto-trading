@@ -62,6 +62,7 @@ class MySqlBinanceUsdmAlgoOrderStore:
         fill = record.entry_fill
         acquired = await self.repository.insert_if_absent(
             {
+                "placement_command_id": record.placement_id,
                 "entry_command_id": fill.entry_command_id,
                 "client_algo_id": record.client_algo_id,
                 "binding_id": fill.binding_id,
@@ -176,6 +177,14 @@ def _record(row: BinanceUsdmAlgoOrderRow) -> BinanceUsdmAlgoOrderRecord:
             emergency_close_command_id=row.emergency_close_command_id,
         ),
         client_algo_id=row.client_algo_id,
+        # The first stop's placement id is the entry's, and the record says
+        # that by leaving it absent. Reconstructing it any other way would
+        # make a reloaded record differ from the one that was written.
+        placement_command_id=(
+            None
+            if row.placement_command_id == row.entry_command_id
+            else row.placement_command_id
+        ),
         trigger_price=row.trigger_price,
         request_body=row.request_body,
         request_digest=row.request_digest,
