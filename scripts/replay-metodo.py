@@ -194,6 +194,10 @@ async def main() -> None:
     )
     assert spec is not None and spec.loader is not None
     harness = importlib.util.module_from_spec(spec)
+    # Registered before execution: `dataclass` resolves a class's module
+    # through `sys.modules`, and a module that is not there yet fails there
+    # rather than where the import was written.
+    sys.modules[spec.name] = harness
     spec.loader.exec_module(harness)
 
     cache = ROOT / "build" / f"klines-{arguments.symbol}-{arguments.days}d.json"
