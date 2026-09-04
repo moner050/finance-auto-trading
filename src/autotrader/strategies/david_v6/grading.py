@@ -1,5 +1,10 @@
 """Setup grading from the section 21.3 weighted score.
 
+One weight comes from elsewhere. Section 9.4, marked (A0), gives the
+blocking Big Trade -2 where section 21.3's table gives -4, and where a
+confirmed rule and a research frame disagree the confirmed one is taken.
+The reasoning sits on the row itself.
+
 The weights and the two cutoffs are transcribed from the specification, but
 the specification is careful about what they are and this should be too. The
 section is titled "연구용 점수표" and ends: "이 점수는 David의 직접식이 아니다
@@ -53,7 +58,18 @@ _RESEARCH_WEIGHTS: Mapping[str, int] = MappingProxyType(
         V1_CERO_OSMOTICO: 1,
         V1_MIG_REVERSAL: 2,
         SUPPORTING_BIG_TRADE_BEHIND: 1,
-        BLOCKING_BIG_TRADE_AHEAD: -4,
+        # -2, not §21.3's -4. This is the one row that does not come from
+        # that table, and §9.4 is why: it is marked (A0) - the author's own
+        # use - and its `scoring:` block reads `blocking_ahead: -2` beside
+        # the `behind_supporting: +1` that both sources agree on. §21.3 says
+        # of itself that it is not David's formula but a research frame for
+        # ablation, so where the two disagree the confirmed one is taken.
+        #
+        # Nothing observable changes today: §21.3 is held at SCORE_ONLY, so
+        # the score decides a risk fraction tier that `_allowed` caps back to
+        # the normal fraction, and it never decides whether to trade. The
+        # refusal is separate and stays - §9.4 says "감점 또는 거부".
+        BLOCKING_BIG_TRADE_AHEAD: -2,
         HIGH_IMPACT_NEWS_RISK: -3,
         ABNORMAL_SPREAD_OR_SLIPPAGE: -2,
     }

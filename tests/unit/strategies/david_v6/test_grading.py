@@ -50,7 +50,8 @@ def test_weights_match_the_specification_score_table() -> None:
     assert indicator_weight(V1_SECADO) == 2
     assert indicator_weight(V1_MIG_REVERSAL) == 2
     assert indicator_weight(SUPPORTING_BIG_TRADE_BEHIND) == 1
-    assert indicator_weight(BLOCKING_BIG_TRADE_AHEAD) == -4
+    # The one row not taken from §21.3: §9.4 is marked (A0) and gives -2.
+    assert indicator_weight(BLOCKING_BIG_TRADE_AHEAD) == -2
     assert indicator_weight(HIGH_IMPACT_NEWS_RISK) == -3
     assert indicator_weight(ABNORMAL_SPREAD_OR_SLIPPAGE) == -2
 
@@ -111,7 +112,13 @@ def test_score_of_nine_is_the_a_grade() -> None:
     assert grade_setup(indicators, mandatory_codes=frozenset()) is SetupGrade.A
 
 
-def test_blocking_big_trade_subtracts_four_and_demotes() -> None:
+def test_blocking_big_trade_subtracts_two_and_demotes() -> None:
+    """§9.4's (A0) weight, not §21.3's -4.
+
+    It still demotes - nine points becomes seven - but one tier rather than
+    two. What decides whether the setup trades is the refusal beside this,
+    not the score: §21.3 is held at SCORE_ONLY.
+    """
     strong = _indicators(
         HIGHER_TIMEFRAME_BIAS,
         REGULAR_HLIT_DIVERGENCE,
@@ -121,8 +128,10 @@ def test_blocking_big_trade_subtracts_four_and_demotes() -> None:
     )
     penalised = (*strong, _indicator(BLOCKING_BIG_TRADE_AHEAD))
 
-    assert score_indicators(penalised) == 5
-    assert grade_setup(penalised, mandatory_codes=frozenset()) is SetupGrade.NORMAL
+    assert score_indicators(strong) == 9
+    assert grade_setup(strong, mandatory_codes=frozenset()) is SetupGrade.A
+    assert score_indicators(penalised) == 7
+    assert grade_setup(penalised, mandatory_codes=frozenset()) is SetupGrade.A_CANDIDATE
 
 
 def test_news_risk_and_abnormal_spread_subtract() -> None:

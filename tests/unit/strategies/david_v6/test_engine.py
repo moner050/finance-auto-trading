@@ -888,8 +888,10 @@ def test_the_strategy_is_not_long_only_where_the_venue_can_short() -> None:
 
 def test_a_blocking_big_trade_is_both_scored_and_refused() -> None:
     """Section 9.2 sanctions both: "진행 방향 앞의 Big Trade → 진입 감점 또는
-    거부". The -4 is section 21.3's research weight and it is applied; the
-    refusal comes from stronger sources and is applied too.
+    거부". The -2 is section 9.4's, which is marked (A0); section 21.3's
+    table says -4 and says of itself that it is a research frame rather than
+    the author's formula, so the confirmed source is taken. The refusal comes
+    from stronger sources and is applied too.
 
     Those sources are the reason the refusal is not traded away for the score.
     The same block says outright `never: "Big Trade와 맞서 진입하지 않는다"`,
@@ -899,8 +901,10 @@ def test_a_blocking_big_trade_is_both_scored_and_refused() -> None:
     대상. 맞서 싸우지 않는다".
 
     Dropping the refusal to leave only the weight would delete the rule
-    rather than soften it: section 21.3 is held at SCORE_ONLY, so the -4
-    currently changes no outcome at all.
+    rather than soften it: section 21.3 is held at SCORE_ONLY, so the weight
+    decides a risk fraction tier that `_allowed` caps back to the normal
+    fraction, and it never decides whether to trade. Either value changes no
+    outcome at all today; the refusal is the whole of the rule in force.
     """
-    assert indicator_weight(BLOCKING_BIG_TRADE_AHEAD) == -4
+    assert indicator_weight(BLOCKING_BIG_TRADE_AHEAD) == -2
     assert indicator_weight(SUPPORTING_BIG_TRADE_BEHIND) == 1
