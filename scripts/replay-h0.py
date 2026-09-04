@@ -51,6 +51,7 @@ import argparse
 import asyncio
 import json
 import sys
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -109,6 +110,18 @@ HORIZON = 288
 # in bars rather than in time, because that is what `PivotConfig` counts.
 EXECUTION_WINDOW = 240
 
+# §33.7's X2: where `_execution_entry` gave up, one count per setup.
+ENTRY_CENSUS: dict[str, int] = defaultdict(int)
+# And how far the chain got before the search ran out: the best leg count
+# any bar in the window reached. A chain that never reaches two is a
+# different failure from one that reaches two and never three.
+ENTRY_BEST_LEGS: dict[int, int] = defaultdict(int)
+# How many bars the search got through before it ended.
+ENTRY_BARS: list[int] = []
+# §33.9. Where the setup already stands at the five-minute bar that made it,
+# before any execution-scale search: the same two tests, at detection.
+SETUP_AT_DETECTION: dict[str, int] = defaultdict(int)
+
 
 @dataclass(frozen=True, slots=True)
 class ExecutionScale:
@@ -130,6 +143,9 @@ class ExecutionScale:
     step: timedelta
     entry_window: int
     cache: str
+    # The klines interval, where it differs from the key. "5m-chain" is a way
+    # of running the search, not an interval Binance knows.
+    interval: str | None = None
 
     @property
     def per_five_minutes(self) -> int:
@@ -147,6 +163,16 @@ EXECUTION_SCALES = {
         entry_window=120,
         # Built from the tape, which has one span rather than a day count.
         cache="klines-{symbol}-30s-tape.json",
+    ),
+    # §33.8's control. Not a scale the document asks for - it is five minutes,
+    # which is where detection already runs - but `--execution-scale 5m` means
+    # "off", so there was no way to run this search on five-minute bars and
+    # compare like with like. One hour is twelve bars here.
+    "5m-chain": ExecutionScale(
+        step=STEP,
+        entry_window=12,
+        cache="klines-{symbol}-{days}d.json",
+        interval="5m",
     ),
 }
 
@@ -531,35 +557,68 @@ def _execution_entry(
     """
     long = setup.direction is Side.BUY
     kind = PivotKind.LOW if long else PivotKind.HIGH
+    # §33.7's X2. The last reason this setup was still looking, so a setup
+    # that runs out of window is attributed to what it was waiting for
+    # rather than to the window.
+    waiting = "NO_HISTORY"
+    best_legs = 0
     for index in range(start, min(start + entry_window, len(bars))):
         bar = bars[index]
+        first = " (첫 봉)" if index == start else ""
         if long:
             if bar.low <= setup.invalidation_price:
+                ENTRY_CENSUS["ANCHOR_BROKEN" + first] += 1
+                ENTRY_BARS.append(index - start)
                 return None
             if bar.high >= setup.target_price:
+                ENTRY_CENSUS["TARGET_FIRST" + first] += 1
+                ENTRY_BARS.append(index - start)
                 return None
         else:
             if bar.high >= setup.invalidation_price:
+                ENTRY_CENSUS["ANCHOR_BROKEN" + first] += 1
+                ENTRY_BARS.append(index - start)
                 return None
             if bar.low <= setup.target_price:
+                ENTRY_CENSUS["TARGET_FIRST" + first] += 1
+                ENTRY_BARS.append(index - start)
                 return None
         if index < EXECUTION_WINDOW:
             continue
         window = bars[index - EXECUTION_WINDOW : index + 1]
         pivots = confirmed_pivots(window, PivotConfig())
-        if exhaustion_legs(window, pivots, setup.direction) < min_legs:
+        legs_here = exhaustion_legs(window, pivots, setup.direction)
+        best_legs = max(best_legs, legs_here)
+        if legs_here < min_legs:
+            waiting = "LEGS_SHORT"
             continue
         legs = [pivot for pivot in pivots if pivot.confirmed and pivot.kind is kind]
         if not legs:
+            waiting = "NO_PIVOT"
             continue
         reference = legs[-1].price
         # The leg has to be inside the setup: a stop the wrong side of the
         # anchor is not a tighter stop, it is a different trade.
         if long and not setup.invalidation_price < reference < bar.close:
+            waiting = "REFERENCE_OUTSIDE"
             continue
         if not long and not bar.close < reference < setup.invalidation_price:
+            waiting = "REFERENCE_OUTSIDE"
             continue
+        # A chain that was already complete when the search arrived is a
+        # different thing from one that formed while we watched. The pivots
+        # come from the 240 bars behind `index`, so both are possible - and
+        # §33.8 says the setup only gives the search about one bar, which
+        # makes the difference the whole question.
+        ENTRY_CENSUS[
+            "ENTERED (도착 시 이미 완성)"
+            if index == start
+            else "ENTERED (탐색 중 완성)"
+        ] += 1
+        ENTRY_BEST_LEGS[best_legs] += 1
         return index, reference
+    ENTRY_CENSUS[waiting] += 1
+    ENTRY_BEST_LEGS[best_legs] += 1
     return None
 
 
@@ -810,6 +869,7 @@ def replay(
     never_returned = 0
     no_zone = 0
     no_chain = 0
+    stale = 0
     # The entry scale is a different series, so a five-minute bar has to name
     # the minute that follows its close. Its `timestamp` is the open time, so
     # the first minute we may act on opens one step later.
@@ -832,6 +892,10 @@ def replay(
     pivots_config = PivotConfig(left=pivot_left)
     points = evaluation_points(bars, pivots_config)
     print(f"{len(bars)} bars, {len(points)} evaluation points", flush=True)
+    ENTRY_CENSUS.clear()
+    ENTRY_BEST_LEGS.clear()
+    ENTRY_BARS.clear()
+    SETUP_AT_DETECTION.clear()
     busy_until = -1
     zone_bucket = -1
     zone_facts = None
@@ -929,6 +993,30 @@ def replay(
                     vetoed += 1
                     continue
             seen.add(key)
+            close = bars[cut].close
+            if setup.direction is Side.BUY:
+                past_target = close >= setup.target_price
+                past_anchor = close <= setup.invalidation_price
+            else:
+                past_target = close <= setup.target_price
+                past_anchor = close >= setup.invalidation_price
+            SETUP_AT_DETECTION[
+                "목표 이미 통과"
+                if past_target
+                else "앵커 이미 통과"
+                if past_anchor
+                else "정상"
+            ] += 1
+            # §33.9. A setup whose target is already behind the price has
+            # `reward <= 0` and is discarded a few lines below, whatever
+            # happens in between. Discarding it here instead changes no H0
+            # number and stops the execution-scale search from spending the
+            # hour looking for an entry into a trade that will not be taken -
+            # and from reporting the target it already passed as the reason
+            # it found nothing.
+            if past_target or past_anchor:
+                stale += 1
+                continue
             opened = cut
             reference = setup.invalidation_price
             series: Sequence[CompletedOhlcvBar] = bars
@@ -1053,6 +1141,38 @@ def replay(
             )
             busy_until = _five_minute_index(resolution[closed].timestamp, five_at)
             break
+    if SETUP_AT_DETECTION:
+        total = sum(SETUP_AT_DETECTION.values())
+        print("", flush=True)
+        print(f"탐지 봉에서의 셋업 상태 {total:,}건", flush=True)
+        for state, count in sorted(
+            SETUP_AT_DETECTION.items(), key=lambda item: -item[1]
+        ):
+            print(f"  {state:<16}{count:>8,}{count / total * 100:>7.1f}%", flush=True)
+    if ENTRY_CENSUS:
+        total = sum(ENTRY_CENSUS.values())
+        print(f"\n실행 스케일 진입 탐색 {total:,}건", flush=True)
+        for reason, count in sorted(ENTRY_CENSUS.items(), key=lambda item: -item[1]):
+            print(
+                f"  {reason:<20}{count:>8,}{count / total * 100:>7.1f}%",
+                flush=True,
+            )
+        if ENTRY_BARS:
+            ordered = sorted(ENTRY_BARS)
+            middle = ordered[len(ordered) // 2]
+            print(
+                f"탐색이 끝나기까지 지난 봉: 중앙값 {middle}, "
+                f"평균 {sum(ordered) / len(ordered):.1f}",
+                flush=True,
+            )
+        reached = sum(ENTRY_BEST_LEGS.values())
+        print(f"도달한 최대 다리 수 ({reached:,}건, 조기 종료 제외)", flush=True)
+        for legs in sorted(ENTRY_BEST_LEGS):
+            count = ENTRY_BEST_LEGS[legs]
+            print(
+                f"  {legs:>2}개{count:>12,}{count / reached * 100:>7.1f}%",
+                flush=True,
+            )
     if session is not None:
         print(f"세션 밖이라 건너뛴 평가 지점 {outside_session}", flush=True)
     if news != "none":
@@ -1061,7 +1181,8 @@ def replay(
         print(f"상위 프레임이 거부한 셋업 {vetoed}", flush=True)
     print(f"손절 거리로 거부된 셋업 {refused}", flush=True)
     if executed:
-        print(f"실행 스케일에서 소진이 안 나온 셋업 {no_chain}", flush=True)
+        print(f"탐지 시점에 이미 끝난 셋업 {stale}", flush=True)
+    print(f"실행 스케일에서 소진이 안 나온 셋업 {no_chain}", flush=True)
     if entry_model == "retrace":
         print(f"존으로 돌아오지 않은 셋업 {never_returned}", flush=True)
         print(f"해당 존이 없는 셋업 {no_zone}", flush=True)
@@ -1171,7 +1292,10 @@ async def main() -> None:
         if not execution_cache.exists():
             raise SystemExit(f"no execution cache at {execution_cache}")
         execution_bars = await fetch(
-            arguments.symbol, arguments.days, execution_cache, arguments.execution_scale
+            arguments.symbol,
+            arguments.days,
+            execution_cache,
+            scale.interval or arguments.execution_scale,
         )
     resolve_bars: tuple[CompletedOhlcvBar, ...] = ()
     resolve_scale = EXECUTION_SCALES.get(arguments.resolve_scale)
