@@ -3343,8 +3343,8 @@ MNQ 추가"라고 적는데, HLIT의 목표는 66% 하나이고 **TP1이 무엇�
 | 5b 정산 포트 | **완료** — `MySqlLiveFillSettlement` |
 | **5c 비상 청산 서비스** | 실사가 놓침 — 미착수 |
 | **5d `ProtectionContext` 구현** | 미착수 |
-| 6 라이브 스냅샷 리더 | 미착수 |
-| 7 합성 + `--live` 게이트 거부 | 미착수 |
+| 6 라이브 스냅샷 리더 | **완료** — 이미 있었고, 알고 주문 누락을 고침 |
+| 7 합성 + `--live` 게이트 거부 | 진행 중 — §31.13 |
 
 ### 목록에 없던 것 — 접합면
 
@@ -3773,3 +3773,48 @@ if order_style is OrderStyle.MARKET and terms.trigger_price is None:
 **§31.10에서 운영자가 고른 원칙(어댑터가 루프의 현실을 받아들인다)이 1번을
 가리킨다.** 다만 1번은 **게이트 두 개를 경로에 붙이는 일**을 포함하고, 그것이
 7번보다 크다.
+
+## 31.13 7번의 남은 사슬
+
+`BinanceUsdmOrderAuthoritySource` 하나면 되는 줄 알았다. 그것이 요구하는 것을
+따라가면 사슬이 이어진다.
+
+```
+--live 엔트리포인트
+  └─ 라이브 합성
+      └─ BinanceUsdmOrderAuthoritySource
+          ├─ 심볼 필터 ............ 있음 (read_instrument)
+          ├─ 명목 기준가 .......... 있음 (BinanceBookQuotes)
+          ├─ 바인딩·계정·정책 ..... 조회 가능
+          └─ 계정 설정 사실 ....... 없음
+              ├─ 레버리지 ......... 포지션 파서가 버린다
+              ├─ 마진 타입 ........ 같음
+              ├─ 포지션 모드 ...... 읽는 곳이 없다
+              └─ can_trade ........ 같음
+```
+
+**`_AUTHORITY_MAX_AGE`가 30초다.** 그래서 저장된 대조 사실로는 못 채운다.
+주문 직전에 거래소를 다시 읽어야 하고, 그것이 옳다 — 5분 전 레버리지 믿음으로
+주문을 보내면 안 된다.
+
+**`BinanceUsdmConfigurationFact`도 생산자가 없다.** 대조의 `capture` 프로토콜이
+그것을 받기만 하고, 구현이 없다. §31.2의 "잘 만들어진 섬"이 여기서도 같다.
+
+**기존 포지션 파서가 필요한 필드를 버린다.** `_position`이 `positionRisk`의
+응답에서 leverage와 marginType을 읽지 않는다. 대조에는 필요 없었기 때문이다.
+
+### 지금까지 7번에서 나온 것
+
+| 조각 | 상태 |
+|---|---|
+| `BinanceUsdmProtectionSafetyActions` | **완료** |
+| 시장가 TIF (`"NONE"`) | **완료** — 네 번째 접합면 |
+| `decide_dispatch` 배선 | **완료** |
+| `SubmissionGate` 배선 (`allow_live`) | **완료** |
+| 계정 설정 리더 | 미착수 |
+| `BinanceUsdmOrderAuthoritySource` | 미착수 |
+| 라이브 합성 | 미착수 |
+| `--live` 게이트 거부 | 미착수 |
+
+**7번은 "합성 + 엔트리포인트"가 아니었다.** 실사가 목록을 만들 때 본 것은
+`LoopPorts`의 표면이고, 그 아래로 층이 네 개 더 있었다.
