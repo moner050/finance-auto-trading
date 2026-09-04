@@ -584,7 +584,7 @@ REPLACE_NON_INCREASING = "REPLACE_NON_INCREASING"
 
 
 @dataclass(frozen=True, slots=True)
-class _ProtectionPlan:
+class ProtectionPlan:
     """Everything the stop needs, read back from what the entry left behind."""
 
     position_id: UUID
@@ -594,15 +594,21 @@ class _ProtectionPlan:
     structural_stop: Decimal
 
 
-async def _protection_plan(
-    session: AsyncSession, receipt: PaperOrderReceipt
-) -> _ProtectionPlan | None:
-    order = await session.get(PersistedOrder, receipt.order_id)
+async def protection_plan(
+    session: AsyncSession, *, order_id: UUID, filled_quantity: Decimal
+) -> ProtectionPlan | None:
+    """The stop a filled entry needs, whoever settled it.
+
+    Paper resolves fills against a bar and live reads them from the venue,
+    but what has to happen next is the same, so this takes the two facts
+    both of them have rather than one of their receipt types.
+    """
+    order = await session.get(PersistedOrder, order_id)
     if order is None:
-        raise LookupError("a settled paper order has no canonical order")
+        raise LookupError("a settled order has no canonical order")
     intent = await session.get(PersistedOrderIntent, order.order_intent_id)
     if intent is None:
-        raise LookupError("a settled paper order has no intent")
+        raise LookupError("a settled order has no intent")
     if IntentType(intent.intent_type) is not IntentType.ENTRY:
         # Only an entry opens exposure, so only an entry needs a stop behind
         # it. A protective fill closing one does not need protecting.
@@ -627,17 +633,17 @@ async def _protection_plan(
     )
     if position is None:
         raise LookupError("a settled entry left no position to protect")
-    return _ProtectionPlan(
+    return ProtectionPlan(
         position_id=position.id,
         instrument_id=order.instrument_id,
         entry_side=Side(order.side),
-        quantity=receipt.filled_quantity,
+        quantity=filled_quantity,
         structural_stop=stop,
     )
 
 
 def _protection_intent(
-    intent: OrderIntent, plan: _ProtectionPlan, now: datetime
+    intent: OrderIntent, plan: ProtectionPlan, now: datetime
 ) -> PersistedOrderIntent:
     row = _persisted_intent(intent, plan.position_id, now)
     # The stop is owed to a position, not to a signal, and the row records
@@ -805,6 +811,7 @@ def _domain_decision(row: PersistedRiskDecision, intent_id: UUID) -> RiskDecisio
 
 
 __all__ = (
+    "LEG_ROLES",
     "BoundPolicy",
     "ExecutionAccount",
     "LeaseSettings",
@@ -813,6 +820,7 @@ __all__ = (
     "MySqlPaperExecution",
     "MySqlSchedulerLease",
     "MySqlTradingControl",
+    "ProtectionPlan",
     "UnboundAccountError",
     "bound_policy",
 )
@@ -855,7 +863,7 @@ class MySqlSchedulerLease:
         return lease is not None
 
 
-_LEG_ROLES = {
+LEG_ROLES = {
     IntentType.ENTRY: ChargeLegRole.ENTRY,
     IntentType.EXIT: ChargeLegRole.EXIT_TARGET,
     IntentType.PROTECTIVE: ChargeLegRole.EXIT_STOP,
@@ -896,7 +904,7 @@ async def create_protective_order(
     session: AsyncSession,
     *,
     account: ExecutionAccount,
-    plan: _ProtectionPlan,
+    plan: ProtectionPlan,
     now: datetime,
 ) -> UUID | None:
     """Place a stop behind a position, from a fill or from a stop move.
@@ -1106,7 +1114,7 @@ class MySqlPositionActions:
                 command_id = await create_protective_order(
                     session,
                     account=self._account,
-                    plan=_ProtectionPlan(
+                    plan=ProtectionPlan(
                         position_id=position_id,
                         instrument_id=self._instrument_id,
                         entry_side=position.side,
@@ -1469,7 +1477,11 @@ class MySqlFillSettlement:
         if receipt.filled_quantity <= 0:
             return
         async with self._sessions() as session:
-            plan = await _protection_plan(session, receipt)
+            plan = await protection_plan(
+                session,
+                order_id=receipt.order_id,
+                filled_quantity=receipt.filled_quantity,
+            )
             if plan is None:
                 return
             command_id = await self._create_protective_order(session, plan, now)
@@ -1483,7 +1495,7 @@ class MySqlFillSettlement:
             await session.commit()
 
     async def _create_protective_order(
-        self, session: AsyncSession, plan: _ProtectionPlan, now: datetime
+        self, session: AsyncSession, plan: ProtectionPlan, now: datetime
     ) -> UUID | None:
         return await create_protective_order(
             session, account=self._account, plan=plan, now=now
@@ -1522,7 +1534,7 @@ class MySqlFillSettlement:
             broker_client_order_id=order.broker_client_order_id,
             side=Side(order.side),
             currency=self._account.currency,
-            leg_role=_LEG_ROLES[IntentType(intent.intent_type)],
+            leg_role=LEG_ROLES[IntentType(intent.intent_type)],
             observed_at=now,
         )
         if event is None:

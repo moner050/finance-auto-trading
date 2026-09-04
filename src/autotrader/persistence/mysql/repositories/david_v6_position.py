@@ -12,7 +12,7 @@ Almost all of it is already stored, in the tables the entry left behind:
     order -> intent -> signal -> v6 decision         the structural stop
     live protective intent                           the stop actually working
 
-That chain is not invented here. `_protection_plan` in the trader composition
+That chain is not invented here. `protection_plan` in the trader composition
 already walks the same one to find the stop when an entry fills, which is what
 says it holds.
 
@@ -24,7 +24,7 @@ market, so it is stored, one row per observation per position.
 What this deliberately does not do is guess. A position whose decision cannot
 be found has no structural stop to rebuild from, and inventing one would put a
 risk limit on record that the strategy never agreed to - the same refusal
-`_protection_plan` already makes.
+`protection_plan` already makes.
 """
 
 from __future__ import annotations
