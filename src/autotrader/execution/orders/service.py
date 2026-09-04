@@ -31,6 +31,13 @@ class OrderSubmissionContext:
     time_in_force: str
     authority_class: str
     created_at: datetime
+    # Some venues require the client order id to name the command, so the
+    # command's identity has to exist before the id is chosen. Binance USD-M
+    # refuses any other derivation: recovery reconstructs the id from the
+    # command alone, and an id naming anything else cannot be reconstructed.
+    # Absent means the factory picks one, which is what a venue that does not
+    # care leaves it as.
+    command_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if not self.broker_client_order_id.isascii() or not self.broker_client_order_id:
@@ -100,7 +107,7 @@ class OrderCommandFactory:
             canonical_payload, sort_keys=True, separators=(",", ":")
         ).encode()
         return BrokerOrderCommand(
-            id=new_uuid7(),
+            id=submission.command_id or new_uuid7(),
             order_id=order.id,
             account_id=order.account_id,
             instrument_id=order.instrument_id,

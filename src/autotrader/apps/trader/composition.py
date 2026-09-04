@@ -48,6 +48,9 @@ from autotrader.execution.reconciliation.service import (
     BrokerSnapshotReader,
     ReconciliationService,
 )
+from autotrader.integrations.brokers.binance_usdm.orders import (
+    binance_normal_client_order_id,
+)
 from autotrader.integrations.brokers.internal_paper import (
     InternalPaperBroker,
     PaperOrderReceipt,
@@ -553,13 +556,18 @@ class MySqlPaperExecution:
                 account_id=self._account.account.id,
                 currency=self._account.currency,
             )
+            command_id = new_uuid7()
+            # Chosen here rather than inside the factory: Binance
+            # USD-M requires the client order id to name the command,
+            # and recovery reconstructs it from the command alone.
             order = await OrderService(
                 store=MySqlOrderStore(session)
             ).create_from_risk_decision(
                 decision=_domain_decision(risk_decision, stored.id),
                 intent=intent,
                 submission=OrderSubmissionContext(
-                    broker_client_order_id=f"{ENTRY_PREFIX}{decision.id.hex}",
+                    broker_client_order_id=binance_normal_client_order_id(command_id),
+                    command_id=command_id,
                     owner_runtime_instance_id=self._account.runtime_instance_id,
                     fencing_token=self._account.fencing_token,
                     not_after=now + _RESERVATION_WINDOW,
@@ -811,11 +819,7 @@ def _domain_decision(row: PersistedRiskDecision, intent_id: UUID) -> RiskDecisio
 
 
 __all__ = (
-    "ADD_PREFIX",
-    "ENTRY_PREFIX",
-    "EXIT_PREFIX",
     "LEG_ROLES",
-    "STOP_PREFIX",
     "BoundPolicy",
     "ExecutionAccount",
     "LeaseSettings",
@@ -866,16 +870,6 @@ class MySqlSchedulerLease:
             await session.commit()
         return lease is not None
 
-
-# Binance accepts a client order id of at most 36 characters, and a UUID's
-# hex is 32 of them, so a prefix has at most four. `stop-` and `exit-` were
-# five: every exit this loop placed would have been refused by the adapter
-# before it reached the venue, and nothing tied the two ends together to say
-# so. `test_client_order_id_prefixes` is that tie now.
-ENTRY_PREFIX = "v6-"
-STOP_PREFIX = "st-"
-ADD_PREFIX = "add-"
-EXIT_PREFIX = "ex-"
 
 LEG_ROLES = {
     IntentType.ENTRY: ChargeLegRole.ENTRY,
@@ -964,13 +958,18 @@ async def create_protective_order(
         account_id=account.account.id,
         currency=account.currency,
     )
+    command_id = new_uuid7()
+    # Chosen here rather than inside the factory: Binance
+    # USD-M requires the client order id to name the command,
+    # and recovery reconstructs it from the command alone.
     order = await OrderService(
         store=MySqlOrderStore(session)
     ).create_from_risk_decision(
         decision=_domain_decision(risk_decision, stored.id),
         intent=intent,
         submission=OrderSubmissionContext(
-            broker_client_order_id=f"{STOP_PREFIX}{stored.id.hex}",
+            broker_client_order_id=binance_normal_client_order_id(command_id),
+            command_id=command_id,
             owner_runtime_instance_id=account.runtime_instance_id,
             fencing_token=account.fencing_token,
             not_after=now + _RESERVATION_WINDOW,
@@ -1340,13 +1339,18 @@ class MySqlPositionActions:
             account_id=self._account.account.id,
             currency=self._account.currency,
         )
+        command_id = new_uuid7()
+        # Chosen here rather than inside the factory: Binance
+        # USD-M requires the client order id to name the command,
+        # and recovery reconstructs it from the command alone.
         order = await OrderService(
             store=MySqlOrderStore(session)
         ).create_from_risk_decision(
             decision=_domain_decision(risk_decision, stored.id),
             intent=intent,
             submission=OrderSubmissionContext(
-                broker_client_order_id=f"{ADD_PREFIX}{stored.id.hex}",
+                broker_client_order_id=binance_normal_client_order_id(command_id),
+                command_id=command_id,
                 owner_runtime_instance_id=self._account.runtime_instance_id,
                 fencing_token=self._account.fencing_token,
                 not_after=now + _RESERVATION_WINDOW,
@@ -1415,13 +1419,18 @@ class MySqlPositionActions:
             account_id=self._account.account.id,
             currency=self._account.currency,
         )
+        command_id = new_uuid7()
+        # Chosen here rather than inside the factory: Binance
+        # USD-M requires the client order id to name the command,
+        # and recovery reconstructs it from the command alone.
         order = await OrderService(
             store=MySqlOrderStore(session)
         ).create_from_risk_decision(
             decision=_domain_decision(risk_decision, stored.id),
             intent=intent,
             submission=OrderSubmissionContext(
-                broker_client_order_id=f"{EXIT_PREFIX}{stored.id.hex}",
+                broker_client_order_id=binance_normal_client_order_id(command_id),
+                command_id=command_id,
                 owner_runtime_instance_id=self._account.runtime_instance_id,
                 fencing_token=self._account.fencing_token,
                 not_after=now + _RESERVATION_WINDOW,
