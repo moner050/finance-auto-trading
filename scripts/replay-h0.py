@@ -292,7 +292,7 @@ def resolve(
     breakeven_at: Decimal | None = None,
     add_at: Decimal | None = None,
     atr: Decimal | None = None,
-) -> tuple[str, int, Decimal, Decimal, Decimal]:
+) -> tuple[str, int, Decimal, Decimal, Decimal, Decimal]:
     """Walk forward until the stop or the target is touched.
 
     The horizon is in bars of whatever series is passed, so a minute series
@@ -311,23 +311,38 @@ def resolve(
     midpoint, and the result is scored against the risk the first unit
     started with - which is what the R in every other row here means.
 
-    The returned fifth value is the multiplier on the reward: one unit
-    unless the add filled, two after it did.
+    The last two returned values are the unit count and what the position
+    actually made, in price. The caller used to assume a stop-out is -1R,
+    which is true only while the stop is where it started: a stop moved to
+    the entry or to a weighted entry exits for about nothing, and scoring
+    that as a full loss made both S1 and P1 look ruinous when first run.
+
+    Profit is measured against the weighted entry and multiplied by the
+    units, because two fills at different prices make
+    `(exit - weighted) * units` the P&L and `(exit - entry) * units`
+    something else. With no add, weighted is the entry and the arithmetic
+    is the same as before.
     """
     best = worst = Decimal(0)
     units = Decimal(1)
+    weighted = entry
     added = False
     moved = False
     risk = entry - stop if side is Side.BUY else stop - entry
+
+    def realised(price: Decimal) -> Decimal:
+        move = price - weighted if side is Side.BUY else weighted - price
+        return move * units
+
     for index in range(opened + 1, min(opened + 1 + horizon, len(bars))):
         bar = bars[index]
         if side is Side.BUY:
             best = max(best, bar.high - entry)
             worst = min(worst, bar.low - entry)
             if bar.low <= stop:
-                return "loss", index, best, worst, units
+                return "loss", index, best, worst, units, realised(stop)
             if bar.high >= target:
-                return "win", index, best, worst, units
+                return "win", index, best, worst, units, realised(target)
             if not added and add_at is not None and atr is not None:
                 trigger = entry + add_at * atr
                 if bar.high >= trigger:
@@ -351,9 +366,9 @@ def resolve(
             best = max(best, entry - bar.low)
             worst = min(worst, entry - bar.high)
             if bar.high >= stop:
-                return "loss", index, best, worst, units
+                return "loss", index, best, worst, units, realised(stop)
             if bar.low <= target:
-                return "win", index, best, worst, units
+                return "win", index, best, worst, units, realised(target)
             if not added and add_at is not None and atr is not None:
                 trigger = entry - add_at * atr
                 if bar.low <= trigger:
@@ -370,7 +385,8 @@ def resolve(
             ):
                 stop = min(stop, entry)
                 moved = True
-    return "scratch", min(opened + horizon, len(bars) - 1), best, worst, units
+    last = min(opened + horizon, len(bars) - 1)
+    return "scratch", last, best, worst, units, realised(bars[last].close)
 
 
 def _nearest_zone_level(
@@ -939,7 +955,7 @@ def replay(
             reward = target - entry if setup.direction is Side.BUY else entry - target
             if risk <= 0 or reward <= 0:
                 continue
-            outcome, closed, best, worst, units = resolve(
+            outcome, closed, best, worst, units, gained = resolve(
                 series,
                 opened,
                 setup.direction,
@@ -957,19 +973,11 @@ def replay(
                     "side": setup.direction.value,
                     "outcome": outcome,
                     "r_target": float(reward / risk),
-                    # A filled add doubles what the same move is worth. The
-                    # loss stays -1R: §22.7 moves the stop to the weighted
-                    # entry as the add fills, so the second unit cannot make
-                    # the position lose more than the first one risked.
-                    "r_result": {
-                        "win": float(reward * units / risk),
-                        "loss": -1.0,
-                    }.get(
-                        outcome,
-                        float((series[closed].close - entry) * units / risk)
-                        if setup.direction is Side.BUY
-                        else float((entry - series[closed].close) * units / risk),
-                    ),
+                    # Whatever the position actually made, over the risk
+                    # the first unit started with. A stop-out is -1R only
+                    # while the stop has not moved, which is the whole
+                    # question S1 and P1 ask.
+                    "r_result": float(gained / risk),
                     "units": int(units),
                     "bars_held": closed - opened,
                     "waited": opened - cut if not executed else opened - start,
