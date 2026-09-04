@@ -362,6 +362,12 @@ def resolve(
             ):
                 stop = max(stop, entry)
                 moved = True
+            # The moved stop applies to the bar that moved it. A bar can
+            # reach the trigger and fall back through the new stop, and
+            # leaving that to the next bar is §13.3's warning exactly -
+            # taking the favourable reading of an ambiguous bar.
+            if moved and bar.low <= stop:
+                return "loss", index, best, worst, units, realised(stop)
         else:
             best = max(best, entry - bar.low)
             worst = min(worst, entry - bar.high)
@@ -385,6 +391,8 @@ def resolve(
             ):
                 stop = min(stop, entry)
                 moved = True
+            if moved and bar.high >= stop:
+                return "loss", index, best, worst, units, realised(stop)
     last = min(opened + horizon, len(bars) - 1)
     return "scratch", last, best, worst, units, realised(bars[last].close)
 
