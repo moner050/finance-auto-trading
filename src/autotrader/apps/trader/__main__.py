@@ -367,21 +367,34 @@ async def _refuse_live(alias: str) -> int:
         account_environment=resolved.account.environment,
         promotion=promotion,
         binding_id=resolved.binding_id,
-        # The loop that could place a live order is not wired. When it is,
-        # this stops being a constant and the rest of the gate still stands.
-        composition_wired=False,
+        composition_wired=_live_composition_exists(),
         today=date.today(),
     )
     if decision.allowed:
-        # Unreachable while the composition is absent, and left as a refusal
-        # rather than a fall-through: a gate whose allowed branch does
-        # something unfinished is a gate that will one day do it.
-        print("the LIVE loop is not wired yet", file=sys.stderr)
-        return 2
+        # Every start-up condition is met. Building the loop is still a
+        # separate step, and it is not taken here: what this entry point
+        # settles is whether it may be, and saying so is the whole of it
+        # until an operator asks for the run itself.
+        print(
+            "LIVE may start; run it deliberately rather than from this check.",
+            file=sys.stderr,
+        )
+        return 3
     print("LIVE cannot start:", file=sys.stderr)
     for reason in decision.reasons:
         print(f"  - {reason}", file=sys.stderr)
     return 2
+
+
+def _live_composition_exists() -> bool:
+    """Whether the loop that could place a live order is actually wired.
+
+    Imported rather than assumed. A constant would keep saying no after the
+    composition landed, and keep saying yes if it were ever removed.
+    """
+    from importlib.util import find_spec
+
+    return find_spec("autotrader.apps.trader.binance_live") is not None
 
 
 def main(argv: tuple[str, ...]) -> int:

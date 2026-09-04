@@ -25,6 +25,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy import select
@@ -104,7 +105,7 @@ async def create_emergency_close_order(
     )
 
 
-class NormalOrders:
+class NormalOrders(Protocol):
     """The part of the order service an emergency close reuses unchanged."""
 
     async def submit_locked(self, command: BrokerOrderCommand) -> BrokerWriteResult: ...

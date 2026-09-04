@@ -24,6 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
+from uuid import UUID
 
 from autotrader.domain.broker_errors import BrokerSubmissionRejected
 from autotrader.execution.orders.models import BrokerOrderCommand, CommandType
@@ -88,7 +89,7 @@ class Protection(Protocol):
         fill: EntryFill,
         authority: ProtectionAuthority,
         *,
-        placement_command_id: object,
+        placement_command_id: UUID,
         superseded_client_algo_id: str,
     ) -> ProtectionResult: ...
 
