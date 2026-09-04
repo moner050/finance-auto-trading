@@ -2,14 +2,20 @@
 
     python -m autotrader.apps.trader --account <alias> --check
     python -m autotrader.apps.trader --account <alias> --run --shadow --leverage <n>
+    python -m autotrader.apps.trader --account <alias> --run --live --leverage <n>
 
 `--check` resolves everything and reports without connecting to a venue.
 
-`--run` needs `--shadow` spelled out. It is the only mode that exists, and a
-`--run` that quietly chose one would be a flag away from choosing another;
-Paper and LIVE are sections 11.7 and 11.8, behind two Shadow and two Paper
-sessions. The Shadow loop evaluates real bars and records real decisions
-through an execution port with no broker behind it.
+`--run` needs its mode spelled out, because a `--run` that quietly chose one
+would be a flag away from choosing another. The Shadow loop evaluates real
+bars and records real decisions through an execution port with no broker
+behind it.
+
+`--live` exists and refuses. Section 11.8 puts LIVE behind two Shadow and two
+Paper sessions and §22.9 behind promotion gates, none of which have been
+passed, so it reads that state and names every reason it may not start. The
+refusal is the behaviour rather than a placeholder: it stops saying no when
+the state stops saying no. Paper is section 11.7 and is not wired here.
 
 `--for` ends the run on its own after a stated length, as in `--for 6h`.
 Without it the run continues until it is stopped. On Windows there is no
@@ -320,6 +326,64 @@ async def _report(alias: str) -> int:
     return 0
 
 
+async def _refuse_live(alias: str) -> int:
+    """Say why a LIVE run may not start, and every reason at once.
+
+    Section 11.8 puts LIVE behind two Shadow and two Paper sessions and §22.9
+    behind promotion gates, none of which have been passed. This reads the
+    state the backoffice shows rather than a flag, so it stops saying no when
+    the state stops saying no - and not before.
+    """
+    from datetime import date
+
+    from autotrader.apps.backoffice.promotion_read_model import PromotionReadModel
+    from autotrader.apps.trader.live_gate import may_start_live
+    from autotrader.apps.trader.startup import resolve_account
+
+    settings = Settings()
+    engine = create_engine(settings)
+    sessions = async_sessionmaker(bind=engine, expire_on_commit=False)
+    try:
+        try:
+            resolved = await resolve_account(
+                sessions,
+                account_alias=alias,
+                market=MARKET,
+                instrument_code=BTCUSDT.code,
+                exchange_code=BINANCE_USDM_EXCHANGE_CODE,
+            )
+        except StartupRefusedError as error:
+            # An account that cannot be resolved is a reason LIVE may not
+            # start, and it reads like one rather than like a crash.
+            print("LIVE cannot start:", file=sys.stderr)
+            print(f"  - {error}", file=sys.stderr)
+            return 2
+        promotion = await PromotionReadModel(sessions).load(today=date.today())
+    finally:
+        await engine.dispose()
+
+    decision = may_start_live(
+        settings=settings,
+        account_environment=resolved.account.environment,
+        promotion=promotion,
+        binding_id=resolved.binding_id,
+        # The loop that could place a live order is not wired. When it is,
+        # this stops being a constant and the rest of the gate still stands.
+        composition_wired=False,
+        today=date.today(),
+    )
+    if decision.allowed:
+        # Unreachable while the composition is absent, and left as a refusal
+        # rather than a fall-through: a gate whose allowed branch does
+        # something unfinished is a gate that will one day do it.
+        print("the LIVE loop is not wired yet", file=sys.stderr)
+        return 2
+    print("LIVE cannot start:", file=sys.stderr)
+    for reason in decision.reasons:
+        print(f"  - {reason}", file=sys.stderr)
+    return 2
+
+
 def main(argv: tuple[str, ...]) -> int:
     alias = _value(argv, "--account")
     if alias is None:
@@ -330,13 +394,16 @@ def main(argv: tuple[str, ...]) -> int:
     if "--run" not in argv:
         print(USAGE, file=sys.stderr)
         return 2
-    # Shadow is the only mode that exists, and naming it is deliberate: a
-    # `--run` that quietly chose one would be a flag away from choosing
-    # another.
+    # Naming the mode is deliberate: a `--run` that quietly chose one would
+    # be a flag away from choosing another.
+    if "--live" in argv:
+        if "--shadow" in argv:
+            print("--shadow and --live name different runs", file=sys.stderr)
+            return 2
+        return asyncio.run(_refuse_live(alias))
     if "--shadow" not in argv:
         print(
-            "only --shadow runs; Paper and LIVE are sections 11.7 and 11.8, "
-            "behind two Shadow and two Paper sessions.",
+            "--run needs --shadow or --live; Paper is section 11.7.",
             file=sys.stderr,
         )
         return 2
