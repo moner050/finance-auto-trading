@@ -877,7 +877,7 @@ _CREATE: tuple[str, ...] = (
     result JSON,
     PRIMARY KEY (placement_command_id),
     CONSTRAINT uq_binance_usdm_algo_order_client_id UNIQUE (client_algo_id),
-    CONSTRAINT ck_binance_usdm_algo_order_state CHECK (state IN ('PREPARED', 'AMBIGUOUS', 'ACTIVE', 'REJECTED', 'EMERGENCY_CLOSED', 'UNKNOWN')),
+    CONSTRAINT ck_binance_usdm_algo_order_state CHECK (state IN ('PREPARED', 'AMBIGUOUS', 'ACTIVE', 'REJECTED', 'EMERGENCY_CLOSED', 'UNKNOWN', 'SUPERSEDED')),
     CONSTRAINT ck_binance_usdm_algo_order_scope CHECK (side IN ('BUY', 'SELL') AND symbol = 'BTCUSDT'),
     CONSTRAINT ck_binance_usdm_algo_order_values CHECK (OCTET_LENGTH(request_digest) = 32 AND OCTET_LENGTH(request_body) > 0 AND CHAR_LENGTH(TRIM(client_algo_id)) > 0 AND first_fill_quantity > 0 AND cumulative_quantity_before >= 0 AND average_fill_price > 0 AND tick_size > 0 AND trigger_price > 0),
     CONSTRAINT ck_binance_usdm_algo_order_window CHECK (filled_at < protection_deadline AND prepared_at >= filled_at),

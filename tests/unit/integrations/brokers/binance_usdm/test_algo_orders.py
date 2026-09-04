@@ -14,6 +14,7 @@ from autotrader.integrations.brokers.binance_usdm.algo_orders import (
     BinanceUsdmAlgoOrderClaim,
     BinanceUsdmAlgoOrderRecord,
     BinanceUsdmAlgoOrderState,
+    BinanceUsdmProtectionNotMoved,
     BinanceUsdmProtectionRejected,
     BinanceUsdmProtectionService,
     EntryFill,
@@ -423,3 +424,297 @@ async def test_invalid_provider_acknowledgement_remains_ambiguous() -> None:
 
     row = store.rows[binance_protection_client_algo_id(fill.entry_command_id)]
     assert row.state is BinanceUsdmAlgoOrderState.AMBIGUOUS
+
+
+# --- moving a stop, section 31.3 item 3 -----------------------------------
+#
+# The invariant every one of these is about: a position that has a working
+# stop never loses it because the system tried to improve it.
+
+
+def moved_response(
+    fill: EntryFill, placement_command_id: object, trigger_price: str
+) -> BrokerResponse:
+    return BrokerResponse(
+        status=200,
+        body=json.dumps(
+            {
+                "algoId": 2146761,
+                "clientAlgoId": binance_protection_client_algo_id(placement_command_id),
+                "algoType": "CONDITIONAL",
+                "orderType": "STOP_MARKET",
+                "symbol": "BTCUSDT",
+                "side": ("SELL" if fill.side is Side.BUY else "BUY"),
+                "positionSide": "BOTH",
+                "algoStatus": "NEW",
+                "triggerPrice": trigger_price,
+                "workingType": "MARK_PRICE",
+                "closePosition": True,
+                "priceProtect": False,
+                "reduceOnly": False,
+            }
+        ).encode(),
+    )
+
+
+async def with_working_stop(store: MemoryStore, sender: Sender, fill: EntryFill) -> str:
+    """Place the first stop so there is something to supersede."""
+    emergency = EmergencyOrders([])
+    await make_service(store, sender, emergency, SafetyActions()).protect_first_fill(
+        fill, risk_authority(side=fill.side)
+    )
+    client_algo_id = binance_protection_client_algo_id(fill.entry_command_id)
+    assert store.rows[client_algo_id].state is BinanceUsdmAlgoOrderState.ACTIVE
+    return client_algo_id
+
+
+@pytest.mark.asyncio
+async def test_move_stop_places_before_it_withdraws() -> None:
+    """The order is the design: the position is never without a stop."""
+    fill = entry_fill()
+    store = MemoryStore()
+    placement = new_uuid7()
+    sender = Sender(
+        store,
+        [
+            algo_response(fill, "59000"),
+            moved_response(fill, placement, "59500"),
+            BrokerResponse(status=200, body=b"{}"),
+        ],
+    )
+    first = await with_working_stop(store, sender, fill)
+
+    result = await make_service(
+        store, sender, EmergencyOrders([]), SafetyActions()
+    ).move_stop(
+        fill,
+        risk_authority(stop_price=Decimal("59500.04")),
+        placement_command_id=placement,
+        superseded_client_algo_id=first,
+    )
+
+    assert result.state is BinanceUsdmAlgoOrderState.ACTIVE
+    assert result.client_algo_id == binance_protection_client_algo_id(placement)
+    place, cancel = sender.calls[1], sender.calls[2]
+    assert place.method == "POST"
+    assert cancel.method == "DELETE"
+    assert binance_protection_client_algo_id(placement) in (place.body or b"").decode()
+    assert first in cancel.path
+    assert store.rows[first].state is BinanceUsdmAlgoOrderState.SUPERSEDED
+    assert (
+        store.rows[binance_protection_client_algo_id(placement)].state
+        is BinanceUsdmAlgoOrderState.ACTIVE
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_failed_move_leaves_the_working_stop_alone() -> None:
+    """And never closes the position: it is protected, only not improved."""
+    fill = entry_fill()
+    store = MemoryStore()
+    placement = new_uuid7()
+    sender = Sender(
+        store,
+        [algo_response(fill, "59000"), BrokerResponse(status=503, body=b"")],
+    )
+    first = await with_working_stop(store, sender, fill)
+    emergency = EmergencyOrders([])
+    safety = SafetyActions()
+
+    with pytest.raises(BinanceUsdmProtectionNotMoved):
+        await make_service(store, sender, emergency, safety).move_stop(
+            fill,
+            risk_authority(stop_price=Decimal("59500.04")),
+            placement_command_id=placement,
+            superseded_client_algo_id=first,
+        )
+
+    assert store.rows[first].state is BinanceUsdmAlgoOrderState.ACTIVE
+    assert (
+        store.rows[binance_protection_client_algo_id(placement)].state
+        is BinanceUsdmAlgoOrderState.AMBIGUOUS
+    )
+    assert emergency.submitted == []
+    assert safety.halted == []
+    assert len(sender.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_move_leaves_the_working_stop_alone() -> None:
+    fill = entry_fill()
+    store = MemoryStore()
+    placement = new_uuid7()
+    sender = Sender(
+        store,
+        [
+            algo_response(fill, "59000"),
+            BrokerResponse(status=400, body=json.dumps({"code": -4014}).encode()),
+        ],
+    )
+    first = await with_working_stop(store, sender, fill)
+    emergency = EmergencyOrders([])
+
+    with pytest.raises(BinanceUsdmProtectionNotMoved):
+        await make_service(store, sender, emergency, SafetyActions()).move_stop(
+            fill,
+            risk_authority(stop_price=Decimal("59500.04")),
+            placement_command_id=placement,
+            superseded_client_algo_id=first,
+        )
+
+    assert store.rows[first].state is BinanceUsdmAlgoOrderState.ACTIVE
+    assert (
+        store.rows[binance_protection_client_algo_id(placement)].state
+        is BinanceUsdmAlgoOrderState.REJECTED
+    )
+    assert emergency.submitted == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_withdrawal_keeps_the_new_stop() -> None:
+    """Two closePosition stops is over-protected, which is safe. Rolling the
+    new one back to keep the count at one would trade that for exposed."""
+    fill = entry_fill()
+    store = MemoryStore()
+    placement = new_uuid7()
+    sender = Sender(
+        store,
+        [
+            algo_response(fill, "59000"),
+            moved_response(fill, placement, "59500"),
+            BrokerResponse(status=503, body=b""),
+        ],
+    )
+    first = await with_working_stop(store, sender, fill)
+
+    result = await make_service(
+        store, sender, EmergencyOrders([]), SafetyActions()
+    ).move_stop(
+        fill,
+        risk_authority(stop_price=Decimal("59500.04")),
+        placement_command_id=placement,
+        superseded_client_algo_id=first,
+    )
+
+    assert result.state is BinanceUsdmAlgoOrderState.ACTIVE
+    assert store.rows[first].state is BinanceUsdmAlgoOrderState.AMBIGUOUS
+    assert (
+        store.rows[binance_protection_client_algo_id(placement)].state
+        is BinanceUsdmAlgoOrderState.ACTIVE
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [-2011, -2013])
+async def test_a_stop_the_venue_no_longer_has_counts_as_withdrawn(code: int) -> None:
+    fill = entry_fill()
+    store = MemoryStore()
+    placement = new_uuid7()
+    sender = Sender(
+        store,
+        [
+            algo_response(fill, "59000"),
+            moved_response(fill, placement, "59500"),
+            BrokerResponse(status=400, body=json.dumps({"code": code}).encode()),
+        ],
+    )
+    first = await with_working_stop(store, sender, fill)
+
+    await make_service(store, sender, EmergencyOrders([]), SafetyActions()).move_stop(
+        fill,
+        risk_authority(stop_price=Decimal("59500.04")),
+        placement_command_id=placement,
+        superseded_client_algo_id=first,
+    )
+
+    assert store.rows[first].state is BinanceUsdmAlgoOrderState.SUPERSEDED
+
+
+@pytest.mark.asyncio
+async def test_only_an_active_stop_may_be_superseded() -> None:
+    """Otherwise this places a second stop behind a position whose protection
+    nobody has established."""
+    fill = entry_fill()
+    store = MemoryStore()
+    sender = Sender(store, [algo_response(fill, "59000")])
+    first = await with_working_stop(store, sender, fill)
+    await store.finish(first, state=BinanceUsdmAlgoOrderState.AMBIGUOUS, result=None)
+
+    with pytest.raises(BinanceUsdmProtectionNotMoved):
+        await make_service(
+            store, sender, EmergencyOrders([]), SafetyActions()
+        ).move_stop(
+            fill,
+            risk_authority(stop_price=Decimal("59500.04")),
+            placement_command_id=new_uuid7(),
+            superseded_client_algo_id=first,
+        )
+    assert len(sender.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_move_cannot_reuse_the_first_stops_identity() -> None:
+    fill = entry_fill()
+    store = MemoryStore()
+    sender = Sender(store, [algo_response(fill, "59000")])
+    first = await with_working_stop(store, sender, fill)
+
+    with pytest.raises(BrokerWriteDisabled):
+        await make_service(
+            store, sender, EmergencyOrders([]), SafetyActions()
+        ).move_stop(
+            fill,
+            risk_authority(stop_price=Decimal("59500.04")),
+            placement_command_id=fill.entry_command_id,
+            superseded_client_algo_id=first,
+        )
+    assert len(sender.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_stop_belonging_to_another_entry_is_refused() -> None:
+    fill = entry_fill()
+    stranger = entry_fill()
+    store = MemoryStore()
+    sender = Sender(store, [algo_response(stranger, "59000")])
+    theirs = await with_working_stop(store, sender, stranger)
+
+    with pytest.raises(BrokerWriteDisabled):
+        await make_service(
+            store, sender, EmergencyOrders([]), SafetyActions()
+        ).move_stop(
+            fill,
+            risk_authority(stop_price=Decimal("59500.04")),
+            placement_command_id=new_uuid7(),
+            superseded_client_algo_id=theirs,
+        )
+    assert len(sender.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_superseded_stop_is_never_recovered() -> None:
+    """It was cancelled on purpose. Querying the venue would ask about an order
+    this system withdrew, and fail-safing would close a protected position."""
+    fill = entry_fill()
+    store = MemoryStore()
+    placement = new_uuid7()
+    sender = Sender(
+        store,
+        [
+            algo_response(fill, "59000"),
+            moved_response(fill, placement, "59500"),
+            BrokerResponse(status=200, body=b"{}"),
+        ],
+    )
+    first = await with_working_stop(store, sender, fill)
+    service = make_service(store, sender, EmergencyOrders([]), SafetyActions())
+    await service.move_stop(
+        fill,
+        risk_authority(stop_price=Decimal("59500.04")),
+        placement_command_id=placement,
+        superseded_client_algo_id=first,
+    )
+
+    with pytest.raises(BinanceUsdmProtectionNotMoved):
+        await service.recover_by_client_algo_id(first)
+    assert len(sender.calls) == 3

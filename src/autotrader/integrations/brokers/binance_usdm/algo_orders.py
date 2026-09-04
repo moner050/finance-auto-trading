@@ -37,6 +37,15 @@ _AUTHORITATIVE_POST_ERROR_RANGES = (
 )
 
 
+class BinanceUsdmProtectionNotMoved(RuntimeError):
+    """The stop could not be moved, and the one already working stayed.
+
+    Distinct from `BinanceUsdmProtectionUnknown` on purpose. Unknown means
+    nobody can say whether the position is protected. This means it is - by
+    the stop that was already there - and only the improvement failed.
+    """
+
+
 class BinanceUsdmProtectionUnknown(RuntimeError):
     """Protection is not proven and the algo order must never be re-posted."""
 
@@ -56,6 +65,10 @@ class BinanceUsdmAlgoOrderState(StrEnum):
     REJECTED = "REJECTED"
     EMERGENCY_CLOSED = "EMERGENCY_CLOSED"
     UNKNOWN = "UNKNOWN"
+    # A later stop took over and this one was cancelled at the venue. It is
+    # terminal and it carries no result: the protection it stood for now
+    # lives in the record that replaced it.
+    SUPERSEDED = "SUPERSEDED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,6 +373,156 @@ class BinanceUsdmProtectionService:
             ) from None
         return await self._accept_post_response(record, response)
 
+    async def move_stop(
+        self,
+        fill: EntryFill,
+        authority: V6RiskAuthority,
+        *,
+        placement_command_id: UUID,
+        superseded_client_algo_id: str,
+    ) -> ProtectionResult:
+        """Place the new stop first, then withdraw the one it replaces.
+
+        The order is the whole design. Section 22.7 moves the stop while a
+        position is open, and the position is only ever unprotected if the
+        old stop is withdrawn before the new one exists. Placing first means
+        the failure modes are: one stop (nothing happened), or two. Two is
+        safe here in a way it would not be for an ordinary order - both are
+        `closePosition`, so the first to trigger closes the position and the
+        second finds nothing to close. It cannot flip the position short.
+
+        **Nothing in here fail-safes.** `protect_first_fill` closes the
+        position when it cannot place a stop, because the alternative is an
+        unprotected position. Here the alternative is the stop that is
+        already working, so a failure leaves it alone and says so. Closing a
+        protected position because an improvement failed would be the more
+        expensive mistake, and it would be one this system chose.
+        """
+        if type(fill) is not EntryFill:
+            raise TypeError("exact Binance USD-M EntryFill is required")
+        fill.__post_init__()
+        _uuid7(placement_command_id, "placement_command_id")
+        _client_algo_id(superseded_client_algo_id)
+        if placement_command_id == fill.entry_command_id:
+            # That id belongs to the first stop. A move that reused it would
+            # claim the row already holding the stop it means to replace.
+            raise BrokerWriteDisabled("a moved Binance USD-M stop needs its own id")
+
+        working = await self._store.load_by_client_algo_id(superseded_client_algo_id)
+        if type(working) is not BinanceUsdmAlgoOrderRecord:
+            raise BinanceUsdmProtectionNotMoved(
+                "Binance USD-M superseded protection record is unavailable"
+            )
+        working.validate()
+        if working.state is not BinanceUsdmAlgoOrderState.ACTIVE:
+            # Only a stop known to be working may be replaced. Anything else
+            # and this would place a second stop behind a position whose
+            # protection nobody has established.
+            raise BinanceUsdmProtectionNotMoved(
+                "Binance USD-M protection to supersede is not active"
+            )
+        if working.entry_fill.entry_command_id != fill.entry_command_id:
+            raise BrokerWriteDisabled("Binance USD-M stop belongs to another entry")
+
+        trigger_price = _validate_risk_authority(fill, authority)
+        request = build_binance_usdm_protection_request(
+            fill, trigger_price, placement_command_id
+        )
+        now = _utc(self._clock(), "protection clock")
+        if now < fill.filled_at:
+            raise BrokerWriteDisabled("Binance USD-M protection clock predates fill")
+        prepared = BinanceUsdmAlgoOrderRecord.prepared(
+            fill=fill,
+            trigger_price=trigger_price,
+            request=request,
+            prepared_at=now,
+            placement_command_id=placement_command_id,
+        )
+        claim = await self._store.prepare(prepared)
+        if type(claim) is not BinanceUsdmAlgoOrderClaim:
+            raise BinanceUsdmProtectionUnknown(
+                "Binance USD-M durable protection claim is invalid"
+            )
+        record = claim.record
+        if not claim.acquired:
+            return await self._existing_or_recover(record)
+
+        try:
+            response = await self._sender.send(request)
+        except asyncio.CancelledError, KeyboardInterrupt, SystemExit:
+            await self._mark_ambiguous(record.client_algo_id)
+            raise
+        except Exception:
+            await self._mark_ambiguous(record.client_algo_id)
+            raise BinanceUsdmProtectionNotMoved(
+                "Binance USD-M stop move outcome is unknown"
+            ) from None
+
+        placed = await self._accept_move_response(record, response)
+        await self._withdraw(superseded_client_algo_id)
+        return placed
+
+    async def _accept_move_response(
+        self,
+        record: BinanceUsdmAlgoOrderRecord,
+        response: BrokerResponse,
+    ) -> ProtectionResult:
+        """`_accept_post_response` without the emergency close.
+
+        An ambiguous placement here leaves a record nobody can resolve and a
+        position that is still protected by the old stop. Recovery reads the
+        record later; the position needs nothing in the meantime.
+        """
+        if (
+            response.status == 408
+            or response.status >= 500
+            or (
+                400 <= response.status < 500
+                and not _post_response_is_authoritative_rejection(response)
+            )
+        ):
+            await self._mark_ambiguous(record.client_algo_id)
+            raise BinanceUsdmProtectionNotMoved(
+                "Binance USD-M stop move outcome is unknown"
+            )
+        if 400 <= response.status < 500:
+            await self._store.finish(
+                record.client_algo_id,
+                state=BinanceUsdmAlgoOrderState.REJECTED,
+                result=None,
+            )
+            raise BinanceUsdmProtectionNotMoved("Binance USD-M stop move was rejected")
+        return await self._accept_post_response(record, response)
+
+    async def _withdraw(self, client_algo_id: str) -> None:
+        """Cancel the superseded stop, and never undo the new one if it fails.
+
+        A failed withdrawal leaves two working stops. Both are
+        `closePosition`, so the position is over-protected rather than
+        exposed, and reconciliation finds the extra one. Rolling the new stop
+        back to keep the count at one would trade a safe state for an
+        exposed one.
+        """
+        request = build_binance_usdm_protection_cancel(client_algo_id)
+        try:
+            response = await self._sender.send(request)
+        except asyncio.CancelledError, KeyboardInterrupt, SystemExit:
+            await self._mark_ambiguous(client_algo_id)
+            raise
+        except Exception:
+            await self._mark_ambiguous(client_algo_id)
+            return
+        if response.status == 200 or _is_algo_order_absent(response):
+            # Absent is the answer this wanted: it triggered, it expired, or
+            # a previous attempt already withdrew it.
+            await self._store.finish(
+                client_algo_id,
+                state=BinanceUsdmAlgoOrderState.SUPERSEDED,
+                result=None,
+            )
+            return
+        await self._mark_ambiguous(client_algo_id)
+
     async def recover_by_client_algo_id(self, client_algo_id: str) -> ProtectionResult:
         _client_algo_id(client_algo_id)
         record = await self._store.load_by_client_algo_id(client_algo_id)
@@ -374,6 +537,13 @@ class BinanceUsdmProtectionService:
         }:
             assert type(record.result) is ProtectionResult
             return record.result
+        if record.state is BinanceUsdmAlgoOrderState.SUPERSEDED:
+            # Deliberately withdrawn once a later stop took over. Querying
+            # the venue would ask about an order this system cancelled, and
+            # fail-safing would close a position that is protected.
+            raise BinanceUsdmProtectionNotMoved(
+                "Binance USD-M protection was superseded by a later stop"
+            )
         if record.state is BinanceUsdmAlgoOrderState.UNKNOWN:
             return await self._fail_safe(
                 record,
@@ -630,6 +800,30 @@ class BinanceUsdmProtectionService:
 def binance_protection_client_algo_id(entry_command_id: UUID) -> str:
     _uuid7(entry_command_id, "entry_command_id")
     return f"v6s-{entry_command_id.hex}"
+
+
+def _is_algo_order_absent(response: BrokerResponse) -> bool:
+    """The venue says there is no such algo order to cancel."""
+    if response.status not in {400, 404}:
+        return False
+    try:
+        payload = _object(_json(response))
+    except ValueError:
+        return False
+    return payload.get("code") in {-2011, -2013}
+
+
+def build_binance_usdm_protection_cancel(client_algo_id: str) -> BrokerRequest:
+    """Withdraw one protective stop by the id this system gave it.
+
+    A DELETE carries its parameters in the query string, which is where the
+    transport signs everything that is not a POST.
+    """
+    _client_algo_id(client_algo_id)
+    return BrokerRequest(
+        method="DELETE",
+        path="/fapi/v1/algoOrder?" + urlencode((("clientAlgoId", client_algo_id),)),
+    )
 
 
 def build_binance_usdm_protection_request(

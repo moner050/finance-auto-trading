@@ -523,8 +523,8 @@ class BinanceUsdmAlgoOrderRow(CoreBase):
     __table_args__ = (
         UniqueConstraint("client_algo_id", name="uq_binance_usdm_algo_order_client_id"),
         CheckConstraint(
-            "state IN ('PREPARED', 'AMBIGUOUS', 'ACTIVE', "
-            "'REJECTED', 'EMERGENCY_CLOSED', 'UNKNOWN')",
+            "state IN ('PREPARED', 'AMBIGUOUS', 'ACTIVE', 'REJECTED', "
+            "'EMERGENCY_CLOSED', 'UNKNOWN', 'SUPERSEDED')",
             name="ck_binance_usdm_algo_order_state",
         ),
         CheckConstraint(
