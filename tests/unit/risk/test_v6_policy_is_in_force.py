@@ -101,11 +101,16 @@ def test_the_engine_will_not_size_without_a_policy() -> None:
 
 
 def test_the_leverage_ceiling_is_not_a_policy_setting() -> None:
-    """Section 21 approves seven, and a policy row that could raise it would
-    turn an approved limit into a default."""
+    """A policy row that could raise it would turn a ceiling into a default.
+
+    The number itself is the operator's and has moved once already, from seven
+    to fifty on 2026-09-04, so this asserts the shape rather than the value:
+    one over the ceiling is refused, and no policy field can change where the
+    ceiling is.
+    """
     policy = _policy(V6Market.BINANCE_USDM)
 
-    assert MAX_LEVERAGE == 7
+    assert MAX_LEVERAGE > 0
     assert (
         "BINANCE_LEVERAGE_LIMIT"
         in evaluate_v6_risk(

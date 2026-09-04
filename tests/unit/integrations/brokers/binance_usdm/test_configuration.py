@@ -17,6 +17,7 @@ from autotrader.integrations.brokers.binance_usdm.configuration import (
     verify_binance_usdm_configuration,
 )
 from autotrader.integrations.brokers.common import BrokerRequest, BrokerResponse
+from autotrader.risk.v6 import MAX_LEVERAGE
 
 AS_OF = datetime(2026, 8, 24, 15, 30, tzinfo=UTC)
 
@@ -120,7 +121,7 @@ def _key_evidence(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("leverage", (1, 7))
+@pytest.mark.parametrize("leverage", (1, MAX_LEVERAGE))
 async def test_exact_one_way_isolated_auto_add_off_and_leverage_are_ready(
     leverage: int,
 ) -> None:
@@ -154,7 +155,7 @@ async def test_exact_one_way_isolated_auto_add_off_and_leverage_are_ready(
         (_Reader(margin_type="CROSSED"), "MARGIN_TYPE_NOT_ISOLATED"),
         (_Reader(auto_add=True), "AUTO_ADD_MARGIN_ENABLED"),
         (_Reader(leverage=0), "LEVERAGE_OUT_OF_RANGE"),
-        (_Reader(leverage=8), "LEVERAGE_OUT_OF_RANGE"),
+        (_Reader(leverage=MAX_LEVERAGE + 1), "LEVERAGE_OUT_OF_RANGE"),
     ),
 )
 async def test_unsafe_provider_configuration_is_blocked(
@@ -222,7 +223,7 @@ async def test_unowned_or_unexpected_exposure_is_blocked(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("expected_leverage", (0, 8))
+@pytest.mark.parametrize("expected_leverage", (0, MAX_LEVERAGE + 1))
 async def test_invalid_expected_leverage_fails_before_any_read(
     expected_leverage: int,
 ) -> None:

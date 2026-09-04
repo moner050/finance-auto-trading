@@ -21,6 +21,7 @@ from autotrader.integrations.brokers.common import (
     BrokerWriteDisabled,
     writes_to_a_venue,
 )
+from autotrader.risk.v6 import MAX_LEVERAGE
 
 _SYMBOL = "BTCUSDT"
 _STRATEGY_VERSION = "david-trullas-v6.0"
@@ -790,7 +791,7 @@ def _validate_entry_authority(
 ) -> None:
     if (
         type(authority.expected_leverage) is not int
-        or not 1 <= authority.expected_leverage <= 7
+        or not 1 <= authority.expected_leverage <= MAX_LEVERAGE
         or type(authority.verified_leverage) is not int
         or authority.verified_leverage != authority.expected_leverage
         or not _fresh(authority.leverage_verified_at, now)

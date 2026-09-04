@@ -5442,3 +5442,75 @@ systemd 유닛이든 무엇이든 — Windows 예약 작업은 버려질 작업�
 **이 기계에 Docker가 없어 `docker compose config`를 못 돌렸다.** YAML 파서로
 병합과 서비스 목록·command·restart·환경 키만 확인했다. **보간과 `depends_on`
 해석은 실제 배포에서 처음 검증된다.**
+
+## 33.25 레버리지 상한 7 → 50 (2026-09-04, 운영자 지시)
+
+### 7은 어디서 왔나
+
+`risk/v6.py`의 주석이 *"Section 21 approves seven"* 이라고 적고 있었다.
+**확인해 보니 저자 문서의 §21이 아니다** — 그 절은 "Cyborg의 큰 구간 판정과
+25·50·66 레벨"이고 레버리지를 다루지 않는다.
+
+실제 출처는 **2026-08-25 코어 재구축 계획서**다.
+
+> 승인 한도 표시 — 1거래 1%, **레버리지 7**, 세션 거래 8, KRW 1,000,000 / USD
+> 2,000 / 2,000 USDT. 모두 코드에서 읽는다.
+
+즉 **프로젝트가 스스로 정한 운영 한도**이지 A0 규칙이 아니다. 운영자가 바꿀 수
+있는 값이고, 바꿨다. 코드 주석의 출처 표기도 고쳤다.
+
+### 문서가 레버리지에 대해 말하는 것 — 남겨 둔다
+
+바꾸되 아래를 지운 것은 아니다.
+
+- §16.4: 저자 본인이 *"대회 수익률은 **레버리지 산물**이며 실전 포트폴리오에
+  적용 불가"* 라고 말한다.
+- §18.2: *"실제 위험률 — 일반 교육 원칙과 대회 레버리지 운용을 분리해야 하며
+  **정확값은 불명**"* (권위 A0/C, 신뢰도 LOW).
+- §22: *"**성과 수치를 전략 파라미터로 만들지 말 것.** 대회 수익률·추정 MDD·추정
+  승률을 사용해 **레버리지나 위험률을 역산하면** 생존편향과 경로 의존성이 그대로
+  유입된다."*
+
+**이 상수가 강제할 수 있는 것이 아니다.** 기록해 두는 것까지가 코드가 할 일이다.
+
+### 올려도 포지션 크기는 안 변한다 — 이게 핵심이다
+
+`evaluate_v6_risk`에서 수량은 이렇게 나온다.
+
+```python
+risk_budget = min(session_start_equity, current_equity) * risk_fraction
+per_unit_loss = stop_distance + cost_per_unit
+raw_quantity = risk_budget / per_unit_loss
+```
+
+**레버리지가 없다.** 이 모듈에서 레버리지는 오직 거부 조건으로만 등장한다
+(`request.leverage > MAX_LEVERAGE → BINANCE_LEVERAGE_LIMIT`).
+
+그래서 7 → 50이 바꾸는 것은 **거래당 위험이 아니라 증거금**이고, 따라서
+**청산가가 손절가에서 얼마나 가까운지**다. 위험은 *"청산이 손절 안쪽으로
+들어오는 것"* — 그 순간부터 손실을 묶는 것은 손절이 아니라 청산이다.
+**그 검사는 아직 코드에 없다.**
+
+### 부수적으로 찾은 것 — 같은 한도가 네 군데에 따로 박혀 있었다
+
+| 위치 | 형태 |
+|---|---|
+| `risk/v6.py:44` | `MAX_LEVERAGE = 7` |
+| `integrations/.../configuration.py:144` | `if not 1 <= leverage <= 7` |
+| `integrations/.../configuration.py:73` | `not 1 <= expected_leverage <= 7`, *"one through seven"* |
+| `integrations/.../orders.py:793` | `not 1 <= authority.expected_leverage <= 7` |
+
+**하나만 고쳤으면 나머지 셋이 7에 머물러 조용히 거부했을 것이다.** 넷 다
+`MAX_LEVERAGE`를 읽게 했고, 테스트도 값(`8`)이 아니라 `MAX_LEVERAGE + 1`에
+묶었다 — 다음에 이 숫자가 움직여도 테스트가 따라온다.
+
+`integrations`가 `risk`를 임포트하는 것은 경계 검사가 금지하지 않는다
+(`check-import-boundaries.py`는 `risk`가 인프라를 임포트하는 것을 막는다).
+
+### 바뀌지 않은 것
+
+**기본값은 그대로 3이다.** compose의 `TRADER_LEVERAGE:-3`도, 돌고 있는 섀도의
+`--leverage 3`도 그대로다. **상한이지 설정이 아니다** — 주석의 그 문장은 여전히
+맞는다.
+
+게이트: ruff · import 경계 · **pytest 2,283 passed / 258 skipped / 0 failed**.

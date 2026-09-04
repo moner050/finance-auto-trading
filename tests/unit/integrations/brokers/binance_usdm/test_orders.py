@@ -32,6 +32,7 @@ from autotrader.integrations.brokers.common import (
     BrokerResponse,
     BrokerWriteDisabled,
 )
+from autotrader.risk.v6 import MAX_LEVERAGE
 from autotrader.shared.ids import new_uuid7
 
 NOW = datetime(2026, 8, 24, 12, 0, 0, tzinfo=UTC)
@@ -396,7 +397,13 @@ async def test_exchange_filters_fail_closed(
     ("changes", "message"),
     [
         ({"expected_leverage": 0, "verified_leverage": 0}, "leverage"),
-        ({"expected_leverage": 8, "verified_leverage": 8}, "leverage"),
+        (
+            {
+                "expected_leverage": MAX_LEVERAGE + 1,
+                "verified_leverage": MAX_LEVERAGE + 1,
+            },
+            "leverage",
+        ),
         ({"expected_leverage": 3, "verified_leverage": 2}, "leverage"),
         (
             {"leverage_verified_at": NOW - timedelta(seconds=31)},

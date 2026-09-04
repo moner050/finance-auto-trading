@@ -39,9 +39,25 @@ SESSION_TRADE_UPPER_BOUND = 8
 # the document's governing principle protects.
 STOP_DISTANCE_MINIMUM_ATR = Decimal("0.40")
 STOP_DISTANCE_MAXIMUM_ATR = Decimal("1.50")
-# A ceiling, not a setting. Section 21 approves seven for Binance USD-M, and a
-# policy row that could raise it would turn the approved limit into a default.
-MAX_LEVERAGE = 7
+# A ceiling, not a setting. A policy row that could raise it would turn the
+# approved limit into a default, so it lives here and the back office reads it.
+#
+# Raised from seven to fifty on the operator's instruction, 2026-09-04. Seven
+# was this project's approved ceiling (the 2026-08-25 plan lists it beside the
+# 1% per-trade and 8-trades-a-session limits), not a number from the author's
+# document - section 21 there is about Cyborg levels and says nothing about
+# leverage. What the document does say is that his contest returns were "강한
+# 레버리지의 결과" and must not be copied to an ordinary account, and that
+# performance figures must never be reverse-engineered into a leverage or risk
+# setting. Neither is a limit this constant can enforce.
+#
+# What raising it does NOT do: change position size. Quantity comes from
+# `risk_budget / per_unit_loss`, and `risk_budget` is equity times the policy's
+# risk fraction. Leverage appears in this module only as the refusal below. It
+# decides margin, and therefore how close the liquidation price sits to the
+# stop - the hazard is a liquidation inside the stop, where the stop is no
+# longer what bounds the loss.
+MAX_LEVERAGE = 50
 
 # What the setup grade is allowed to decide.
 #

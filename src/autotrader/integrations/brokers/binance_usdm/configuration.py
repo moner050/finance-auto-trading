@@ -10,6 +10,7 @@ from autotrader.integrations.brokers.binance_usdm.account import (
     BinanceUsdmAccountSnapshot,
 )
 from autotrader.integrations.brokers.common import BrokerRequest, BrokerResponse
+from autotrader.risk.v6 import MAX_LEVERAGE
 
 _SYMBOL = "BTCUSDT"
 _KEY_EVIDENCE_MAXIMUM_AGE = timedelta(days=1)
@@ -69,8 +70,10 @@ async def verify_binance_usdm_configuration(
         raise TypeError("Binance USD-M account snapshot must be exact")
     if type(api_key_evidence) is not BinanceUsdmApiKeyEvidence:
         raise TypeError("Binance USD-M API key evidence must be exact")
-    if type(expected_leverage) is not int or not 1 <= expected_leverage <= 7:
-        raise ValueError("Binance USD-M expected leverage must be one through seven")
+    if type(expected_leverage) is not int or not 1 <= expected_leverage <= MAX_LEVERAGE:
+        raise ValueError(
+            f"Binance USD-M expected leverage must be 1 through {MAX_LEVERAGE}"
+        )
     if (
         type(owned_btc_position_amount) is not Decimal
         or not owned_btc_position_amount.is_finite()
@@ -141,7 +144,9 @@ async def verify_binance_usdm_configuration(
         blockers.append("MARGIN_TYPE_NOT_ISOLATED")
     if auto_add:
         blockers.append("AUTO_ADD_MARGIN_ENABLED")
-    if not 1 <= leverage <= 7:
+    # The same ceiling as the risk engine's, read from it rather than written
+    # again: two literals for one limit are two things to remember to change.
+    if not 1 <= leverage <= MAX_LEVERAGE:
         blockers.append("LEVERAGE_OUT_OF_RANGE")
     elif leverage != expected_leverage:
         blockers.append("LEVERAGE_MISMATCH")

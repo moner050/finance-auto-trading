@@ -11,6 +11,7 @@ from autotrader.persistence.mysql.repositories.david_v6_risk import (
 )
 from autotrader.risk.models import V6RiskPolicySnapshot
 from autotrader.risk.v6 import (
+    MAX_LEVERAGE,
     RESEARCH_SCORE_AUTHORITY,
     SCORE_ONLY,
     V6RiskAuthority,
@@ -195,7 +196,7 @@ def test_quantity_rounds_down_and_zero_quantity_rejects() -> None:
         # The gate trips when open risk plus this trade's budget exceeds the
         # ceiling. A smaller budget needs more already open to reach it.
         ({"current_open_structural_risk": Decimal("12.81")}, "OPEN_RISK_LIMIT"),
-        ({"leverage": 8}, "BINANCE_LEVERAGE_LIMIT"),
+        ({"leverage": MAX_LEVERAGE + 1}, "BINANCE_LEVERAGE_LIMIT"),
     ),
 )
 def test_loss_open_risk_and_leverage_gates_fail_closed(
