@@ -1080,6 +1080,7 @@ def replay(
                 continue
             opened = cut
             reference = setup.invalidation_price
+            level: Decimal | None = None
             series: Sequence[CompletedOhlcvBar] = bars
             if entry_model == "retrace":
                 assert zone_facts is not None
@@ -1124,6 +1125,20 @@ def replay(
                 opened, reference = found
                 series = execution_bars
             entry = series[opened].close
+            # §35.2's defect. A retracement entry is a resting order at the
+            # level, and it fills at the level. Paying the close of whichever
+            # bar reached it is what §12.3 measured as the whole problem: the
+            # close sits a median 0.86 ATR above the bar's low while the
+            # target is 0.97 ATR away, so there is nothing left. Every
+            # `--entry retrace` run before this - §11.4's two zone readings
+            # and §35.2's three setup levels - paid that close, which is why
+            # all of them came back indistinguishable from the baseline.
+            #
+            # The level is inside the bar that touched it, so this fill was
+            # available. It is not available on the execution-scale path,
+            # where the entry bar comes from a different series.
+            if entry_model == "retrace" and level is not None and not executed:
+                entry = level
             if distances is not None:
                 # Every setup that gets this far, whichever side of the band
                 # it lands on. What the band refuses is the question, so the
