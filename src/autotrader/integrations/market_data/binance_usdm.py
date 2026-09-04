@@ -19,7 +19,12 @@ _GAP_LIMIT = 1000
 # Enough head of the tape to answer a correction without a round trip.
 # Corrections arrive near the head; anything older the store answers for.
 _TRADE_CACHE_SIZE = 10_000
-_AGGREGATION_LOOKBACK = timedelta(days=1)
+# Only `telemetry_bars` still has a fixed window, because it takes no depth
+# from its caller. It is the same day it always was; what changed is that
+# thirty-second bars no longer share it. See the plan's section 33.13: one
+# day of BTCUSDT is 1.8 million prints and 145 seconds of MySQL, against 7
+# seconds for the two hours a chain search actually reads.
+_TELEMETRY_LOOKBACK = timedelta(days=1)
 _TIMEFRAMES = {
     timedelta(minutes=1): "1m",
     timedelta(minutes=5): "5m",
@@ -304,19 +309,27 @@ class BinanceUsdmMarketData:
         Depth is the caller's to state because it differs by consumer: zones
         want ten days, the MACD warm-up wants far less, and a default here
         would be a number nobody chose deciding what the strategy can see.
+
+        Thirty-second bars are aggregated from the tape rather than fetched,
+        and they take the same `history` for the same reason - more strictly,
+        because they have no venue page size to fall back on. It used to be
+        refused outright, which left the one number that decided the cost of
+        the call hidden in a module constant: a day of prints, 145 seconds,
+        where the exhaustion chain reads two hours in seven. Section 33.13
+        measured it. Requiring the depth puts that cost at the call site.
         """
         end_at = _require_utc(end_at, "completed bar end_at")
+        if history is not None and history <= timedelta(0):
+            raise ValueError("requested history must be positive")
         if timeframe == _THIRTY_SECONDS:
-            if history is not None:
-                raise ValueError("thirty-second bars are built from the tape")
-            return await self._aggregate_bars(_THIRTY_SECONDS, end_at)
+            if history is None:
+                raise ValueError("thirty-second bars require a stated history")
+            return await self._aggregate_bars(_THIRTY_SECONDS, end_at, history)
         interval = _TIMEFRAMES.get(timeframe)
         if interval is None:
             raise ValueError(
                 "Binance USD-M completed bars require a supported timeframe"
             )
-        if history is not None and history <= timedelta(0):
-            raise ValueError("requested history must be positive")
         rows = await self._paged_klines(
             interval=interval, end_at=end_at, history=history
         )
@@ -373,6 +386,7 @@ class BinanceUsdmMarketData:
         return await self._aggregate_bars(
             _FIVE_SECONDS,
             _require_utc(end_at, "telemetry end_at"),
+            _TELEMETRY_LOOKBACK,
         )
 
     async def trade_prints(
@@ -460,9 +474,10 @@ class BinanceUsdmMarketData:
         self,
         duration: timedelta,
         end_at: datetime,
+        lookback: timedelta,
     ) -> tuple[CompletedOhlcvBar, ...]:
         trades = await self.trade_prints(
-            end_at - _AGGREGATION_LOOKBACK,
+            end_at - lookback,
             end_at + timedelta(milliseconds=1),
         )
         if not trades:

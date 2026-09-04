@@ -95,6 +95,7 @@ async def test_completed_30s_bar_can_be_proven_after_restart() -> None:
     bars = await restarted.completed_bars(
         timedelta(seconds=30),
         START + timedelta(seconds=30),
+        history=timedelta(hours=2),
     )
 
     assert len(bars) == 1

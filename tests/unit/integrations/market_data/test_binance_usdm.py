@@ -115,6 +115,11 @@ class Store:
     checkpoint: BinanceUsdmMarketCheckpoint | None = None
     trades: dict[str, TradePrint] = field(default_factory=dict[str, TradePrint])
     batches: list[tuple[str, ...]] = field(default_factory=list[tuple[str, ...]])
+    # The window each read asked the database for. What the aggregation
+    # costs is decided here rather than in the bars that come back.
+    loads: list[tuple[datetime, datetime]] = field(
+        default_factory=list[tuple[datetime, datetime]]
+    )
     symbol: str = "BTCUSDT"
 
     async def load_checkpoint(self, symbol: str) -> BinanceUsdmMarketCheckpoint | None:
@@ -151,6 +156,7 @@ class Store:
         end_at: datetime,
     ) -> tuple[TradePrint, ...]:
         assert symbol == self.symbol
+        self.loads.append((start_at, end_at))
         return tuple(
             trade
             for trade in sorted(
@@ -230,6 +236,7 @@ async def test_aggregates_completed_30s_bars_and_separate_5s_telemetry() -> None
     bars = await subject.completed_bars(
         timedelta(seconds=30),
         START + timedelta(seconds=30),
+        history=timedelta(hours=2),
     )
     telemetry = await subject.telemetry_bars(START + timedelta(seconds=30))
 
@@ -320,6 +327,7 @@ async def test_rejects_forming_aggregate_bad_symbol_and_kline_correction() -> No
         await subject.completed_bars(
             timedelta(seconds=30),
             START + timedelta(seconds=30),
+            history=timedelta(hours=2),
         )
         == ()
     )
@@ -381,3 +389,56 @@ def test_a_checkpoint_still_needs_a_symbol() -> None:
             last_aggregate_trade_id=1,
             last_trade_at=START,
         )
+
+
+@pytest.mark.asyncio
+async def test_thirty_second_bars_read_only_the_history_they_were_given() -> None:
+    """The depth decides the cost, so the caller has to name it.
+
+    It used to be refused - `history` was a five-minute idea and thirty
+    seconds took a module constant of one day instead. On BTCUSDT that is
+    1.8 million prints and 145 seconds of MySQL for a search that reads two
+    hours; the plan's section 33.13 measured both. The number is the same
+    either way, and the difference is whether the call site can see it.
+    """
+    store = Store()
+    subject = market(store=store)
+    end = START + timedelta(hours=3)
+    # One print inside the last hour and one well behind it, plus a third
+    # that only exists to carry the watermark past the second: a bucket whose
+    # close has not been reached is still forming and is rightly dropped, and
+    # without this the shallow read would be empty for that reason instead of
+    # the one under test. Its own bucket is the one left forming.
+    await subject.ingest_agg_trade(
+        event(1, end - timedelta(hours=2), price="100", quantity="1")
+    )
+    await subject.ingest_agg_trade(
+        event(2, end - timedelta(minutes=30), price="105", quantity="2")
+    )
+    await subject.ingest_agg_trade(
+        event(3, end - timedelta(seconds=1), price="999", quantity="1")
+    )
+
+    shallow = await subject.completed_bars(
+        timedelta(seconds=30), end, history=timedelta(hours=1)
+    )
+    deep = await subject.completed_bars(
+        timedelta(seconds=30), end, history=timedelta(hours=3)
+    )
+
+    assert [bar.close for bar in shallow] == [Decimal("105")]
+    assert [bar.close for bar in deep] == [Decimal("100"), Decimal("105")]
+    assert store.loads[-2:] == [
+        (end - timedelta(hours=1), end + timedelta(milliseconds=1)),
+        (end - timedelta(hours=3), end + timedelta(milliseconds=1)),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_thirty_second_bars_refuse_an_unstated_or_empty_history() -> None:
+    subject = market()
+
+    with pytest.raises(ValueError, match="stated history"):
+        await subject.completed_bars(timedelta(seconds=30), START)
+    with pytest.raises(ValueError, match="positive"):
+        await subject.completed_bars(timedelta(seconds=30), START, history=timedelta(0))
