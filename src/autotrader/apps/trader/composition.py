@@ -27,6 +27,7 @@ from autotrader.execution.fills.models import ChargeLegRole
 from autotrader.execution.intents.models import (
     AccountCandidate,
     IntentOrigin,
+    MarketQuote,
     OrderIntent,
     OrderTerms,
     ProtectionRequest,
@@ -657,14 +658,17 @@ async def protection_plan(
 
 
 def _protection_intent(
-    intent: OrderIntent, plan: ProtectionPlan, now: datetime
+    intent: OrderIntent,
+    plan: ProtectionPlan,
+    now: datetime,
+    reason_code: str = STRUCTURAL_STOP,
 ) -> PersistedOrderIntent:
     row = _persisted_intent(intent, plan.position_id, now)
-    # The stop is owed to a position, not to a signal, and the row records
-    # which one so an operator can see what it is protecting.
+    # Owed to a position, not to a signal, and the row records which one so
+    # an operator can see what it is protecting - and why.
     row.strategy_signal_id = None
     row.protection_position_id = plan.position_id
-    row.protection_reason_code = STRUCTURAL_STOP
+    row.protection_reason_code = reason_code
     return row
 
 
@@ -920,32 +924,47 @@ async def create_protective_order(
     account: ExecutionAccount,
     plan: ProtectionPlan,
     now: datetime,
+    reason_code: str = STRUCTURAL_STOP,
+    intent_type: IntentType = IntentType.PROTECTIVE,
+    trigger_price: Decimal | None = None,
+    quote: MarketQuote | None = None,
+    time_in_force: str = "GTC",
 ) -> UUID | None:
-    """Place a stop behind a position, from a fill or from a stop move.
+    """Place an order that only ever closes, behind a position.
 
-    Module level because both reach it. The settlement hook places the
-    first one when an entry fills; the position manager places one when it
-    finds a position with nothing working behind it. Two copies of this
-    would be two answers to what a protective order is.
+    Module level because several things reach it. The settlement hook places
+    the first stop when an entry fills; the position manager places one when
+    it finds a position with nothing working behind it; the emergency close
+    is prepared through here too, because it is the same kind of order with a
+    different reason. Copies of this would be several answers to what a
+    closing order is.
+
+    The defaults are the structural stop. What the emergency close changes is
+    the reason - which is part of the intent's identity, so the two do not
+    collide - and the absence of a trigger, which makes it a market order and
+    is why it brings a quote.
     """
     intent = OrderIntentFactory().from_protection(
         account=account.account,
         request=ProtectionRequest(
             locked_position_id=plan.position_id,
-            reason_code=STRUCTURAL_STOP,
+            reason_code=reason_code,
             instrument_id=plan.instrument_id,
-            intent_type=IntentType.PROTECTIVE,
+            intent_type=intent_type,
             side=Side.SELL if plan.entry_side is Side.BUY else Side.BUY,
             order_style=OrderStyle.MARKET,
             terms=OrderTerms(
                 requested_quantity=plan.quantity,
                 limit_price=None,
-                trigger_price=plan.structural_stop,
+                trigger_price=(
+                    plan.structural_stop if trigger_price is None else trigger_price
+                ),
             ),
+            quote=quote,
         ),
     )
     stored = await OrderIntentRepository(session).create_or_get(
-        _protection_intent(intent, plan, now)
+        _protection_intent(intent, plan, now, reason_code)
     )
     risk_decision = _reduction_decision(
         intent_id=stored.id,
@@ -979,7 +998,7 @@ async def create_protective_order(
             owner_runtime_instance_id=account.runtime_instance_id,
             fencing_token=account.fencing_token,
             not_after=now + _RESERVATION_WINDOW,
-            time_in_force="GTC",
+            time_in_force=time_in_force,
             authority_class=STRICT_REDUCTION,
             created_at=now,
         ),
