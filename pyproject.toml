@@ -62,9 +62,9 @@ extend-exclude = ["docs", "tools"]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
-# The initial migration carries generated DDL; its line lengths are the
-# database's, not ours.
-"migrations/versions/0001_initial.py" = ["E501"]
+# A migration carries generated DDL; its line lengths are the database's,
+# not ours.
+"migrations/versions/*.py" = ["E501"]
 
 [tool.pyright]
 include = ["src"]
