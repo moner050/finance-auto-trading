@@ -1265,6 +1265,12 @@ async def main() -> None:
     parser.add_argument(
         "--resolve-scale", choices=("5m", *EXECUTION_SCALES), default="5m"
     )
+    # §33.21. The thirty-second series only reaches back as far as the tape,
+    # so comparing it against a two-year 1m run would be comparing the scales
+    # and the sample at once. These clip the execution series to one span, so
+    # every scale is asked about the same setups.
+    parser.add_argument("--execution-from", default=None)
+    parser.add_argument("--execution-to", default=None)
     parser.add_argument("--pivot-left", type=int, default=PivotConfig().left)
     parser.add_argument("--distances", default=None)
     parser.add_argument(
@@ -1297,6 +1303,26 @@ async def main() -> None:
             execution_cache,
             scale.interval or arguments.execution_scale,
         )
+    if execution_bars and (arguments.execution_from or arguments.execution_to):
+        start_at = (
+            datetime.fromisoformat(arguments.execution_from)
+            if arguments.execution_from
+            else execution_bars[0].timestamp
+        )
+        end_at = (
+            datetime.fromisoformat(arguments.execution_to)
+            if arguments.execution_to
+            else execution_bars[-1].timestamp
+        )
+        kept = tuple(
+            bar for bar in execution_bars if start_at <= bar.timestamp <= end_at
+        )
+        print(
+            f"실행 계열을 {start_at} → {end_at} 로 자름: "
+            f"{len(execution_bars):,} → {len(kept):,}봉",
+            flush=True,
+        )
+        execution_bars = kept
     resolve_bars: tuple[CompletedOhlcvBar, ...] = ()
     resolve_scale = EXECUTION_SCALES.get(arguments.resolve_scale)
     if resolve_scale is not None:
