@@ -74,7 +74,11 @@ from autotrader.strategies.david_v6.direction import (
     aligned_macd_histogram,
 )
 from autotrader.strategies.david_v6.exhaustion import evaluate_exhaustion
-from autotrader.strategies.david_v6.hlit import HlitSetup, build_hlit_setups
+from autotrader.strategies.david_v6.hlit import (
+    HlitSetup,
+    build_hlit_setups,
+    extension_prices,
+)
 from autotrader.strategies.david_v6.pivots import (
     DivergenceFacts,
     DivergenceKind,
@@ -456,6 +460,34 @@ def resolve(
                 return "loss", index, best, worst, units, realised(stop)
     last = min(opened + horizon, len(bars) - 1)
     return "scratch", last, best, worst, units, realised(bars[last].close)
+
+
+def _target_price(setup: HlitSetup, name: str) -> Decimal:
+    """Where the trade is trying to get to.
+
+    Section 21.5 marks 66% the (A0) final target and this defaults to it. The
+    others are here to measure the axis, not to replace it:
+
+    - `fib50` is section 21.5's "균형·관리 구간". That section lists a partial
+      exit there as a research subject and says plainly there is no direct
+      basis for making 50% an automatic trigger, so a full exit at 50 is a
+      measurement rather than a reading of the document.
+    - `ext127` and `ext162` are section 21.4's `high_confidence_target`
+      candidates, carried by `extension_prices`.
+
+    Section 34.5 is why the axis is worth a run. A win averages +0.53R against
+    a 0.73R target, so break-even needs 65.4% and the strategy has 59.5%. A
+    nearer target lifts the win rate and lowers the payoff, and break-even
+    moves with it - which of the two moves faster the document cannot say.
+    """
+    if name == "fib50":
+        return setup.fib_50
+    if name == "fib25":
+        return setup.fib_25
+    if name in ("ext127", "ext162"):
+        prices = extension_prices(setup)
+        return prices[0] if name == "ext127" else prices[1]
+    return setup.target_price
 
 
 def _setup_level(setup: HlitSetup, name: str) -> Decimal | None:
@@ -891,6 +923,7 @@ def replay(
     news: str = "none",
     invert: bool = False,
     retrace_to: str = "zone",
+    target_model: str = "fib66",
 ) -> list[dict[str, object]]:
     trades: list[dict[str, object]] = []
     refused = 0
@@ -1120,7 +1153,7 @@ def replay(
             if stop is None:
                 refused += 1
                 continue
-            target = setup.target_price
+            target = _target_price(setup, target_model)
             risk = entry - stop if setup.direction is Side.BUY else stop - entry
             reward = target - entry if setup.direction is Side.BUY else entry - target
             if risk <= 0 or reward <= 0:
@@ -1326,6 +1359,12 @@ async def main() -> None:
     parser.add_argument("--invert", action="store_true")
     # §12.5's second axis, which §12.4 marked "재구현 필요". Only read when
     # `--entry retrace`; "zone" keeps the two readings section 11.4 ran.
+    # §35.3's axis. 66% is §21.5's (A0) target and stays the default.
+    parser.add_argument(
+        "--target",
+        choices=("fib66", "fib50", "fib25", "ext127", "ext162"),
+        default="fib66",
+    )
     parser.add_argument(
         "--retrace-to",
         choices=("zone", "fib50", "fib25", "anchor_b"),
@@ -1439,6 +1478,7 @@ async def main() -> None:
         news=arguments.news,
         invert=arguments.invert,
         retrace_to=arguments.retrace_to,
+        target_model=arguments.target,
         breakeven_at=arguments.breakeven_at,
         add_at=arguments.add_at,
         resolve_bars=resolve_bars,
