@@ -764,6 +764,8 @@ def replay(
     divergence_model: str = "regular",
     breakeven_at: Decimal | None = None,
     add_at: Decimal | None = None,
+    resolve_bars: Sequence[CompletedOhlcvBar] | None = None,
+    resolve_per_five: int = 1,
     session: tuple[int, int] | None = None,
     veto: str = "none",
     news: str = "none",
@@ -785,6 +787,12 @@ def replay(
     five_at = {bar.timestamp: index for index, bar in enumerate(bars)}
     executed = bool(execution_bars) and scale is not None
     horizon = HORIZON * scale.per_five_minutes if executed and scale else HORIZON
+    resolve_at = (
+        {bar.timestamp: index for index, bar in enumerate(resolve_bars)}
+        if resolve_bars
+        else {}
+    )
+    resolve_horizon = HORIZON * resolve_per_five
     zoned = gate == "h2" or entry_model == "retrace"
     pivots_config = PivotConfig(left=pivot_left)
     points = evaluation_points(bars, pivots_config)
@@ -963,14 +971,29 @@ def replay(
             reward = target - entry if setup.direction is Side.BUY else entry - target
             if risk <= 0 or reward <= 0:
                 continue
+            # §30.9's X1. `--execution-scale` moves the whole entry search
+            # to the fine series, and its exhaustion chain almost never forms
+            # there, so it answers a different question than the one asked.
+            # This keeps detection and entry on five minutes and walks the
+            # stop and the target on the fine series, which is the only part
+            # the intrabar ambiguity of §30.6 lives in.
+            resolution, at = series, opened
+            if resolve_bars and not executed:
+                after = series[opened].timestamp + STEP
+                fine = resolve_at.get(after)
+                if fine is None:
+                    continue
+                # `resolve` starts at `at + 1`, and the first bar we may act
+                # on is the one that opens as the signal bar closes.
+                resolution, at = resolve_bars, fine - 1
             outcome, closed, best, worst, units, gained = resolve(
-                series,
-                opened,
+                resolution,
+                at,
                 setup.direction,
                 entry,
                 stop,
                 target,
-                horizon,
+                resolve_horizon if resolution is resolve_bars else horizon,
                 breakeven_at,
                 add_at,
                 atr,
@@ -987,13 +1010,13 @@ def replay(
                     # question S1 and P1 ask.
                     "r_result": float(gained / risk),
                     "units": int(units),
-                    "bars_held": closed - opened,
+                    "bars_held": closed - at,
                     "waited": opened - cut if not executed else opened - start,
                     "mfe_r": float(best / risk),
                     "mae_r": float(worst / risk),
                 }
             )
-            busy_until = _five_minute_index(series[closed].timestamp, five_at)
+            busy_until = _five_minute_index(resolution[closed].timestamp, five_at)
             break
     if session is not None:
         print(f"세션 밖이라 건너뛴 평가 지점 {outside_session}", flush=True)
@@ -1081,6 +1104,11 @@ async def main() -> None:
     parser.add_argument(
         "--execution-scale", choices=("5m", *EXECUTION_SCALES), default="5m"
     )
+    # Unlike `--execution-scale`, this leaves detection and entry on five
+    # minutes and only walks the stop and the target finer. See §30.9.
+    parser.add_argument(
+        "--resolve-scale", choices=("5m", *EXECUTION_SCALES), default="5m"
+    )
     parser.add_argument("--pivot-left", type=int, default=PivotConfig().left)
     parser.add_argument("--distances", default=None)
     parser.add_argument(
@@ -1108,12 +1136,30 @@ async def main() -> None:
         if not execution_cache.exists():
             raise SystemExit(f"no execution cache at {execution_cache}")
         execution_bars = await fetch(arguments.symbol, arguments.days, execution_cache)
+    resolve_bars: tuple[CompletedOhlcvBar, ...] = ()
+    resolve_scale = EXECUTION_SCALES.get(arguments.resolve_scale)
+    if resolve_scale is not None:
+        if scale is not None:
+            # `--execution-scale` already resolves on its own series, and two
+            # answers to "which series is this trade walked on" is one too
+            # many.
+            raise SystemExit("--resolve-scale and --execution-scale are exclusive")
+        name = resolve_scale.cache.format(symbol=arguments.symbol, days=arguments.days)
+        resolve_cache = root / "build" / name
+        if not resolve_cache.exists():
+            raise SystemExit(f"no resolve cache at {resolve_cache}")
+        resolve_bars = await fetch(arguments.symbol, arguments.days, resolve_cache)
     print(f"{bars[0].timestamp} → {bars[-1].timestamp}", flush=True)
     print(
         f"gate {arguments.gate}, entry {arguments.entry}"
         + (f", zone {arguments.zone}" if arguments.entry == "retrace" else "")
         + f", stop {arguments.stop_min_atr}-{arguments.stop_max_atr} ATR"
         + f", execution {arguments.execution_scale}"
+        + (
+            f", resolve {arguments.resolve_scale}"
+            if arguments.resolve_scale != "5m"
+            else ""
+        )
         + f", pivot left {arguments.pivot_left}"
         + f", divergence {arguments.divergence}"
         + (f", session {arguments.session} UTC" if arguments.session else "")
@@ -1142,6 +1188,8 @@ async def main() -> None:
         news=arguments.news,
         breakeven_at=arguments.breakeven_at,
         add_at=arguments.add_at,
+        resolve_bars=resolve_bars,
+        resolve_per_five=resolve_scale.per_five_minutes if resolve_scale else 1,
         session=(
             tuple(_minutes(part) for part in arguments.session.split("-"))
             if arguments.session
