@@ -95,6 +95,9 @@ class V6Decision:
     calculated_quantity: Decimal
     expected_cost: Decimal | None
     source_evidence_hashes: tuple[bytes, ...]
+    # The scale that confirmed exhaustion, carried from the bundle. The
+    # evidence hashes prove two decisions differ; this says how.
+    exhaustion_timeframe: str | None
     completed_evidence_at: datetime
     generated_at: datetime
     valid_until: datetime

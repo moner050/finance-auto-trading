@@ -94,6 +94,11 @@ class V6EvidenceBundle:
     calendar: EvidenceItem[object]
     session: EvidenceItem[object]
     costs: EvidenceItem[object]
+    # Which series `exhaustion` was read on. Section 4.2 confirms it at thirty
+    # seconds and the five-minute macro series is the fallback, so a bundle
+    # that does not say cannot be told apart from one that had no choice.
+    # None when there was no exhaustion reading to attribute.
+    exhaustion_timeframe: str | None = None
 
     def __post_init__(self) -> None:
         if type(cast(object, self.market)) is not V6Market:
@@ -118,6 +123,9 @@ class V6EvidenceBundle:
             _require_bar_item(
                 item=item, timeframe=TIMEFRAMES[key], decision_at=decision_at
             )
+        scale = cast(object, self.exhaustion_timeframe)
+        if scale is not None and (type(scale) is not str or scale not in TIMEFRAMES):
+            raise ValueError("exhaustion_timeframe must be a known timeframe key")
         for item in self._fact_items():
             if type(item) is not EvidenceItem:
                 raise TypeError("bundle facts must be exact EvidenceItem values")

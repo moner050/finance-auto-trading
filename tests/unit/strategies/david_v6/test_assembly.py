@@ -461,6 +461,7 @@ def test_real_bars_confirm_the_exhaustion_sequence() -> None:
     zones = bundle.zones.value
     assert zones is not None
     assert len(zones.zones) > 0  # type: ignore[attr-defined]
+    assert bundle.exhaustion_timeframe == "5m"
     exhaustion = bundle.exhaustion.value
     assert exhaustion is not None
     sequence = exhaustion.bullish  # type: ignore[attr-defined]
@@ -716,6 +717,8 @@ def test_exhaustion_is_confirmed_on_the_thirty_second_series_when_it_is_there() 
     assert provenance is not None
     assert provenance.observed_at == execution[-1].timestamp
     assert provenance.observed_at != hlit_bars[-1].timestamp
+    # And said in a word, because provenance is not what gets stored.
+    assert bundle.exhaustion_timeframe == "30s"
     exhaustion = bundle.exhaustion.value
     assert exhaustion is not None
     # The thirty-second series is on rising volume, so no sequence stands.

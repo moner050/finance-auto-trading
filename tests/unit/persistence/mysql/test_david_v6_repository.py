@@ -122,6 +122,7 @@ def _decision(*, strategy_version_id: UUID | None = None) -> V6Decision:
         calculated_quantity=Decimal("10"),
         expected_cost=Decimal("1000"),
         source_evidence_hashes=(b"e" * 32,),
+        exhaustion_timeframe="30s",
         completed_evidence_at=NOW,
         generated_at=NOW + timedelta(seconds=1),
         valid_until=NOW + timedelta(minutes=5),
@@ -323,3 +324,23 @@ async def test_child_manifest_queries_preserve_provider_neutral_order() -> None:
         "PROFILE",
     )
     assert await repository.blocker_codes(decision_id) == ("STALE_BAR",)
+
+
+@pytest.mark.asyncio
+async def test_the_scale_that_confirmed_exhaustion_reaches_the_row() -> None:
+    """Section 4.2 reads exhaustion at thirty seconds; five minutes is the
+    fallback. Nothing else recorded said which of the two a decision was taken
+    on - the row keeps a bare list of digests with no keys, and
+    `completed_evidence_at` is the decision moment rather than the evidence's.
+    The plan's section 33.17 found that out by trying to read it back, and
+    section 33.11 measured a 132-to-1 difference between the scales.
+    """
+    manifest = _manifest()
+    decision = _decision(strategy_version_id=manifest.strategy_version_id)
+    session = FakeSession((*_decision_authority(manifest, decision), None, None))
+    repository = DavidV6Repository(cast(AsyncSession, session))
+
+    await repository.persist_decision(decision)
+
+    rows = [row for row in session.added if isinstance(row, DavidV6DecisionRow)]
+    assert [row.exhaustion_timeframe for row in rows] == ["30s"]

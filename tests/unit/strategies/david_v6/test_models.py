@@ -56,6 +56,7 @@ def decision(**changes: object) -> V6Decision:
         "calculated_quantity": Decimal("0.100"),
         "expected_cost": Decimal("0.25"),
         "source_evidence_hashes": (b"a" * 32, b"s" * 32),
+        "exhaustion_timeframe": "30s",
         "completed_evidence_at": NOW - timedelta(seconds=1),
         "generated_at": NOW,
         "valid_until": NOW + timedelta(minutes=1),
@@ -121,6 +122,7 @@ def test_decision_hash_binds_indicator_and_source_evidence() -> None:
     changed_source = replace(
         original,
         source_evidence_hashes=(b"a" * 32, b"t" * 32),
+        exhaustion_timeframe="30s",
     )
 
     assert original.decision_hash() != changed_indicator.decision_hash()

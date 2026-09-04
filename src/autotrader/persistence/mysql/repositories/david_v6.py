@@ -233,6 +233,7 @@ class DavidV6Repository:
             source_evidence_manifest_hash=canonical_v6_hash(
                 decision.source_evidence_hashes
             ),
+            exhaustion_timeframe=decision.exhaustion_timeframe,
             completed_evidence_at=decision.completed_evidence_at,
             generated_at=decision.generated_at,
             valid_until=decision.valid_until,
@@ -442,6 +443,7 @@ def _require_matching_decision_row(
         decision.expected_cost,
         [evidence.hex() for evidence in decision.source_evidence_hashes],
         canonical_v6_hash(decision.source_evidence_hashes),
+        decision.exhaustion_timeframe,
         decision.completed_evidence_at,
         decision.generated_at,
         decision.valid_until,
@@ -470,6 +472,9 @@ def _require_matching_decision_row(
         "expected_cost",
         "source_evidence_hashes",
         "source_evidence_manifest_hash",
+        # Two decisions taken on different scales are different decisions, and
+        # the digests alone would not say so in a way a reader could check.
+        "exhaustion_timeframe",
         "completed_evidence_at",
         "generated_at",
         "valid_until",

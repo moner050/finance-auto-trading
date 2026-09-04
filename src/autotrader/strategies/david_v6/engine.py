@@ -188,6 +188,7 @@ def evaluate_v6(
             risk_context.risk_request.cost_per_unit * quantity if tradeable else None
         ),
         source_evidence_hashes=source_hashes,
+        exhaustion_timeframe=bundle.exhaustion_timeframe,
         completed_evidence_at=completed_at,
         generated_at=bundle.decision_at,
         valid_until=risk_context.valid_until,

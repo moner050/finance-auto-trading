@@ -227,6 +227,7 @@ def assemble_v6_evidence(inputs: AssemblyInputs) -> AssemblyResult:
             calendar=_calendar(inputs),
             session=_session(inputs),
             costs=_costs(inputs),
+            exhaustion_timeframe=execution_key,
         ),
         hlit=hlit,
     )

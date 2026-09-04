@@ -97,6 +97,11 @@ class DavidV6DecisionRow(CoreBase):
             name="ck_strategy_david_v6_decision_times",
         ),
         CheckConstraint(
+            "exhaustion_timeframe IS NULL OR exhaustion_timeframe IN "
+            "('5s', '30s', '1m', '5m', '15m', '1h', '1d')",
+            name="ck_strategy_david_v6_decision_exhaustion_timeframe",
+        ),
+        CheckConstraint(
             "matched_indicator_count >= 0 AND blocker_count >= 0 "
             "AND risk_fraction BETWEEN 0 AND 0.0075 "
             "AND calculated_quantity >= 0",
@@ -202,6 +207,12 @@ class DavidV6DecisionRow(CoreBase):
         Numeric(38, 18), nullable=True
     )
     source_evidence_hashes: Mapped[list[str]] = mapped_column(JSON(), nullable=False)
+    # Which series confirmed exhaustion: section 4.2 reads it at thirty
+    # seconds and falls back to the five-minute macro series. Nullable because
+    # a decision can be recorded with no exhaustion reading at all, and
+    # because every row written before this column existed has no answer -
+    # backfilling one would be inventing evidence.
+    exhaustion_timeframe: Mapped[str | None] = mapped_column(String(8), nullable=True)
     source_evidence_manifest_hash: Mapped[bytes] = mapped_column(
         VARBINARY(32), nullable=False
     )

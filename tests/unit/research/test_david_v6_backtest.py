@@ -67,6 +67,7 @@ def _decision() -> V6Decision:
         calculated_quantity=Decimal("2"),
         expected_cost=Decimal("0.8"),
         source_evidence_hashes=(b"d" * 32,),
+        exhaustion_timeframe="5m",
         completed_evidence_at=SIGNAL_AT,
         generated_at=SIGNAL_AT,
         valid_until=SIGNAL_AT + timedelta(minutes=15),
