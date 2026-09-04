@@ -206,8 +206,11 @@ def test_protection_and_reconciliation_require_typed_evidence() -> None:
         ),
     )
 
-    assert (
-        protection.idempotency_key == f"protection:{protection_id.hex}:{account.id.hex}"
+    # The reason is part of it: one position carries a structural stop, its
+    # exits and an emergency close, and keyed on the position alone they
+    # collide - `create_or_get` would hand the second one the first's intent.
+    assert protection.idempotency_key == (
+        f"protection:{protection_id.hex}:{account.id.hex}:STOP_LOSS"
     )
     assert reconciliation.idempotency_key == (
         f"reconciliation:{diff_id.hex}:{account.id.hex}"

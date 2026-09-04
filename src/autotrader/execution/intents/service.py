@@ -125,6 +125,10 @@ class OrderIntentFactory:
         self, *, request: ProtectionRequest, account: AccountCandidate
     ) -> OrderIntent:
         return self._from_non_strategy(
+            # The reason is part of the identity here: one position carries a
+            # structural stop, its exits and an emergency close, and they are
+            # not the same request.
+            discriminator=request.reason_code,
             origin=IntentOrigin.PROTECTION,
             source_id=request.locked_position_id,
             account=account,
@@ -163,6 +167,7 @@ class OrderIntentFactory:
         order_style: OrderStyle,
         terms: OrderTerms,
         quote: MarketQuote | None,
+        discriminator: str | None = None,
     ) -> OrderIntent:
         OrderIntentFactory._require_enabled_account(account)
         approved = require_decimal(terms.requested_quantity)
@@ -191,13 +196,30 @@ class OrderIntentFactory:
             order_style=order_style,
             quantity=approved,
             limit_price=terms.limit_price,
-            idempotency_key=OrderIntentFactory.identity(origin, source_id, account.id),
+            idempotency_key=OrderIntentFactory.identity(
+                origin, source_id, account.id, discriminator
+            ),
             trigger_price=terms.trigger_price,
         )
 
     @staticmethod
-    def identity(origin: IntentOrigin, source_id: UUID, account_id: UUID) -> str:
-        return f"{origin.lower()}:{source_id.hex}:{account_id.hex}"
+    def identity(
+        origin: IntentOrigin,
+        source_id: UUID,
+        account_id: UUID,
+        discriminator: str | None = None,
+    ) -> str:
+        """What makes two requests the same request.
+
+        A protection origin needs the discriminator. Its source is the
+        position, and one position is protected by more than one kind of
+        thing: a structural stop, a full exit, an emergency close. Keyed on
+        the position alone they collide, and `create_or_get` hands the second
+        one the first one's intent - so an emergency close would go out as
+        whatever the stop was.
+        """
+        key = f"{origin.lower()}:{source_id.hex}:{account_id.hex}"
+        return key if discriminator is None else f"{key}:{discriminator}"
 
     @staticmethod
     def _require_enabled_account(account: AccountCandidate) -> None:
