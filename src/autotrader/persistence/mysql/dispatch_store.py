@@ -13,12 +13,22 @@ from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from autotrader.domain.enums import OrderStyle, Side
+from autotrader.execution.dispatch.authorization import (
+    DispatchAuthorizationState,
+    decide_dispatch,
+)
 from autotrader.execution.orders.models import BrokerOrderCommand, CommandType
+from autotrader.integrations.brokers.common import CLOSING_AUTHORITY
 from autotrader.persistence.mysql.models.accounts import Account
+from autotrader.persistence.mysql.models.operations import (
+    OpsIncident,
+    OpsSchedulerLease,
+    OpsTradingControl,
+)
 from autotrader.persistence.mysql.models.orders import (
     PersistedBrokerOrderLink,
     PersistedOrderCommand,
@@ -29,6 +39,7 @@ from autotrader.shared.time import require_utc
 ACCEPTED = "ACCEPTED"
 REJECTED = "REJECTED"
 UNKNOWN = "UNKNOWN"
+NO_KILL_SWITCH = "NONE"
 # Once a broker has accepted, nothing may overwrite that fact.
 _TERMINAL = (ACCEPTED,)
 
@@ -40,8 +51,21 @@ class MySqlDispatchStore:
     async def authorize_and_record_attempt(
         self, *, command_id: UUID, now: datetime
     ) -> BrokerOrderCommand | None:
-        """Claim a command exactly once and mark the attempt before sending."""
+        """Claim a command exactly once, and only if it may still be sent.
+
+        `decide_dispatch` runs here because this is the one place a command is
+        claimed before crossing the broker boundary, so every dispatch path
+        meets it. It had no callers at all: the fencing token, the arming
+        lease and the trading control were checked by nothing that ran, and a
+        process that had lost its lease could still have written. §31.12.
+
+        The gate runs against every control row and all of them must allow it.
+        One row per scope, and an account in trouble at any scope is in
+        trouble - the money is the same money.
+        """
         moment = require_utc(now)
+        if not await self._may_dispatch(command_id, moment):
+            return None
         claimed = cast(
             "CursorResult[Any]",
             await self._session.execute(
@@ -59,6 +83,86 @@ class MySqlDispatchStore:
             return None
         await self._session.flush()
         return await self._command(command_id)
+
+    async def _may_dispatch(self, command_id: UUID, now: datetime) -> bool:
+        row = await self._row(command_id)
+        if row is None:
+            return False
+        lease = (await self._session.scalars(select(OpsSchedulerLease))).all()
+        controls = (await self._session.scalars(select(OpsTradingControl))).all()
+        if not controls:
+            # Nobody armed anything, which is not armed. The gate says so too,
+            # but with no rows there is nothing to run it against.
+            return False
+        blocking = await self._blocking_incidents()
+        unknown = await self._unresolved_unknowns()
+        # A closing order and a cancel are allowed past the arming checks by
+        # the gate itself: refusing to reduce exposure is not a safe default.
+        closing = row.authority_class == CLOSING_AUTHORITY
+        cancelling = row.command_type == CommandType.CANCEL.value
+        owned = [item for item in lease if item.owner_runtime_instance_id is not None]
+        held = owned[0] if len(owned) == 1 else None
+        for control in controls:
+            decision = decide_dispatch(
+                DispatchAuthorizationState(
+                    now=now,
+                    not_after=require_utc(row.not_after),
+                    attempt_recorded=row.dispatch_attempted_at is not None,
+                    command_owner=row.owner_runtime_instance_id,
+                    command_fencing_token=row.fencing_token,
+                    lease_owner=None
+                    if held is None
+                    else held.owner_runtime_instance_id,
+                    lease_fencing_token=None if held is None else held.fencing_token,
+                    lease_expires_at=(
+                        None
+                        if held is None or held.expires_at is None
+                        else require_utc(held.expires_at)
+                    ),
+                    control_owner=control.owner_runtime_instance_id,
+                    control_fencing_token=control.fencing_token,
+                    control_expires_at=(
+                        None
+                        if control.expires_at is None
+                        else require_utc(control.expires_at)
+                    ),
+                    control_armed=control.armed,
+                    kill_switch_active=control.kill_switch_level != NO_KILL_SWITCH,
+                    blocking_incident_count=blocking,
+                    unresolved_unknown_count=unknown,
+                    strict_reduction_proven=closing,
+                    cancel_authorized=cancelling,
+                )
+            )
+            if not decision.allowed:
+                return False
+        return True
+
+    async def _blocking_incidents(self) -> int:
+        return (
+            await self._session.scalar(
+                select(func.count())
+                .select_from(OpsIncident)
+                .where(
+                    OpsIncident.severity == "BLOCKING",
+                    OpsIncident.status == "OPEN",
+                )
+            )
+        ) or 0
+
+    async def _unresolved_unknowns(self) -> int:
+        """Commands the broker may hold and nobody has resolved.
+
+        Sending a new one while an old one is unresolved risks two live orders
+        for one decision, which is what the count is here to stop.
+        """
+        return (
+            await self._session.scalar(
+                select(func.count())
+                .select_from(PersistedOrderCommand)
+                .where(PersistedOrderCommand.result_state == UNKNOWN)
+            )
+        ) or 0
 
     async def recoverable_command(
         self, *, command_id: UUID

@@ -655,7 +655,12 @@ def _validate_write_authority(
             or authority.instrument_id != command.instrument_id
             or type(authority.binding_generation) is not int
             or authority.binding_generation <= 0
-            or command.fencing_token != authority.binding_generation
+            # The fencing token used to have to equal this. It cannot: the
+            # loop's token is the arming lease's, and the generation is the
+            # provider binding's revision. They are different numbers about
+            # different things, and demanding they match refused every order.
+            # Fencing is checked where it belongs, against the lease and the
+            # control, in `decide_dispatch`. §31.12.
             or authority.strategy_version != _STRATEGY_VERSION
             or not authority.writer_capability
             or not authority.account_enabled
